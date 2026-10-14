@@ -44,6 +44,9 @@ static const unsigned kSetAutoRva = 0xD1DF0;
 static const unsigned kThisAdj = 4;
 static const unsigned kSetTargetSlot = 0x60;
 static const unsigned kGetInstSlot = 8;
+static const unsigned kGetNameSlot = 0x14;
+static const unsigned kOwnerNameDisp = 0x2FC;
+static const unsigned kPlayerNameDisp = 0x14;
 static const unsigned kTargetDisp = 0x10814;
 static const unsigned kReservedModeDisp = 0x54;
 static const unsigned kVidReservedDisp = 0x10770;
@@ -98,6 +101,7 @@ typedef int (__thiscall* FnIsAtlas)(void* self);
 typedef BOOL (WINAPI* FnPeek)(LPMSG, HWND, UINT, UINT, UINT);
 typedef BOOL (WINAPI* FnGetMsg)(LPMSG, HWND, UINT, UINT);
 typedef void (__thiscall* FnUpdate)(void* self);
+typedef const char* (__thiscall* FnGetName)(void* self);
 
 struct ShotHit
 {
@@ -105,6 +109,7 @@ struct ShotHit
     float x;
     float y;
     int money;
+    int take;
 };
 
 struct Command
@@ -302,21 +307,28 @@ static bool CallSendClick(void* player, unsigned vid);
 static bool CallSendState(float x, float y, unsigned func);
 static bool ReadMainPixel(float* x, float* y);
 static void* MainInstance();
-static void CollectGroundItems(std::vector<ShotHit>* out);
-static void CollectClosestItem(float x, float y, float radius, std::vector<ShotHit>* out);
-static void CollectClosestMoney(float x, float y, float radius, std::vector<ShotHit>* out);
+static void CollectGroundItems(std::vector<ShotHit>* out, const char* me);
+static void CollectClosestItem(float x, float y, float radius, std::vector<ShotHit>* out, const char* me);
+static void CollectClosestMoney(float x, float y, float radius, std::vector<ShotHit>* out, const char* me);
 static bool CallMoveToDest(float x, float y);
 static unsigned PickupNear(float x, float y, const std::vector<ShotHit>& items);
 static LONGLONG NowMs();
 static bool HasVid(const std::vector<ShotHit>& items, unsigned vid);
 
-static unsigned DrainGroundLoot(float px, float py, float radius)
+static bool ReadStdString(void* str, char* out, int cap);
+static bool ReadPlayerName(void* player, char* out, int cap);
+static int CanTakeGround(void* inst, const char* me);
+
+static unsigned DrainGroundLoot(void* player, float px, float py, float radius)
 {
+    char me[64];
+    me[0] = 0;
+    ReadPlayerName(player, me, 64);
     std::vector<ShotHit> items;
-    CollectGroundItems(&items);
+    CollectGroundItems(&items, me);
     const float reach = radius > 1.f ? radius : 8000.f;
-    CollectClosestItem(px, py, reach, &items);
-    CollectClosestMoney(px, py, reach, &items);
+    CollectClosestItem(px, py, reach, &items, me);
+    CollectClosestMoney(px, py, reach, &items, me);
     const float maxSq = reach * reach;
     unsigned sent = 0;
     for (size_t i = 0; i < items.size(); ++i)
@@ -328,6 +340,8 @@ static unsigned DrainGroundLoot(float px, float py, float radius)
         // Fast stays inside the server pick radius. Ranged sends every VID the
         // client already has in CPythonItem — do not drop on our own distance.
         if (radius <= kPickDistance + 0.5f && distSq > maxSq)
+            continue;
+        if (!hit.take)
             continue;
         CallSendState(hit.x, hit.y, kFuncAttack);
         // SendClickItemPacket looks up proto/owner at instance+0x2FC and skips
@@ -360,14 +374,14 @@ static void MaybeAutoLoot(void* player)
         g_lastFastMs = now;
         CallPickClose(player);
         CallPickCloseMoney(player);
-        DrainGroundLoot(px, py, kPickDistance);
+        DrainGroundLoot(player, px, py, kPickDistance);
     }
 
     if (g_lootRanged && (g_lastRangedMs == 0 || now - g_lastRangedMs >= 1))
     {
         g_lastRangedMs = now;
         const float radius = g_lootRadius > 1.f ? g_lootRadius : 8000.f;
-        DrainGroundLoot(px, py, radius);
+        DrainGroundLoot(player, px, py, radius);
     }
 }
 
@@ -1012,7 +1026,7 @@ static LONGLONG NowMs()
     return now.QuadPart * 1000 / freq.QuadPart;
 }
 
-static bool ReadGroundHit(void* node, ShotHit* hit)
+static bool ReadGroundHit(void* node, ShotHit* hit, const char* me)
 {
     if (!UserPtr(node) || *((unsigned char*)node + 13) != 0)
         return false;
@@ -1029,7 +1043,69 @@ static bool ReadGroundHit(void* node, ShotHit* hit)
     // GetCloseItem xorps Y with -0.0 before comparing to GetPixelPosition.
     hit->y = -iy;
     hit->money = *(unsigned*)((char*)inst + 4) == 1 ? 1 : 0;
+    hit->take = CanTakeGround(inst, me);
     return true;
+}
+
+static bool ReadStdString(void* str, char* out, int cap)
+{
+    if (!UserPtr(str) || !out || cap < 2)
+        return false;
+    const unsigned size = *(unsigned*)((char*)str + 0x10);
+    const unsigned capacity = *(unsigned*)((char*)str + 0x14);
+    const char* p = (const char*)str;
+    if (capacity > 0xF)
+    {
+        p = *(const char**)str;
+        const uintptr_t a = (uintptr_t)p;
+        if (a < 0x10000 || a >= 0x7FFF0000)
+            return false;
+    }
+    if (size == 0)
+    {
+        out[0] = 0;
+        return true;
+    }
+    if (size > 48)
+        return false;
+    const unsigned n = size < (unsigned)(cap - 1) ? size : (unsigned)(cap - 1);
+    memcpy(out, p, n);
+    out[n] = 0;
+    return true;
+}
+
+static bool ReadPlayerName(void* player, char* out, int cap)
+{
+    if (!player || !out || cap < 2)
+        return false;
+    out[0] = 0;
+    void* iabs = (char*)player + kThisAdj;
+    void** vtbl = *(void***)iabs;
+    if (UserPtr(vtbl) && UserPtr(vtbl[kGetNameSlot / 4]))
+    {
+        const char* name = ((FnGetName)vtbl[kGetNameSlot / 4])(iabs);
+        const uintptr_t a = (uintptr_t)name;
+        if (name && a >= 0x10000 && a < 0x7FFF0000)
+        {
+            strncpy_s(out, cap, name, _TRUNCATE);
+            return true;
+        }
+    }
+    return ReadStdString((char*)player + kPlayerNameDisp, out, cap);
+}
+
+static int CanTakeGround(void* inst, const char* me)
+{
+    if (!UserPtr(inst))
+        return 1;
+    char owner[64];
+    if (!ReadStdString((char*)inst + kOwnerNameDisp, owner, 64))
+        return 1;
+    if (owner[0] == 0)
+        return 1;
+    if (!me || me[0] == 0)
+        return 0;
+    return strcmp(owner, me) == 0 ? 1 : 0;
 }
 
 static void* ItemLeft(void* node) { return *(void**)node; }
@@ -1061,7 +1137,7 @@ static void* ItemSuccessor(void* node, void* head)
     return head;
 }
 
-static void CollectGroundItems(std::vector<ShotHit>* out)
+static void CollectGroundItems(std::vector<ShotHit>* out, const char* me)
 {
     out->clear();
     void* item = ItemMgr();
@@ -1077,7 +1153,7 @@ static void CollectGroundItems(std::vector<ShotHit>* out)
         for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
         {
             ShotHit hit;
-            if (ReadGroundHit(node, &hit) && !HasVid(*out, hit.vid))
+            if (ReadGroundHit(node, &hit, me) && !HasVid(*out, hit.vid))
                 out->push_back(hit);
             inc(&node);
         }
@@ -1086,7 +1162,7 @@ static void CollectGroundItems(std::vector<ShotHit>* out)
     for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
     {
         ShotHit hit;
-        if (ReadGroundHit(node, &hit) && !HasVid(*out, hit.vid))
+        if (ReadGroundHit(node, &hit, me) && !HasVid(*out, hit.vid))
             out->push_back(hit);
         node = ItemSuccessor(node, head);
     }
@@ -1105,7 +1181,7 @@ static bool CallGetClose(unsigned rva, float x, float y, unsigned radius, unsign
     return ok && out != 0;
 }
 
-static void CollectClosest(unsigned rva, float x, float y, float radius, std::vector<ShotHit>* out, int moneyHint)
+static void CollectClosest(unsigned rva, float x, float y, float radius, std::vector<ShotHit>* out, int moneyHint, const char* me)
 {
     unsigned vid = 0;
     const unsigned dist = radius > 1.f ? (unsigned)radius : (unsigned)kPickDistance;
@@ -1122,7 +1198,7 @@ static void CollectClosest(unsigned rva, float x, float y, float radius, std::ve
     for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
     {
         ShotHit hit;
-        if (ReadGroundHit(node, &hit) && hit.vid == vid)
+        if (ReadGroundHit(node, &hit, me) && hit.vid == vid)
         {
             if (moneyHint)
                 hit.money = 1;
@@ -1136,17 +1212,18 @@ static void CollectClosest(unsigned rva, float x, float y, float radius, std::ve
     hit.x = x;
     hit.y = y;
     hit.money = moneyHint;
+    hit.take = moneyHint ? 1 : 0;
     out->push_back(hit);
 }
 
-static void CollectClosestItem(float x, float y, float radius, std::vector<ShotHit>* out)
+static void CollectClosestItem(float x, float y, float radius, std::vector<ShotHit>* out, const char* me)
 {
-    CollectClosest(kGetCloseItemRva, x, y, radius, out, 0);
+    CollectClosest(kGetCloseItemRva, x, y, radius, out, 0, me);
 }
 
-static void CollectClosestMoney(float x, float y, float radius, std::vector<ShotHit>* out)
+static void CollectClosestMoney(float x, float y, float radius, std::vector<ShotHit>* out, const char* me)
 {
-    CollectClosest(kGetCloseMoneyRva, x, y, radius, out, 1);
+    CollectClosest(kGetCloseMoneyRva, x, y, radius, out, 1, me);
 }
 
 static bool CallMoveToDest(float x, float y)
@@ -1169,6 +1246,8 @@ static unsigned PickupNear(float x, float y, const std::vector<ShotHit>& items)
         const float dx = items[i].x - x;
         const float dy = items[i].y - y;
         if (dx * dx + dy * dy > maxSq)
+            continue;
+        if (!items[i].take)
             continue;
         if (CallSendPickup(items[i].vid))
             ++sent;
@@ -1232,6 +1311,7 @@ static void ParseHits(Command* cmd, const std::string& src)
         hit.x = x;
         hit.y = y;
         hit.money = 0;
+        hit.take = 1;
         cmd->hits.push_back(hit);
         if (semi == std::string::npos)
             break;
@@ -1381,7 +1461,12 @@ static void Execute(const Command& cmd)
         ReadMainPixel(&px, &py);
         std::vector<ShotHit> loot;
         if (g_lootOn)
-            CollectGroundItems(&loot);
+        {
+            char me[64];
+            me[0] = 0;
+            ReadPlayerName(player, me, 64);
+            CollectGroundItems(&loot, me);
+        }
         unsigned sent = 0;
         unsigned picked = 0;
         for (size_t i = 0; i < hits.size(); ++i)

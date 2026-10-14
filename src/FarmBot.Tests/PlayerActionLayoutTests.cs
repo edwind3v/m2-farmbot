@@ -159,6 +159,34 @@ public class PlayerActionLayoutTests
     }
 
     [Fact]
+    public void SendClickLooksUpOwnerNameAtGroundInstancePlus2FC()
+    {
+        Assert.True(File.Exists(ReleaseClient), ReleaseClient);
+        var bytes = File.ReadAllBytes(ReleaseClient);
+        var eLfanew = BitConverter.ToInt32(bytes, 0x3C);
+        var sections = BitConverter.ToUInt16(bytes, eLfanew + 6);
+        var optional = BitConverter.ToUInt16(bytes, eLfanew + 20);
+        var off = eLfanew + 24 + optional;
+        int file = -1;
+        for (var i = 0; i < sections; i++)
+        {
+            var at = off + i * 40;
+            var va = BitConverter.ToUInt32(bytes, at + 12);
+            var raw = BitConverter.ToUInt32(bytes, at + 20);
+            var rawSize = BitConverter.ToUInt32(bytes, at + 16);
+            if (0xBB7E0u >= va && 0xBB7E0u < va + rawSize)
+            {
+                file = (int)(raw + (0xBB7E0u - va));
+                break;
+            }
+        }
+
+        Assert.True(file >= 0 && file + 0x50 <= bytes.Length);
+        var fn = bytes[file..(file + 0x50)];
+        Assert.True(fn.AsSpan().IndexOf(new byte[] { 0x81, 0xC1, 0xFC, 0x02, 0x00, 0x00 }) >= 0);
+    }
+
+    [Fact]
     public void RecoversMiniMapAtlasBindings()
     {
         Assert.True(File.Exists(ReleaseClient), ReleaseClient);

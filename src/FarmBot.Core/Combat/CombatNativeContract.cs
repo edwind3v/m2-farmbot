@@ -18,9 +18,19 @@ public static class CombatNativeContract
     public static float GroundItemPixelY(float storedY) => -storedY;
 
     // GetCloseMoney only accepts ground instances whose dword at +4 is 1 (yang).
-    // SendClickItemPacket looks up proto/owner and skips yang and empty-owner drops;
-    // ranged/fast pickup therefore sends SendItemPickUpPacket after the spoof.
     public const uint GroundYangFlag = 1;
+
+    // SendClickItemPacket reads stOwnership as MSVC std::string at SGroundItemInstance+0x2FC.
+    public const uint GroundOwnerNameDisplacement = 0x2FC;
+
+    public static bool CanTakeGroundDrop(string? owner, string? player)
+    {
+        if (string.IsNullOrEmpty(owner))
+            return true;
+        if (string.IsNullOrEmpty(player))
+            return false;
+        return string.Equals(owner, player, StringComparison.Ordinal);
+    }
     public const float NpcClickableDistance = 500f;
     public const float AttackDelaySeconds = 0.2f;
     public const int TargetPacketHeader = 61;

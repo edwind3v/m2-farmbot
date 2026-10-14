@@ -21,6 +21,12 @@ public class CombatNativeContractTests
         Assert.Equal(15, CombatNativeContract.PickupPacketHeader);
         Assert.Equal(-400f, CombatNativeContract.GroundItemPixelY(400f));
         Assert.Equal(1u, CombatNativeContract.GroundYangFlag);
+        Assert.Equal(0x2FCu, CombatNativeContract.GroundOwnerNameDisplacement);
+        Assert.True(CombatNativeContract.CanTakeGroundDrop("", "Hero"));
+        Assert.True(CombatNativeContract.CanTakeGroundDrop(null, "Hero"));
+        Assert.True(CombatNativeContract.CanTakeGroundDrop("Hero", "Hero"));
+        Assert.False(CombatNativeContract.CanTakeGroundDrop("Other", "Hero"));
+        Assert.False(CombatNativeContract.CanTakeGroundDrop("Other", ""));
     }
 
     [Fact]
