@@ -193,6 +193,7 @@ public sealed class BotRuntime : IDisposable
             config.RangedAttackEnabled = true;
             config.FarmCenterX = snapshot.Player.X;
             config.FarmCenterY = snapshot.Player.Y;
+            config.FarmRadius = 0;
             config.ReturnToCenter = false;
         }
 

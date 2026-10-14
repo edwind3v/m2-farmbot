@@ -24,6 +24,10 @@ static const unsigned kSendAttackRva = 0x134BE0;
 static const unsigned kSendStateRva = 0x134DA0;
 static const unsigned kFuncWait = 0;
 static const unsigned kFuncAttack = 2;
+static const unsigned kMainPtrDisp = 0x0C;
+static const unsigned kGraphicDisp = 0x1EC;
+static const unsigned kPixelXDisp = 0x46C;
+static const unsigned kPixelYDisp = 0x470;
 static const unsigned kAttackKeyRva = 0xD2030;
 static const unsigned kReserveClickRva = 0xD1B90;
 static const unsigned kSetAutoRva = 0xD1DF0;
@@ -863,6 +867,29 @@ static bool CallSendState(float x, float y, unsigned func)
     return true;
 }
 
+static bool ReadPixel(void* inst, float* x, float* y)
+{
+    if (!UserPtr(inst) || !x || !y)
+        return false;
+    *x = *(float*)((char*)inst + kGraphicDisp + kPixelXDisp);
+    *y = *(float*)((char*)inst + kGraphicDisp + kPixelYDisp);
+    return true;
+}
+
+static void* MainInstance()
+{
+    void* mgr = CharMgr();
+    if (!mgr)
+        return nullptr;
+    void* inst = *(void**)((char*)mgr + kMainPtrDisp);
+    return UserPtr(inst) ? inst : nullptr;
+}
+
+static bool ReadMainPixel(float* x, float* y)
+{
+    return ReadPixel(MainInstance(), x, y);
+}
+
 static void ParseHits(Command* cmd, const std::string& src)
 {
     cmd->hits.clear();
@@ -1010,7 +1037,10 @@ static void Execute(const Command& cmd)
                 ++sent;
             }
         }
-        CallSendState(cmd.x, cmd.y, kFuncWait);
+        float rx = cmd.x;
+        float ry = cmd.y;
+        ReadMainPixel(&rx, &ry);
+        CallSendState(rx, ry, kFuncWait);
         g_lastOk = sent != 0;
         char reason[80];
         _snprintf_s(reason, _TRUNCATE, "ranged blast %u/%u", sent, (unsigned)hits.size());

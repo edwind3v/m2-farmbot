@@ -150,7 +150,12 @@ public sealed class BotBrain
 
     private BrainDecision TickRanged(WorldSnapshot snapshot, BotConfig config, long nowMs)
     {
-        var picked = TargetSelector.SelectMany(snapshot, config, config.RangedAttackMaxTargets, config.RangedAttackRadius);
+        var picked = TargetSelector.SelectMany(
+            snapshot,
+            config,
+            config.RangedAttackMaxTargets,
+            config.RangedAttackRadius,
+            followPlayer: config.FarmRadius <= 0);
         if (picked.Count == 0)
         {
             _rangedVid = 0;

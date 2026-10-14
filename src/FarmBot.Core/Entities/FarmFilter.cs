@@ -51,6 +51,21 @@ public sealed class FarmFilter
         DefaultStonePriority = DefaultStonePriority
     };
 
+    public FarmFilter Follow(float x, float y) => new()
+    {
+        HuntMonsters = HuntMonsters,
+        HuntStones = HuntStones,
+        MaxDistance = MaxDistance,
+        FarmCenterX = x,
+        FarmCenterY = y,
+        FarmRadius = 0,
+        IncludeVnums = IncludeVnums,
+        ExcludeVnums = ExcludeVnums,
+        Rules = Rules,
+        DefaultMonsterPriority = DefaultMonsterPriority,
+        DefaultStonePriority = DefaultStonePriority
+    };
+
     private static int Highest(IEnumerable<TargetRule> rules, EntityKind kind, int fallback)
     {
         var best = fallback;

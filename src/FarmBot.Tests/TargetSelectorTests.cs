@@ -96,7 +96,7 @@ public class TargetSelectorTests
             Entities = new[]
             {
                 Fixtures.Mob(1, "Wild Dog", EntityKind.Monster, 40, 0),
-                Fixtures.Mob(8, "Wolf", EntityKind.Monster, 2040, 0)
+                Fixtures.Mob(8, "Wolf", EntityKind.Monster, 2300, 0)
             }
         };
 

@@ -35,7 +35,7 @@ public static class TargetSelector
     {
         var filter = FarmFilter.FromConfig(config);
         if (followPlayer)
-            filter = filter.Around(snapshot.Player.X, snapshot.Player.Y);
+            filter = filter.Follow(snapshot.Player.X, snapshot.Player.Y);
         var main = EntityMapping.FromPlayer(snapshot.Player);
         var entities = new List<Entity>();
         foreach (var state in snapshot.Entities)

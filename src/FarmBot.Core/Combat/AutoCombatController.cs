@@ -88,7 +88,12 @@ public sealed class AutoCombatController
             return Enter(CombatState.Idle, nowMs, null, NativeCombatAction.Stop(), "ranged attack on");
         }
 
-        var picked = TargetSelector.SelectMany(snapshot, config, config.RangedAttackMaxTargets, config.RangedAttackRadius);
+        var picked = TargetSelector.SelectMany(
+            snapshot,
+            config,
+            config.RangedAttackMaxTargets,
+            config.RangedAttackRadius,
+            followPlayer: config.FarmRadius <= 0);
         if (picked.Count == 0)
         {
             _targetVid = 0;
