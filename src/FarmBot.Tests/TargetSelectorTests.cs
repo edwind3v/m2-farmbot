@@ -82,6 +82,32 @@ public class TargetSelectorTests
     }
 
     [Fact]
+    public void SelectManyFollowsThePlayerInsteadOfTheLockedFarmCenter()
+    {
+        var config = Fixtures.Config();
+        config.FarmCenterX = 0;
+        config.FarmCenterY = 0;
+        config.FarmRadius = 200;
+        config.RangedAttackRadius = 400;
+        config.RangedAttackMaxTargets = 2;
+        var snapshot = new WorldSnapshot
+        {
+            Player = Fixtures.Player(x: 2000, y: 0),
+            Entities = new[]
+            {
+                Fixtures.Mob(1, "Wild Dog", EntityKind.Monster, 40, 0),
+                Fixtures.Mob(8, "Wolf", EntityKind.Monster, 2040, 0)
+            }
+        };
+
+        var locked = TargetSelector.SelectMany(snapshot, config, 2, 400);
+        var follow = TargetSelector.SelectMany(snapshot, config, 2, 400, followPlayer: true);
+
+        Assert.Empty(locked);
+        Assert.Equal(8u, follow[0].Vid);
+    }
+
+    [Fact]
     public void NameRuleOutranksTheGenericMonsterRule()
     {
         var config = Fixtures.Config();

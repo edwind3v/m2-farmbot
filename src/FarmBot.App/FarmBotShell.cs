@@ -99,6 +99,8 @@ public sealed class FarmBotShell : IDisposable
         }
     }
 
+    public bool RangedOnly => View.RangedOnly;
+
     public string StatusKind =>
         View.Phase == BotPhase.Failsafe ? "fail" : View.Enabled ? "run" : "";
 
@@ -264,6 +266,21 @@ public sealed class FarmBotShell : IDisposable
         ConfigStore.Save(_configPath, _config);
         _runtime?.SetEnabled(true);
         _log.Info("bot started");
+        Tick();
+    }
+
+    public void StartRanged()
+    {
+        PullConfig();
+        lock (_configGate)
+            _config.RangedAttackEnabled = true;
+
+        if (_live && !EnsureCompanion())
+            return;
+
+        ConfigStore.Save(_configPath, _config);
+        _runtime?.SetRangedOnly(true);
+        _log.Info("ranged attack started; follows the player");
         Tick();
     }
 

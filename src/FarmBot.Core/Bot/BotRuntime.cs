@@ -15,7 +15,8 @@ public sealed record BotView(
     WorldSnapshot? Snapshot,
     EntityState? Target,
     CombatState CombatState = CombatState.Idle,
-    string NativeInterface = "");
+    string NativeInterface = "",
+    bool RangedOnly = false);
 
 public sealed class BotRuntime : IDisposable
 {
@@ -34,6 +35,7 @@ public sealed class BotRuntime : IDisposable
     private CancellationTokenSource? _cts;
     private Thread? _thread;
     private bool _enabled;
+    private bool _rangedOnly;
     private bool _everReceived;
     private long _lastStateAtMs;
     private BotPhase _phase = BotPhase.Stopped;
@@ -83,6 +85,30 @@ public sealed class BotRuntime : IDisposable
                 _combat.Reset();
             }
             _enabled = enabled;
+            if (enabled)
+                _rangedOnly = false;
+            if (!enabled)
+            {
+                _rangedOnly = false;
+                _phase = BotPhase.Stopped;
+                _reason = "stopped";
+                _target = null;
+            }
+        }
+        SyncLootLoop(_configProvider(), enabled && !_rangedOnly);
+    }
+
+    public void SetRangedOnly(bool enabled)
+    {
+        lock (_gate)
+        {
+            if (enabled && (!_enabled || !_rangedOnly))
+            {
+                _brain.Reset();
+                _combat.Reset();
+            }
+            _enabled = enabled;
+            _rangedOnly = enabled;
             if (!enabled)
             {
                 _phase = BotPhase.Stopped;
@@ -90,14 +116,18 @@ public sealed class BotRuntime : IDisposable
                 _target = null;
             }
         }
-        SyncLootLoop(_configProvider(), enabled);
+        SyncLootLoop(_configProvider(), false);
     }
 
     public void Stop()
     {
-        var wasEnabled = false;
+        bool wasEnabled;
+        bool rangedOnly;
         lock (_gate)
+        {
             wasEnabled = _enabled;
+            rangedOnly = _rangedOnly;
+        }
         SetEnabled(false);
         if (!wasEnabled)
             return;
@@ -109,7 +139,7 @@ public sealed class BotRuntime : IDisposable
         {
             _log.Error($"stop failed: {ex.Message}");
         }
-        _log.Info("bot stopped");
+        _log.Info(rangedOnly ? "ranged attack stopped" : "bot stopped");
     }
 
     public void Panic()
@@ -134,7 +164,7 @@ public sealed class BotRuntime : IDisposable
     public BotView Capture()
     {
         lock (_gate)
-            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface);
+            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface, _rangedOnly);
     }
 
     public void TickOnce(BotConfig config, long nowMs, int dtMs)
@@ -151,8 +181,20 @@ public sealed class BotRuntime : IDisposable
         }
 
         bool enabled;
+        bool rangedOnly;
         lock (_gate)
+        {
             enabled = _enabled;
+            rangedOnly = _rangedOnly;
+        }
+
+        if (rangedOnly && snapshot != null)
+        {
+            config.RangedAttackEnabled = true;
+            config.FarmCenterX = snapshot.Player.X;
+            config.FarmCenterY = snapshot.Player.Y;
+            config.ReturnToCenter = false;
+        }
 
         var corner = enabled && config.StopOnCorner && _cornerProbe();
         var context = new TickContext(enabled, corner, _everReceived, _lastStateAtMs);
@@ -163,7 +205,10 @@ public sealed class BotRuntime : IDisposable
         if (decision.Phase == BotPhase.Failsafe && enabled)
         {
             lock (_gate)
+            {
                 _enabled = false;
+                _rangedOnly = false;
+            }
             _log.Warn($"failsafe: {decision.Reason}");
             SyncLootLoop(config, false);
         }
@@ -220,7 +265,10 @@ public sealed class BotRuntime : IDisposable
             return new BrainDecision(BotPhase.Failsafe, null, BotCommand.Stop(), trip);
         }
 
-        SyncLootLoop(config, true);
+        bool rangedOnly;
+        lock (_gate)
+            rangedOnly = _rangedOnly;
+        SyncLootLoop(config, !rangedOnly);
         var tick = _combat.Tick(snapshot, config, context.Enabled, nowMs);
         _combatState = tick.State;
         return new BrainDecision(ToPhase(tick.State), tick.Target, tick.Action?.ToCommand(), tick.Reason);

@@ -50,6 +50,10 @@ else if (_page == 2)
         <div class="field-row"><label>Attack delay ms</label><input type="number" @bind="Shell.Config.RangedAttackDelayMs" /></div>
         <div class="field-row"><label>Farm radius</label><input type="number" disabled value="@Shell.Config.FarmRadius.ToString("0")" /></div>
     </div>
+    <div class="quick" style="margin-top:14px">
+        <button class="btn btn-ok" disabled="@(Shell.RangedOnly)" @onclick="Shell.StartRanged">Start ranged</button>
+        <button class="btn btn-danger" disabled="@(!Shell.RangedOnly)" @onclick="Shell.StopBot">Stop ranged</button>
+    </div>
 }
 else if (_page == 3)
 {

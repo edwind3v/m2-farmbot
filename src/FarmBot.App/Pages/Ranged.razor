@@ -10,7 +10,7 @@
     </div>
 </div>
 
-<p class="lede">Takes the farm circle, ranks by priority, and blasts every selected target in one burst. For each VID the client reports itself beside that mob, sends the attack packet, then returns to your real position. No attack animation. Delay is the gap between full bursts — 1 ms is allowed.</p>
+<p class="lede">Takes nearby farmable targets by priority and blasts them in one burst. Start ranged follows you as you walk — it does not lock to the Start bot farm point. Start bot still farms the locked circle.</p>
 
 <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAttackEnabled" /> Ranged attack</label>
 <div class="field-grid">
@@ -21,14 +21,16 @@
 </div>
 
 <div class="quick" style="margin-top:14px">
+    <button class="btn btn-ok" disabled="@(Shell.RangedOnly)" @onclick="Shell.StartRanged">Start ranged</button>
+    <button class="btn btn-danger" disabled="@(!Shell.RangedOnly)" @onclick="Shell.StopBot">Stop ranged</button>
     <button class="btn btn-ok" disabled="@(Shell.View.Enabled)" @onclick="Shell.StartBot">Start bot</button>
-    <button class="btn btn-danger" disabled="@(!Shell.View.Enabled)" @onclick="Shell.StopBot">Stop</button>
+    <button class="btn btn-danger" disabled="@(!Shell.View.Enabled || Shell.RangedOnly)" @onclick="Shell.StopBot">Stop bot</button>
     <button class="btn btn-save" @onclick="Shell.SaveSettings">Save settings</button>
 </div>
 
 <div class="tile" style="margin-top:18px">
     <div class="eyebrow">Queue</div>
-    <h2>@(Shell.Config.RangedAttackEnabled ? "Ranged targets" : "Ranged is off")</h2>
+    <h2>@(Shell.RangedOnly ? "Following you" : Shell.Config.RangedAttackEnabled ? "Ranged targets" : "Ranged is off")</h2>
     <p>@Status</p>
     <div class="table-shell" style="margin-top:12px">
         <div class="table-wrap short">
@@ -66,8 +68,8 @@
     {
         get
         {
-            if (!Shell.Config.RangedAttackEnabled)
-                return "Turn ranged attack on, then Start. Farm radius still decides who is eligible.";
+            if (!Shell.Config.RangedAttackEnabled && !Shell.RangedOnly)
+                return "Press Start ranged to blast around you as you walk, or turn the checkbox on and use Start bot to farm a locked circle.";
             var count = Queue.Count;
             var cap = Shell.Config.RangedAttackMaxTargets;
             return count == 0
@@ -87,7 +89,8 @@
                 snapshot,
                 Shell.Config,
                 Shell.Config.RangedAttackMaxTargets,
-                Shell.Config.RangedAttackRadius);
+                Shell.Config.RangedAttackRadius,
+                followPlayer: Shell.RangedOnly);
         }
     }
 

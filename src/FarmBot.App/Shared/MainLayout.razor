@@ -15,7 +15,7 @@
             <button class="btn btn-danger" disabled="@(!Shell.View.Enabled)" @onclick="Shell.StopBot">Stop</button>
             <button class="btn btn-save" @onclick="Shell.SaveSettings">Save</button>
         </div>
-        <span class="pill @(Shell.View.Enabled ? "on" : "off")"><i></i>@(Shell.View.Enabled ? "Running" : "Stopped")</span>
+        <span class="pill @(Shell.View.Enabled ? "on" : "off")"><i></i>@(Shell.RangedOnly ? "Ranged" : Shell.View.Enabled ? "Running" : "Stopped")</span>
         <select @bind="Shell.ModeIndex" @bind:event="onchange">
             <option value="1">Live</option>
             <option value="0">Simulator</option>

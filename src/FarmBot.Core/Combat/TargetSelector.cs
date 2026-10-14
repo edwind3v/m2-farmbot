@@ -30,9 +30,12 @@ public static class TargetSelector
         WorldSnapshot snapshot,
         BotConfig config,
         int maxCount,
-        float maxPlayerDistance = 0)
+        float maxPlayerDistance = 0,
+        bool followPlayer = false)
     {
         var filter = FarmFilter.FromConfig(config);
+        if (followPlayer)
+            filter = filter.Around(snapshot.Player.X, snapshot.Player.Y);
         var main = EntityMapping.FromPlayer(snapshot.Player);
         var entities = new List<Entity>();
         foreach (var state in snapshot.Entities)
