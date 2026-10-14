@@ -208,6 +208,8 @@ public sealed class ActionModuleHost
             AppendHex(text, "getAffect", player.GetAffectRva);
             AppendHex(text, "getValue", player.GetValueRva);
             AppendHex(text, "getIconImage", player.GetIconImageRva);
+            AppendHex(text, "packMgr", 0x3956A14u);
+            AppendHex(text, "packGet", 0x5054A0u);
             AppendHex(text, "useItem", player.UseItemRva);
             AppendHex(text, "combo", player.ComboAttackRva);
             AppendHex(text, "setAuto", player.SetAutoRva);

@@ -447,6 +447,7 @@ public sealed class BotRuntime : IDisposable
     {
         if (config.ClientProfile != ClientProfile.Arthion || _sink == null)
             return;
+        ClientIconStore.ClientPath = config.ClientPath ?? "";
         if (snapshot == null || snapshot.Player.MaxHp <= 0)
         {
             if (_potsInGame)

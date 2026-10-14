@@ -63,6 +63,8 @@ static unsigned kGetItemSubTypeRva = 0;
 static unsigned kGetAffectRva = 0;
 static unsigned kGetValueRva = 0;
 static unsigned kGetIconImageRva = 0;
+static unsigned kPackMgrRva = 0;
+static unsigned kPackGetRva = 0;
 static unsigned kUseItemRva = 0;
 static unsigned kSendClickRva = 0xCE930;
 static unsigned kItemSingletonRva = 0x482CAC;
@@ -733,23 +735,6 @@ static IDirect3DTexture9* QueryTexture(void* p, HMODULE d3d)
     D3DSURFACE_DESC desc;
     if (FAILED(tex->GetLevelDesc(0, &desc)) ||
         desc.Width < 64 || desc.Height < 64 || desc.Width > 4096 || desc.Height > 4096)
-    {
-        tex->Release();
-        return nullptr;
-    }
-    return tex;
-}
-
-static IDirect3DTexture9* QueryIconTexture(void* p, HMODULE d3d)
-{
-    if (!d3d || !UserPtr(p) || !UserPtr(*(void**)p) || !InModule(*(void**)p, d3d))
-        return nullptr;
-    IDirect3DTexture9* tex = nullptr;
-    if (FAILED(((IUnknown*)p)->QueryInterface(__uuidof(IDirect3DTexture9), (void**)&tex)) || !tex)
-        return nullptr;
-    D3DSURFACE_DESC desc;
-    if (FAILED(tex->GetLevelDesc(0, &desc)) ||
-        desc.Width < 16 || desc.Height < 16 || desc.Width > 128 || desc.Height > 128)
     {
         tex->Release();
         return nullptr;
@@ -2501,108 +2486,6 @@ static int NativeItemCount(int slot)
     return v > 0 ? (int)v : 1;
 }
 
-static bool WriteBgraIconBmp(const char* path, const BYTE* bgra, unsigned srcW, unsigned srcH)
-{
-    if (!path || !bgra || !srcW || !srcH)
-        return false;
-    const unsigned dim = 32;
-    unsigned char hdr[54];
-    memset(hdr, 0, 54);
-    hdr[0] = 'B';
-    hdr[1] = 'M';
-    const unsigned size = 54 + dim * dim * 3;
-    memcpy(hdr + 2, &size, 4);
-    hdr[10] = 54;
-    hdr[14] = 40;
-    memcpy(hdr + 18, &dim, 4);
-    memcpy(hdr + 22, &dim, 4);
-    hdr[26] = 1;
-    hdr[28] = 24;
-    FILE* f = nullptr;
-    if (fopen_s(&f, path, "wb") != 0 || !f)
-        return false;
-    fwrite(hdr, 1, 54, f);
-    for (int y = (int)dim - 1; y >= 0; --y)
-    {
-        for (unsigned x = 0; x < dim; ++x)
-        {
-            const unsigned sx = srcW == dim ? x : x * srcW / dim;
-            const unsigned sy = srcH == dim ? (unsigned)y : (unsigned)y * srcH / dim;
-            const BYTE* s = bgra + (sy * srcW + sx) * 4;
-            unsigned char px[3] = { s[0], s[1], s[2] };
-            fwrite(px, 1, 3, f);
-        }
-    }
-    fclose(f);
-    return true;
-}
-
-static bool DumpItemIcon(void* data, const char* path)
-{
-    if (!data || !path || !g_base)
-        return false;
-    void* img = nullptr;
-    if (kGetIconImageRva)
-    {
-        FnGetSelected getImg = (FnGetSelected)(g_base + kGetIconImageRva);
-        if (!IsBadCodePtr((FARPROC)getImg))
-        {
-            __try { img = getImg(data); }
-            __except (EXCEPTION_EXECUTE_HANDLER) { img = nullptr; }
-        }
-    }
-    HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
-    IDirect3DTexture9* best = nullptr;
-    unsigned bestArea = 0;
-    void* roots[2] = { img, data };
-    for (int r = 0; r < 2; ++r)
-    {
-        void* obj = roots[r];
-        if (!UserPtr(obj))
-            continue;
-        const int n = ReadableBytes(obj, 0x200) & ~3;
-        BYTE* p = (BYTE*)obj;
-        for (int i = 0; i + 4 <= n; i += 4)
-        {
-            void* child = *(void**)(p + i);
-            IDirect3DTexture9* tex = QueryIconTexture(child, d3d9);
-            if (!tex && UserPtr(child))
-            {
-                const int m = ReadableBytes(child, 0x120) & ~3;
-                BYTE* o = (BYTE*)child;
-                for (int j = 0; j + 4 <= m; j += 4)
-                    if (!tex)
-                        tex = QueryIconTexture(*(void**)(o + j), d3d9);
-            }
-            if (!tex)
-                continue;
-            D3DSURFACE_DESC desc;
-            if (FAILED(tex->GetLevelDesc(0, &desc)))
-            {
-                tex->Release();
-                continue;
-            }
-            const unsigned area = desc.Width * desc.Height;
-            if (area > bestArea)
-            {
-                if (best)
-                    best->Release();
-                best = tex;
-                bestArea = area;
-            }
-            else
-                tex->Release();
-        }
-    }
-    if (!best)
-        return false;
-    BYTE pixels[128 * 128 * 4];
-    unsigned w = 0, h = 0;
-    const bool ok = CopyTexture(best, pixels, &w, &h) && w && h && WriteBgraIconBmp(path, pixels, w, h);
-    best->Release();
-    return ok;
-}
-
 static bool CallUseItem(unsigned cell)
 {
     void* player = Player();
@@ -2822,7 +2705,7 @@ static bool ReadStdString(void* str, char* out, int cap)
         out[0] = 0;
         return true;
     }
-    if (size > 48)
+    if (size > 96)
         return false;
     const unsigned n = size < (unsigned)(cap - 1) ? size : (unsigned)(cap - 1);
     memcpy(out, p, n);
@@ -3560,6 +3443,98 @@ static const char* ClassifyPot(int type, int sub, int apply, unsigned vnum, cons
     return nullptr;
 }
 
+static int LooksLikeTga(const unsigned char* p)
+{
+    if (!UserPtr((void*)p))
+        return 0;
+    const unsigned char type = p[2];
+    if (type != 2 && type != 10)
+        return 0;
+    const unsigned w = *(unsigned short*)(p + 12);
+    const unsigned h = *(unsigned short*)(p + 14);
+    const unsigned bpp = p[16];
+    if (w < 8 || w > 256 || h < 8 || h > 256)
+        return 0;
+    if (bpp != 16 && bpp != 24 && bpp != 32)
+        return 0;
+    unsigned bytes = 18 + w * h * (bpp / 8) + 32;
+    if (bytes < 64)
+        bytes = 64;
+    if (bytes > 65536)
+        bytes = 65536;
+    return (int)bytes;
+}
+
+static bool WriteBytes(const char* path, const void* data, int bytes)
+{
+    if (!path || !data || bytes <= 0)
+        return false;
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "wb") != 0 || !f)
+        return false;
+    const size_t n = fwrite(data, 1, (size_t)bytes, f);
+    fclose(f);
+    return n == (size_t)bytes;
+}
+
+static bool FileBigEnough(const char* path, int minBytes)
+{
+    WIN32_FILE_ATTRIBUTE_DATA info;
+    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &info))
+        return false;
+    return info.nFileSizeLow >= (DWORD)minBytes && info.nFileSizeHigh == 0;
+}
+
+static bool ExtractPackFile(const char* virt, const char* dest)
+{
+    if (!virt || !virt[0] || !dest || !g_base || !kPackGetRva || !kPackMgrRva)
+        return false;
+    if (FileBigEnough(dest, 64))
+        return true;
+    void* mgr = nullptr;
+    __try { mgr = *(void**)(g_base + kPackMgrRva); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { mgr = nullptr; }
+    if (!UserPtr(mgr))
+        return false;
+    typedef int (__thiscall* FnPackGet)(void* self, const char* name, unsigned len, void* mapped, int tryDisk);
+    FnPackGet get = (FnPackGet)(g_base + kPackGetRva);
+    if (IsBadCodePtr((FARPROC)get))
+        return false;
+    unsigned char mapped[320];
+    memset(mapped, 0, sizeof(mapped));
+    int ok = 0;
+    __try { ok = get(mgr, virt, (unsigned)strlen(virt), mapped, 0); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { ok = 0; }
+    if (!ok)
+        return false;
+    const unsigned char* data = nullptr;
+    int bytes = 0;
+    for (int i = 0; i + 4 <= 320; i += 4)
+    {
+        const unsigned char* p = *(const unsigned char**)(mapped + i);
+        const int n = LooksLikeTga(p);
+        if (n <= 0)
+            continue;
+        data = p;
+        bytes = n;
+        break;
+    }
+    if (!data)
+        return false;
+    return WriteBytes(dest, data, bytes);
+}
+
+static void ReadItemIconPath(void* data, unsigned vnum, char* icon, int cap)
+{
+    if (!icon || cap < 8)
+        return;
+    icon[0] = 0;
+    if (data)
+        ReadStdString((char*)data + 0x64, icon, cap);
+    if (!icon[0] && vnum)
+        _snprintf_s(icon, cap, _TRUNCATE, "icon/item/%05u.tga", vnum);
+}
+
 static bool CopyIconFile(const char* src, const char* dst)
 {
     if (!src || !src[0] || !dst)
@@ -3634,8 +3609,9 @@ static void ScanPots()
             char name[160] = { 0 };
             char icon[260] = { 0 };
             int type = 0, sub = 0, apply = 0, aval = 0, v0 = 0, v1 = 0;
+            void* itemData = nullptr;
             if (nativeInv)
-                NativeItemInfo(vnum, name, 160, &type, &sub, &apply, &aval, &v0, &v1);
+                itemData = NativeItemInfo(vnum, name, 160, &type, &sub, &apply, &aval, &v0, &v1);
             else
             {
                 PySlotName(playerMod, i, name, 160);
@@ -3665,6 +3641,8 @@ static void ScanPots()
                     PyAsStr(PyCall(itemMod, "GetIconImageFileName", nullptr), icon, 260);
                 }
             }
+            if (!icon[0])
+                ReadItemIconPath(itemData, vnum, icon, 260);
             const char* fam = ClassifyPot(type, sub, apply, vnum, name);
             NativeLog("pot slot=%d vnum=%u type=%d sub=%d apply=%d name=%s fam=%s",
                 i, vnum, type, sub, apply, name, fam ? fam : "-");
@@ -3696,10 +3674,17 @@ static void ScanPots()
                 else
                     _snprintf_s(tip, _TRUNCATE, "%s", acc.name.c_str());
                 acc.tip = tip;
+                char tga[MAX_PATH];
                 char bmp[MAX_PATH];
+                _snprintf_s(tga, _TRUNCATE, "%s\\%u.tga", iconDir, vnum);
                 _snprintf_s(bmp, _TRUNCATE, "%s\\%u.bmp", iconDir, vnum);
-                if (icon[0] && CopyIconFile(icon, bmp))
-                    acc.icon = bmp;
+                if (icon[0] && ExtractPackFile(icon, tga))
+                {
+                    acc.icon = tga;
+                    NativeLog("icon pack vnum=%u path=%s", vnum, icon);
+                }
+                else if (icon[0] && CopyIconFile(icon, tga))
+                    acc.icon = tga;
                 else
                 {
                     unsigned char r = 196, g = 92, b = 92;
@@ -3708,6 +3693,7 @@ static void ScanPots()
                     else if (acc.family == "purple") { r = 140; g = 92; b = 180; }
                     WritePotBmp(bmp, r, g, b);
                     acc.icon = bmp;
+                    NativeLog("icon fallback vnum=%u path=%s", vnum, icon);
                 }
             }
             acc.count += count > 0 ? count : 1;
@@ -4548,6 +4534,8 @@ static void ClearLoginRvas()
     kGetAffectRva = 0;
     kGetValueRva = 0;
     kGetIconImageRva = 0;
+    kPackMgrRva = 0;
+    kPackGetRva = 0;
     kUseItemRva = 0;
     kGetStatusRva = 0;
     kGetStatusSlot = 0;
@@ -4731,6 +4719,10 @@ static void LoadConfig()
             kGetValueRva = ParseHex(line + 9);
         else if (strncmp(line, "getIconImage=", 13) == 0)
             kGetIconImageRva = ParseHex(line + 13);
+        else if (strncmp(line, "packMgr=", 8) == 0)
+            kPackMgrRva = ParseHex(line + 8);
+        else if (strncmp(line, "packGet=", 8) == 0)
+            kPackGetRva = ParseHex(line + 8);
         else if (strncmp(line, "useItem=", 8) == 0)
             kUseItemRva = ParseHex(line + 8);
         else if (strncmp(line, "mainPtr=", 8) == 0)

@@ -387,7 +387,7 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
                     Count = row.C,
                     Slot = row.S,
                     Family = family,
-                    Icon = IconSrc(row.I),
+                    Icon = ClientIconStore.DataUri(row.I, row.V),
                     DurationSec = row.D,
                     Tooltip = string.IsNullOrWhiteSpace(row.T) ? (row.N ?? "") : row.T
                 });
@@ -423,20 +423,6 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }
 
         return false;
-    }
-
-    private static string IconSrc(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            return "";
-        try
-        {
-            return "data:image/bmp;base64," + Convert.ToBase64String(File.ReadAllBytes(path));
-        }
-        catch
-        {
-            return "";
-        }
     }
 
     private sealed class PotionWire

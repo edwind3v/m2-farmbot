@@ -364,7 +364,11 @@ tr.tgt td { color: var(--accent-2); }
 .pot img {
     width: 32px;
     height: 32px;
+    border-radius: 4px;
     image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    object-fit: contain;
+    background: #141414;
 }
 
 .pot-face {
