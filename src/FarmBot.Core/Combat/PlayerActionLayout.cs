@@ -34,6 +34,31 @@ public sealed record PlayerActionLayout(
     public int PointMaxSp { get; init; } = 8;
 }
 
+public sealed record LoginNativeLayout(
+    uint NetStreamRva,
+    uint AccountConnectorRva,
+    uint SetLoginInfoRva,
+    uint AccountSetLoginInfoRva,
+    uint AccountConnectRva,
+    uint DirectEnterRva,
+    uint SelectCharacterRva,
+    uint SetLoginPhaseRva,
+    uint OnLogoCloseRva,
+    uint PhaseDisplacement,
+    uint SetGamePhaseRva,
+    uint StartGameRva,
+    uint NotifyGamePhaseRva,
+    uint SendEnterGamePacketRva,
+    IReadOnlyList<string> Evidence)
+{
+    public bool CanLogin =>
+        NetStreamRva is > 0x1000 and < 0x800000 &&
+        AccountConnectorRva is > 0x1000 and < 0x800000 &&
+        SetLoginInfoRva is > 0 and < 0x800000 &&
+        AccountConnectRva is > 0 and < 0x800000 &&
+        DirectEnterRva is > 0 and < 0x800000;
+}
+
 public sealed record MiniMapLayout(
     uint SingletonRva,
     uint ShowAtlasRva,
@@ -103,6 +128,69 @@ public static class PlayerActionLayoutRecoverer
             PointSp = points.sp,
             PointMaxSp = points.maxSp
         };
+    }
+
+    public static LoginNativeLayout RecoverLogin(string path)
+    {
+        var pe = ActionPe.Load(path);
+        var evidence = new List<string>();
+        var setLogin = RecoverLoginExport(pe, "SetLoginInfo", evidence);
+        var connectAuth = RecoverLoginExport(pe, "ConnectToAccountServer", evidence);
+        var direct = RecoverLoginExport(pe, "DirectEnter", evidence);
+        var select = RecoverLoginExport(pe, "SendSelectCharacterPacket", evidence);
+        var logoClose = RecoverLoginExport(pe, "OnLogoClose", evidence);
+        var setPhase = RecoverFunctionFromUniqueString(pe, "## Network - Login Phase ##", evidence);
+        var setGamePhase = RecoverFunctionFromUniqueString(pe, "## Network - Game Phase ##", evidence);
+        var setLoadingPhase = RecoverFunctionFromUniqueString(pe, "## Network - Loading Phase ##", evidence);
+        var startGame = RecoverLoginExport(pe, "StartGame", evidence);
+        var enterGamePkt = RecoverLoginExport(pe, "SendEnterGamePacket", evidence);
+        var setHandler = RecoverLoginExport(pe, "SetHandler", evidence);
+        var setGameWindow = RecoverNamedNative(pe, "SetGameWindow", evidence);
+        var phaseDisp = RecoverPhaseDisplacement(pe, setPhase, evidence);
+        var accountSetLogin = SecondThiscallAfterSingleton(pe, setLogin.wrapper, setLogin.singleton, evidence, "SetLoginInfo");
+        var netRva = PreferInImage(pe, setLogin.singleton, direct.singleton, select.singleton);
+        var accountRva = PreferInImage(pe, connectAuth.singleton, accountSetLogin == 0 ? 0 : SecondImageLoad(pe, setLogin.wrapper, setLogin.singleton));
+
+        var startGameNative = startGame.wrapper == 0
+            ? startGame.native
+            : RelativeCall(pe, pe.VaToFile(pe.ImageBase + startGame.wrapper), pe.VaToFile(pe.ImageBase + startGame.wrapper) + 0x40);
+        if (startGameNative == 0)
+            startGameNative = startGame.native;
+        var notifyGame = RecoverNotifyGamePhase(pe, evidence);
+        var enterGameNative = enterGamePkt.wrapper == 0
+            ? enterGamePkt.native
+            : RelativeCall(pe, pe.VaToFile(pe.ImageBase + enterGamePkt.wrapper), pe.VaToFile(pe.ImageBase + enterGamePkt.wrapper) + 0x40);
+        if (enterGameNative == 0)
+            enterGameNative = enterGamePkt.native;
+        evidence.Add($"SetGamePhase RVA 0x{setGamePhase:X} SetLoadingPhase RVA 0x{setLoadingPhase:X} StartGame native 0x{startGameNative:X} NotifyGamePhase 0x{notifyGame:X} SendEnterGamePacket 0x{enterGameNative:X}.");
+        if (startGameNative != 0)
+            evidence.Add($"StartGame bytes={pe.Hex(pe.ImageBase + startGameNative, 16)}.");
+        if (setHandler.native != 0)
+            evidence.Add($"SetHandler native 0x{setHandler.native:X} wrapper=0x{setHandler.wrapper:X} bytes={pe.Hex(pe.ImageBase + setHandler.native, 32)}.");
+        if (setGameWindow.native != 0)
+            evidence.Add($"SetGameWindow native 0x{setGameWindow.native:X} wrapper=0x{setGameWindow.wrapper:X} bytes={pe.Hex(pe.ImageBase + setGameWindow.native, 48)}.");
+        evidence.Add("net.SetLoginInfo writes CPythonNetworkStream and CAccountConnector credentials.");
+        evidence.Add("net.ConnectToAccountServer is CAccountConnector::Connect(channel, auth).");
+        evidence.Add("net.DirectEnter is CPythonNetworkStream::ConnectGameServer(slot) and sets DirectEnter mode.");
+        evidence.Add("Login/Handshake skip Python UI when DirectEnter mode is set.");
+        evidence.Add("LoadingWindow.__StartGame sets CPythonNetworkStream+0x8C; 0x11C0C0 then PyCalls MainStream.SetGamePhase to open GameWindow.");
+
+        return new LoginNativeLayout(
+            netRva,
+            accountRva,
+            setLogin.native,
+            accountSetLogin,
+            connectAuth.native,
+            direct.native,
+            select.native,
+            setPhase,
+            logoClose.native,
+            phaseDisp,
+            setGamePhase,
+            startGameNative,
+            notifyGame,
+            enterGameNative,
+            evidence);
     }
 
     public static MiniMapLayout RecoverMiniMap(string path)
@@ -498,6 +586,238 @@ public static class PlayerActionLayoutRecoverer
             return target - pe.ImageBase;
         }
 
+        return 0;
+    }
+
+    private static (uint native, uint singleton, uint wrapper) RecoverLoginExport(ActionPe pe, string name, List<string> evidence)
+    {
+        var found = RecoverNamedNative(pe, name, evidence);
+        var singleton = found.singleton != 0 ? found.singleton : FirstImageLoad(pe, found.wrapper);
+        var native = found.native;
+        if (singleton != 0)
+            native = NativeCallAfterSingleton(pe, found.wrapper, pe.ImageBase + singleton);
+        if (native == 0)
+            native = found.native;
+        evidence.Add($"Login export {name} wrapper=0x{found.wrapper:X} singleton=0x{singleton:X} native=0x{native:X}.");
+        return (native, singleton, found.wrapper);
+    }
+
+    private static uint FirstImageLoad(ActionPe pe, uint wrapperRva)
+    {
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+        for (var i = off; i < off + 0x160 && i + 6 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0xA1 && pe.IsVa(pe.ReadU32(i + 1)))
+                return pe.ReadU32(i + 1) - pe.ImageBase;
+            if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15 ||
+                                       pe.Byte(i + 1) == 0x35 || pe.Byte(i + 1) == 0x3D) &&
+                pe.IsVa(pe.ReadU32(i + 2)))
+                return pe.ReadU32(i + 2) - pe.ImageBase;
+        }
+
+        return 0;
+    }
+
+    private static uint SecondImageLoad(ActionPe pe, uint wrapperRva, uint firstSingletonRva)
+    {
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+        var seen = 0;
+        for (var i = off; i < off + 0x180 && i + 6 < pe.Length; i++)
+        {
+            uint addr = 0;
+            if (pe.Byte(i) == 0xA1)
+                addr = pe.ReadU32(i + 1);
+            else if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15 ||
+                                           pe.Byte(i + 1) == 0x35 || pe.Byte(i + 1) == 0x3D))
+                addr = pe.ReadU32(i + 2);
+            if (addr == 0 || !pe.IsVa(addr))
+                continue;
+            var rva = addr - pe.ImageBase;
+            if (rva == firstSingletonRva)
+                continue;
+            seen++;
+            if (seen >= 1)
+                return rva;
+        }
+
+        return 0;
+    }
+
+    private static uint SecondThiscallAfterSingleton(ActionPe pe, uint wrapperRva, uint singletonRva, List<string> evidence, string name)
+    {
+        if (wrapperRva == 0)
+            return 0;
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+        var end = off + 0x90;
+        for (var i = off; i < off + 0x90 && i < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0xC3)
+                end = i + 1;
+        }
+
+        var singletonVa = singletonRva == 0 ? 0 : pe.ImageBase + singletonRva;
+        var seen = 0;
+        var start = off;
+        if (singletonVa != 0)
+        {
+            for (var i = off; i + 6 < end; i++)
+            {
+                if (pe.Byte(i) == 0xA1 && pe.ReadU32(i + 1) == singletonVa)
+                    start = i + 5;
+                if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15) &&
+                    pe.ReadU32(i + 2) == singletonVa)
+                    start = i + 6;
+            }
+        }
+
+        for (var i = start; i + 5 < end; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            if (!pe.IsCode(target))
+                continue;
+            var destOff = pe.VaToFile(target);
+            if (destOff < 0 || LooksLikePythonStub(pe, destOff))
+                continue;
+            if (pe.Byte(destOff) == 0xC2 || pe.Byte(destOff) == 0xC3)
+                continue;
+            if (pe.Byte(destOff) == 0xFF && pe.Byte(destOff + 1) == 0x25)
+                continue;
+            seen++;
+            if (seen != 2)
+                continue;
+            var rva = target - pe.ImageBase;
+            evidence.Add($"Second {name} thiscall RVA 0x{rva:X}.");
+            return rva;
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverNotifyGamePhase(ActionPe pe, List<string> evidence)
+    {
+        if (!pe.TryFindAscii("SetGamePhase", out var va))
+        {
+            evidence.Add("'SetGamePhase' string missing.");
+            return 0;
+        }
+
+        foreach (var site in pe.FindImmediateXrefs(va))
+        {
+            var off = pe.VaToFile(site);
+            if (off < 0)
+                continue;
+            for (var i = off; i > off - 0x40 && i > 16; i--)
+            {
+                if (pe.Byte(i) != 0x56 || pe.Byte(i + 1) != 0x8B || pe.Byte(i + 2) != 0xF1)
+                    continue;
+                if (pe.Byte(i + 3) != 0x83 || pe.Byte(i + 4) != 0xBE || pe.ReadU32(i + 5) != 0x8C)
+                    continue;
+                var rva = pe.FileToVa(i) - pe.ImageBase;
+                evidence.Add($"NotifyGamePhase RVA 0x{rva:X} PyCalls MainStream.SetGamePhase when +0x8C is set.");
+                return rva;
+            }
+        }
+
+        evidence.Add("'SetGamePhase' has no flag-gated PyCall wrapper.");
+        return 0;
+    }
+
+    private static uint RecoverFunctionFromUniqueString(ActionPe pe, string text, List<string> evidence)
+    {
+        if (!pe.TryFindAscii(text, out var va))
+        {
+            evidence.Add($"'{text}' string missing.");
+            return 0;
+        }
+
+        foreach (var site in pe.FindImmediateXrefs(va))
+        {
+            var off = pe.VaToFile(site);
+            if (off < 0)
+                continue;
+            var start = -1;
+            for (var i = off; i > off - 0x180 && i > 16; i--)
+            {
+                if (pe.Byte(i) != 0xCC || pe.Byte(i + 1) == 0xCC)
+                    continue;
+                start = i + 1;
+                break;
+            }
+
+            if (start < 0)
+            {
+                for (var i = off; i > off - 0x80 && i > 16; i--)
+                {
+                    if (pe.Byte(i) == 0x55 && pe.Byte(i + 1) == 0x8B && pe.Byte(i + 2) == 0xEC)
+                    {
+                        start = i;
+                        break;
+                    }
+                }
+            }
+
+            if (start < 0)
+                continue;
+            var rva = pe.FileToVa(start) - pe.ImageBase;
+            if (!pe.IsRva(rva))
+                continue;
+            evidence.Add($"'{text}' xref function RVA 0x{rva:X}.");
+            return rva;
+        }
+
+        evidence.Add($"'{text}' has no accepted code xref.");
+        return 0;
+    }
+
+    private static uint RecoverPhaseDisplacement(ActionPe pe, uint setLoginPhaseRva, List<string> evidence)
+    {
+        if (setLoginPhaseRva == 0)
+            return 0;
+        var loginVas = pe.FindAsciiZ("Login").ToHashSet();
+        if (loginVas.Count == 0)
+            return 0;
+        var fnOff = pe.VaToFile(pe.ImageBase + setLoginPhaseRva);
+        if (fnOff < 0)
+            return 0;
+        for (var i = fnOff; i < fnOff + 0x180 && i + 7 < pe.Length; i++)
+        {
+            if (!loginVas.Contains(pe.ReadU32(i)))
+                continue;
+            for (var j = i; j > i - 24 && j > fnOff; j--)
+            {
+                if (pe.Byte(j) == 0x8D && (pe.Byte(j + 1) == 0x81 || pe.Byte(j + 1) == 0x86 ||
+                                           pe.Byte(j + 1) == 0x87 || pe.Byte(j + 1) == 0x8E ||
+                                           pe.Byte(j + 1) == 0x8F))
+                {
+                    var disp = pe.ReadU32(j + 2);
+                    if (disp is > 0x40 and < 0x2000)
+                    {
+                        evidence.Add($"m_strPhase displacement 0x{disp:X} from lea in SetLoginPhase.");
+                        return disp;
+                    }
+                }
+
+                if (pe.Byte(j) == 0x8D && pe.Byte(j + 1) == 0x8D)
+                {
+                    var disp = pe.ReadU32(j + 2);
+                    if (disp is > 0x40 and < 0x2000)
+                    {
+                        evidence.Add($"m_strPhase displacement 0x{disp:X} from [ebp+disp] in SetLoginPhase.");
+                        return disp;
+                    }
+                }
+            }
+        }
+
+        evidence.Add("m_strPhase displacement was not recovered from SetLoginPhase.");
         return 0;
     }
 

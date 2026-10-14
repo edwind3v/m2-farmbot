@@ -25,7 +25,7 @@ internal static class Program
 
         try
         {
-            Application.Run(new MainForm());
+            Application.Run(new LauncherForm());
         }
         catch (Exception ex)
         {

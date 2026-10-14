@@ -44,23 +44,48 @@ public sealed class ProcessMemory : IDisposable
 
     public bool IsOpen => _handle != IntPtr.Zero && !HasExited();
 
-    public static bool TryAttach(IReadOnlyList<string> processNames, out ProcessMemory? memory, out string status)
+    public static bool TryAttach(int processId, out ProcessMemory? memory, out string status)
     {
         memory = null;
-        Process? process = null;
-        foreach (var name in processNames)
+        Process? process;
+        try
         {
-            process = Process.GetProcessesByName(name).FirstOrDefault();
-            if (process != null)
-                break;
+            process = Process.GetProcessById(processId);
         }
-
-        if (process == null)
+        catch (ArgumentException)
         {
-            status = "live client process was not found";
+            status = $"PID {processId} is not running";
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            status = $"PID {processId} is not running";
             return false;
         }
 
+        using (process)
+            return TryOpen(process, out memory, out status);
+    }
+
+    public static bool TryAttach(IReadOnlyList<string> processNames, out ProcessMemory? memory, out string status)
+    {
+        memory = null;
+        foreach (var name in processNames)
+        {
+            var process = Process.GetProcessesByName(name).FirstOrDefault();
+            if (process == null)
+                continue;
+            using (process)
+                return TryOpen(process, out memory, out status);
+        }
+
+        status = "live client process was not found";
+        return false;
+    }
+
+    private static bool TryOpen(Process process, out ProcessMemory? memory, out string status)
+    {
+        memory = null;
         var handle = IntPtr.Zero;
         var lastOpenError = 0;
         foreach (var access in AccessAttempts)

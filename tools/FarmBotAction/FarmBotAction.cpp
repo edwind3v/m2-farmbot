@@ -21,6 +21,28 @@ static const unsigned kSingletonRva = 0x482398;
 static const unsigned kCharMgrRva = 0x48239C;
 static const unsigned kNewAttackRva = 0xD0C70;
 static const unsigned kNetStreamRva = 0x482BA0;
+static const unsigned kAccountConnectorRva = 0x484D24;
+static const unsigned kSetLoginInfoRva = 0x11C390;
+static const unsigned kAccountSetLoginInfoRva = 0x117660;
+static const unsigned kAccountConnectRva = 0x117510;
+static const unsigned kConnectGameServerRva = 0x11BD40;
+static const unsigned kSelectCharacterRva = 0x13DC60;
+static const unsigned kSetLoginPhaseRva = 0x13D240;
+static const unsigned kSetGamePhaseRva = 0x1367F0;
+static const unsigned kStartGameRva = 0x13CD40;
+static const unsigned kNotifyGamePhaseRva = 0x11C0C0;
+static const unsigned kDirectEnterModeSetRva = 0x11C800;
+static const unsigned kOnLogoCloseRva = 0x13F1A0;
+static const unsigned kAppSingletonRva = 0x484C8C;
+static const unsigned kPhaseDisp = 0xF8;
+static const unsigned kLoginIdDisp = 0xB0;
+static const unsigned kLoginPasswordDisp = 0xC8;
+static const unsigned kSelectedCharacterDisp = 0x797C;
+static const unsigned kDirectEnterIsSetDisp = 0x79A4;
+static const unsigned kDirectEnterSlotDisp = 0x79A8;
+static const unsigned kStartGameFlagDisp = 0x8C;
+static const unsigned kPythonHandlerDisp = 0x160;
+static const unsigned kGameWindowDisp = 8;
 static const unsigned kSendAttackRva = 0x134BE0;
 static const unsigned kSendStateRva = 0x134DA0;
 static const unsigned kSendPickupRva = 0x13B690;
@@ -102,6 +124,23 @@ typedef BOOL (WINAPI* FnPeek)(LPMSG, HWND, UINT, UINT, UINT);
 typedef BOOL (WINAPI* FnGetMsg)(LPMSG, HWND, UINT, UINT);
 typedef void (__thiscall* FnUpdate)(void* self);
 typedef const char* (__thiscall* FnGetName)(void* self);
+typedef void (__thiscall* FnSetLoginInfo)(void* self, const char* id, const char* pwd);
+typedef int (__thiscall* FnAccountConnect)(void* self, const char* addr, int port, const char* accountAddr, int accountPort);
+typedef void (__thiscall* FnConnectGameServer)(void* self, unsigned slot);
+typedef int (__thiscall* FnSelectCharacter)(void* self, unsigned slot);
+typedef void (__thiscall* FnDirectEnterSet)(void* self, unsigned slot);
+typedef void (__thiscall* FnPhase)(void* self);
+typedef unsigned char (__thiscall* FnNotifyGamePhase)(void* self);
+typedef void* (__cdecl* FnPyIntFromLong)(long v);
+typedef void* (__cdecl* FnPyStringFromString)(const char* v);
+typedef int (__cdecl* FnPySetAttrString)(void* obj, const char* name, void* value);
+typedef void* (__cdecl* FnPyGetAttrString)(void* obj, const char* name);
+typedef void* (__cdecl* FnPyCallMethod)(void* obj, char* name, char* format, ...);
+typedef void* (__cdecl* FnPyCallObject)(void* callable, void* args);
+typedef void (__cdecl* FnPyErrClear)();
+typedef int (__cdecl* FnPyGilEnsure)();
+typedef void (__cdecl* FnPyGilRelease)(int state);
+typedef char* (__cdecl* FnPyStringAsString)(void* obj);
 
 struct ShotHit
 {
@@ -121,6 +160,13 @@ struct Command
     float x;
     float y;
     std::vector<ShotHit> hits;
+    std::string account;
+    std::string password;
+    std::string host;
+    std::string authHost;
+    int port;
+    int authPort;
+    int slot;
 };
 
 static BYTE* g_base;
@@ -160,6 +206,23 @@ static unsigned g_atlasWidth;
 static unsigned g_atlasHeight;
 static float g_atlasWorldW;
 static float g_atlasWorldH;
+static std::string g_sessionPhase;
+static std::string g_sessionCharacter;
+static std::string g_sessionAccount;
+static std::string g_capturedAccount;
+static std::string g_capturedPassword;
+static int g_sessionCharacterSlot = -1;
+static int g_startGame;
+static int g_inWorld;
+static int g_openedGameWindow;
+static int g_skippedIntro;
+static int g_loginPort;
+static int g_sawLoadSteps;
+static int g_loadFinished;
+static int g_loadNearEnd;
+static int g_maxLoadSteps;
+static int g_loginSent;
+static int g_selectSent;
 static unsigned g_atlasSeq;
 static volatile long g_atlasCrash;
 
@@ -168,6 +231,7 @@ static FnPeek g_peekW;
 static FnGetMsg g_getA;
 static FnGetMsg g_getW;
 static FnUpdate g_playerUpdate;
+static FnSetLoginInfo g_setLoginInfo;
 
 static bool UserPtr(const void* p)
 {
@@ -956,6 +1020,855 @@ static void* NetStream()
     return UserPtr(p) ? p : nullptr;
 }
 
+static bool ReadStdString(void* str, char* out, int cap);
+static bool ReadPlayerName(void* player, char* out, int cap);
+static void CaptureLogin(const char* id, const char* pwd);
+static int StartGameFlag(void* net);
+static int IsPythonGameWindow();
+static int LoadingStepCount();
+static int WindowClassIs(const char* name);
+static void* SafePyGetAttr(void* obj, const char* name);
+static int SafePyTypeName(void* obj, char* out, int cap);
+
+static void* AccountConnector()
+{
+    if (!g_base)
+        return nullptr;
+    void* p = *(void**)(g_base + kAccountConnectorRva);
+    return UserPtr(p) ? p : nullptr;
+}
+
+static void* AppSingleton()
+{
+    if (!g_base)
+        return nullptr;
+    void* p = *(void**)(g_base + kAppSingletonRva);
+    return UserPtr(p) ? p : nullptr;
+}
+
+static bool ReadPhase(char* out, int cap)
+{
+    g_sessionPhase = "";
+    void* net = NetStream();
+    if (!net || !ReadStdString((char*)net + kPhaseDisp, out, cap))
+    {
+        if (out && cap > 0)
+            out[0] = 0;
+        return false;
+    }
+    g_sessionPhase = out;
+    return true;
+}
+
+static bool PhaseHas(const char* name)
+{
+    if (!name || g_sessionPhase.empty())
+        return false;
+    const char* p = g_sessionPhase.c_str();
+    const size_t n = strlen(name);
+    for (; *p; ++p)
+    {
+        size_t i = 0;
+        while (i < n && p[i] && (p[i] | 32) == (name[i] | 32))
+            ++i;
+        if (i == n)
+            return true;
+    }
+    return false;
+}
+
+static bool IsPastIntro()
+{
+    return PhaseHas("Login") || PhaseHas("Select") || PhaseHas("Hand") ||
+           PhaseHas("Load") || PhaseHas("Game");
+}
+
+static void ReadLoginSession()
+{
+    if (g_sessionAccount.empty() && !g_capturedAccount.empty())
+        g_sessionAccount = g_capturedAccount;
+    void* net = NetStream();
+    if (!net)
+        return;
+    char id[64];
+    if (ReadStdString((char*)net + kLoginIdDisp, id, 64) && id[0])
+        g_sessionAccount = id;
+    char pwd[64];
+    if (ReadStdString((char*)net + kLoginPasswordDisp, pwd, 64) && pwd[0])
+        g_capturedPassword = pwd;
+    if (PhaseHas("Select") || PhaseHas("Game") || PhaseHas("Load"))
+    {
+        const unsigned slot = *(unsigned*)((char*)net + kSelectedCharacterDisp);
+        if (slot <= 4)
+            g_sessionCharacterSlot = (int)slot;
+    }
+}
+
+static int HasGameWindow()
+{
+    void* player = Player();
+    if (!player)
+        return 0;
+    __try
+    {
+        void* gw = *(void**)((char*)player + kGameWindowDisp);
+        return UserPtr(gw) ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static void RefreshSession()
+{
+    char phase[64];
+    ReadPhase(phase, 64);
+    ReadLoginSession();
+    void* player = Player();
+    char name[64];
+    if (player && ReadPlayerName(player, name, 64) && name[0])
+        g_sessionCharacter = name;
+    if (PhaseHas("Load") || PhaseHas("Game"))
+    {
+        const int loading = WindowClassIs("LoadingWindow");
+        const int gameWnd = WindowClassIs("GameWindow");
+        if (loading)
+        {
+            const int steps = LoadingStepCount();
+            if (steps > g_maxLoadSteps)
+                g_maxLoadSteps = steps;
+            if (steps > 0)
+                g_sawLoadSteps = 1;
+            if (steps > 0 && steps <= 3 && g_maxLoadSteps >= 8)
+                g_loadNearEnd = 1;
+            if (g_loadNearEnd && steps == 0)
+                g_loadFinished = 1;
+        }
+        if (gameWnd && g_loadFinished)
+            g_openedGameWindow = 1;
+    }
+    g_startGame = g_loadFinished;
+    g_inWorld = (g_openedGameWindow && g_loadFinished) ? 1 : 0;
+}
+
+static int SafePhase(FnPhase fn, void* self)
+{
+    if (!fn || !self || IsBadCodePtr((FARPROC)fn))
+        return 0;
+    __try
+    {
+        fn(self);
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int SafeSetLogin(FnSetLoginInfo fn, void* self, const char* id, const char* pwd)
+{
+    if (!fn || !self || !id || !pwd || IsBadCodePtr((FARPROC)fn))
+        return 0;
+    __try
+    {
+        fn(self, id, pwd);
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int SafeConnect(FnAccountConnect fn, void* self, const char* addr, int port, const char* accountAddr, int accountPort)
+{
+    if (!fn || !self || !addr || !accountAddr || IsBadCodePtr((FARPROC)fn))
+        return 0;
+    __try
+    {
+        return fn(self, addr, port, accountAddr, accountPort);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static void SafeDirectEnter(FnDirectEnterSet fn, void* self, unsigned slot)
+{
+    if (!fn || !self || IsBadCodePtr((FARPROC)fn))
+        return;
+    __try
+    {
+        fn(self, slot);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
+static int SafeEnter(FnConnectGameServer enter, void* net, unsigned slot)
+{
+    if (!enter || !net || IsBadCodePtr((FARPROC)enter))
+        return 0;
+    __try
+    {
+        enter(net, slot);
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int SafeSelectPacket(FnSelectCharacter fn, void* net, unsigned slot)
+{
+    if (!fn || !net || IsBadCodePtr((FARPROC)fn))
+        return 0;
+    __try
+    {
+        fn(net, slot);
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int StartGameFlag(void* net)
+{
+    if (!net)
+        return 0;
+    __try
+    {
+        return *((unsigned*)((BYTE*)net + kStartGameFlagDisp)) != 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static unsigned DirectEnterSlot(void* net, unsigned fallback)
+{
+    if (!net)
+        return fallback;
+    __try
+    {
+        const unsigned slot = *(unsigned*)((BYTE*)net + kDirectEnterSlotDisp);
+        return slot <= 4 ? slot : fallback;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return fallback;
+    }
+}
+
+static int SafeStartGame(void* net)
+{
+    if (!net)
+        return 0;
+    FnPhase fn = (FnPhase)(g_base + kStartGameRva);
+    if (fn && !IsBadCodePtr((FARPROC)fn))
+    {
+        __try
+        {
+            fn(net);
+            return 1;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+    __try
+    {
+        *((unsigned*)((BYTE*)net + kStartGameFlagDisp)) = 1;
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int SafeNotifyGamePhase(void* net)
+{
+    if (!net)
+        return 0;
+    FnNotifyGamePhase fn = (FnNotifyGamePhase)(g_base + kNotifyGamePhaseRva);
+    if (!fn || IsBadCodePtr((FARPROC)fn))
+        return 0;
+    __try
+    {
+        return fn(net) ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static void* PythonHandler(void* net)
+{
+    if (!net)
+        return nullptr;
+    __try
+    {
+        void* handler = *(void**)((char*)net + kPythonHandlerDisp);
+        return UserPtr(handler) ? handler : nullptr;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
+static HMODULE PythonDll()
+{
+    HMODULE py = GetModuleHandleA("python27.dll");
+    if (!py)
+        py = GetModuleHandleA("python26.dll");
+    if (!py)
+        py = GetModuleHandleA("python22.dll");
+    return py;
+}
+
+static int SafePySetInt(void* obj, const char* name, long value)
+{
+    HMODULE py = PythonDll();
+    if (!obj || !py || !name)
+        return 0;
+    FnPyIntFromLong fromLong = (FnPyIntFromLong)GetProcAddress(py, "PyInt_FromLong");
+    FnPySetAttrString setAttr = (FnPySetAttrString)GetProcAddress(py, "PyObject_SetAttrString");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!fromLong || !setAttr)
+        return 0;
+    __try
+    {
+        void* boxed = fromLong(value);
+        if (!boxed)
+            return 0;
+        const int ok = setAttr(obj, name, boxed) == 0;
+        if (errClear)
+            errClear();
+        return ok ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int SafePySetString(void* obj, const char* name, const char* value)
+{
+    HMODULE py = PythonDll();
+    if (!obj || !py || !name || !value)
+        return 0;
+    FnPyStringFromString fromString = (FnPyStringFromString)GetProcAddress(py, "PyString_FromString");
+    if (!fromString)
+        fromString = (FnPyStringFromString)GetProcAddress(py, "PyUnicode_FromString");
+    FnPySetAttrString setAttr = (FnPySetAttrString)GetProcAddress(py, "PyObject_SetAttrString");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!fromString || !setAttr)
+        return 0;
+    __try
+    {
+        void* boxed = fromString(value);
+        if (!boxed)
+            return 0;
+        const int ok = setAttr(obj, name, boxed) == 0;
+        if (errClear)
+            errClear();
+        return ok ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int SafePyCallMethod(void* obj, const char* name, const char* format, int arg)
+{
+    HMODULE py = PythonDll();
+    if (!obj || !py || !name)
+        return 0;
+    FnPyCallMethod call = (FnPyCallMethod)GetProcAddress(py, "PyObject_CallMethod");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!call)
+        return 0;
+    char method[64];
+    char fmt[8];
+    lstrcpynA(method, name, 64);
+    if (format && format[0])
+        lstrcpynA(fmt, format, 8);
+    else
+        fmt[0] = 0;
+    __try
+    {
+        void* result = fmt[0] ? call(obj, method, fmt, arg) : call(obj, method, NULL);
+        if (errClear)
+            errClear();
+        return result ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int SafePyAutoSelect(void* net, unsigned slot)
+{
+    void* handler = PythonHandler(net);
+    if (!handler)
+        return 0;
+    SafePySetInt(handler, "isAutoSelect", 1);
+    SafePySetInt(handler, "isAutoLogin", 0);
+    return SafePyCallMethod(handler, "SetCharacterSlot", "i", (int)slot);
+}
+
+static int SafePyPrepareLogin(const Command& cmd)
+{
+    void* handler = PythonHandler(NetStream());
+    if (!handler)
+        return 0;
+    const char* authHost = cmd.authHost.empty() ? cmd.host.c_str() : cmd.authHost.c_str();
+    const int authPort = cmd.authPort > 0 ? cmd.authPort : cmd.port;
+    SafePySetString(handler, "addr", cmd.host.c_str());
+    SafePySetInt(handler, "port", cmd.port);
+    SafePySetString(handler, "account_addr", authHost);
+    SafePySetInt(handler, "account_port", authPort);
+    SafePySetString(handler, "id", cmd.account.c_str());
+    SafePySetString(handler, "pwd", cmd.password.c_str());
+    return SafePyAutoSelect(NetStream(), (unsigned)cmd.slot);
+}
+
+static int SafePyClickStart(void* net)
+{
+    void* handler = PythonHandler(net);
+    if (!handler)
+        return 0;
+    HMODULE py = PythonDll();
+    FnPyGetAttrString getAttr = py ? (FnPyGetAttrString)GetProcAddress(py, "PyObject_GetAttrString") : nullptr;
+    FnPyErrClear errClear = py ? (FnPyErrClear)GetProcAddress(py, "PyErr_Clear") : nullptr;
+    if (!getAttr)
+        return 0;
+    void* wnd = nullptr;
+    __try
+    {
+        wnd = getAttr(handler, "curPhaseWindow");
+        if (errClear)
+            errClear();
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        wnd = nullptr;
+    }
+    if (!wnd)
+        return 0;
+    return SafePyCallMethod(wnd, "StartGame", "", 0);
+}
+
+static void* SafePyGetAttr(void* obj, const char* name)
+{
+    HMODULE py = PythonDll();
+    if (!obj || !py || !name)
+        return nullptr;
+    FnPyGetAttrString getAttr = (FnPyGetAttrString)GetProcAddress(py, "PyObject_GetAttrString");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!getAttr)
+        return nullptr;
+    __try
+    {
+        void* value = getAttr(obj, name);
+        if (!value && errClear)
+            errClear();
+        return value;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
+static int SafePyTypeName(void* obj, char* out, int cap)
+{
+    HMODULE py = PythonDll();
+    if (!obj || !out || cap <= 1 || !py)
+        return 0;
+    out[0] = 0;
+    FnPyGetAttrString getAttr = (FnPyGetAttrString)GetProcAddress(py, "PyObject_GetAttrString");
+    FnPyStringAsString asString = (FnPyStringAsString)GetProcAddress(py, "PyString_AsString");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!getAttr || !asString)
+        return 0;
+    __try
+    {
+        void* cls = getAttr(obj, "__class__");
+        if (!cls)
+            return 0;
+        void* name = getAttr(cls, "__name__");
+        if (!name)
+            return 0;
+        const char* text = asString(name);
+        if (!text)
+            return 0;
+        lstrcpynA(out, text, cap);
+        return out[0] ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        if (errClear)
+            errClear();
+        return 0;
+    }
+}
+
+static int WindowClassIs(const char* name)
+{
+    if (!name || !name[0])
+        return 0;
+    char cls[40];
+    cls[0] = 0;
+    void* handler = PythonHandler(NetStream());
+    void* wnd = handler ? SafePyGetAttr(handler, "curPhaseWindow") : nullptr;
+    if (!wnd || !SafePyTypeName(wnd, cls, 40) || !cls[0])
+        return 0;
+    return strcmp(cls, name) == 0 ? 1 : 0;
+}
+
+static int IsPythonGameWindow()
+{
+    return WindowClassIs("GameWindow");
+}
+
+static int LoadingStepCount()
+{
+    if (!WindowClassIs("LoadingWindow"))
+        return -1;
+    void* handler = PythonHandler(NetStream());
+    if (!handler)
+        return -1;
+    void* wnd = SafePyGetAttr(handler, "curPhaseWindow");
+    if (!wnd)
+        return -1;
+    void* steps = SafePyGetAttr(wnd, "loadStepList");
+    if (!steps)
+        return -1;
+    HMODULE py = PythonDll();
+    typedef int (__cdecl* FnPyListSize)(void*);
+    FnPyListSize size = py ? (FnPyListSize)GetProcAddress(py, "PyList_Size") : nullptr;
+    if (!size)
+        size = py ? (FnPyListSize)GetProcAddress(py, "PyObject_Size") : nullptr;
+    FnPyErrClear errClear = py ? (FnPyErrClear)GetProcAddress(py, "PyErr_Clear") : nullptr;
+    if (!size)
+        return -1;
+    __try
+    {
+        const int n = size(steps);
+        if (n < 0 && errClear)
+            errClear();
+        return n;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return -1;
+    }
+}
+
+static int SafePyRun(const char* code)
+{
+    HMODULE py = PythonDll();
+    if (!py || !code)
+        return 0;
+    typedef int (__cdecl* FnPyRun)(const char*);
+    FnPyRun run = (FnPyRun)GetProcAddress(py, "PyRun_SimpleString");
+    FnPyGilEnsure gilEnsure = (FnPyGilEnsure)GetProcAddress(py, "PyGILState_Ensure");
+    FnPyGilRelease gilRelease = (FnPyGilRelease)GetProcAddress(py, "PyGILState_Release");
+    if (!run)
+        return 0;
+    int gil = 0;
+    int haveGil = 0;
+    if (gilEnsure && gilRelease)
+    {
+        __try
+        {
+            gil = gilEnsure();
+            haveGil = 1;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            haveGil = 0;
+        }
+    }
+    int ok = 0;
+    __try
+    {
+        ok = run(code) == 0 ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok = 0;
+    }
+    if (haveGil)
+        gilRelease(gil);
+    return ok;
+}
+
+static int SafePyEnsureServerInfo()
+{
+    char code[1600];
+    _snprintf_s(
+        code,
+        _TRUNCATE,
+        "import serverInfo, net\n"
+        "try:\n"
+        " r=serverInfo.REGION_DICT[0]\n"
+        " n=(net.GetServerInfo() or '').split(',')[0].strip()\n"
+        " ok=0\n"
+        " for k in r.keys():\n"
+        "  if r[k]['name']==n:\n"
+        "   ok=1\n"
+        "   break\n"
+        " if not ok:\n"
+        "  k=sorted(r.keys())[0]\n"
+        "  s=r[k]\n"
+        "  c=s['channel']\n"
+        "  i=sorted(c.keys())[0]\n"
+        "  p=%d\n"
+        "  for ck in c.keys():\n"
+        "   if int(c[ck].get('tcp_port',0))==p:\n"
+        "    i=ck\n"
+        "    break\n"
+        "  net.SetServerInfo('%%s, %%s' %% (s['name'], c[i]['name']))\n"
+        "except:\n"
+        " pass\n",
+        g_loginPort);
+    return SafePyRun(code);
+}
+
+static int SafePyAskGamePhase(void* net)
+{
+    void* handler = PythonHandler(net);
+    if (!handler)
+        return 0;
+    if (IsPythonGameWindow() && g_loadFinished)
+    {
+        g_openedGameWindow = 1;
+        return 1;
+    }
+
+    const int called = SafePyCallMethod(handler, "SetGamePhase", "", 0);
+    const int opened = IsPythonGameWindow();
+    if (opened && g_loadFinished)
+        g_openedGameWindow = 1;
+    return called && opened;
+}
+
+static bool ExecuteSession(const Command& cmd)
+{
+    if (cmd.type != "get_phase" && cmd.type != "get_session" && cmd.type != "skip_intro" &&
+        cmd.type != "login" && cmd.type != "select_character" && cmd.type != "enter_game")
+        return false;
+
+    if (cmd.type == "get_phase" || cmd.type == "get_session")
+    {
+        g_lastOk = !g_sessionPhase.empty() || !g_sessionAccount.empty();
+        g_lastReason = !g_sessionPhase.empty()
+            ? g_sessionPhase
+            : (g_sessionAccount.empty() ? "phase unread" : "account captured");
+        return true;
+    }
+
+    if (cmd.type == "skip_intro")
+    {
+        if (IsPastIntro())
+        {
+            g_lastOk = true;
+            g_lastReason = g_sessionPhase;
+            return true;
+        }
+        void* net = NetStream();
+        if (!net)
+        {
+            g_lastReason = "network stream is null";
+            return true;
+        }
+        if (g_sessionPhase.empty())
+        {
+            g_lastReason = "intro not ready";
+            return true;
+        }
+        if (!g_skippedIntro)
+        {
+            if (!SafePhase((FnPhase)(g_base + kSetLoginPhaseRva), net))
+            {
+                g_lastReason = "SetLoginPhase trapped";
+                return true;
+            }
+            g_skippedIntro = 1;
+        }
+        RefreshSession();
+        g_lastOk = IsPastIntro();
+        g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "skip_intro";
+        return true;
+    }
+
+    if (cmd.type == "login")
+    {
+        if (g_loginSent || PhaseHas("Select") || PhaseHas("Load") || PhaseHas("Game"))
+        {
+            RefreshSession();
+            g_lastOk = true;
+            g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "login already sent";
+            return true;
+        }
+
+        g_openedGameWindow = 0;
+        g_sawLoadSteps = 0;
+        g_loadFinished = 0;
+        g_loadNearEnd = 0;
+        g_maxLoadSteps = 0;
+        g_selectSent = 0;
+        void* net = NetStream();
+        void* account = AccountConnector();
+        if (!net)
+        {
+            g_lastReason = "network stream is null";
+            return true;
+        }
+        if (!account)
+        {
+            g_lastReason = "account connector is null";
+            return true;
+        }
+        if (cmd.account.empty() || cmd.password.empty() || cmd.host.empty() || cmd.port <= 0)
+        {
+            g_lastReason = "login needs account, password, host, port";
+            return true;
+        }
+
+        FnSetLoginInfo setNet = (FnSetLoginInfo)(g_base + kSetLoginInfoRva);
+        FnSetLoginInfo setAcc = (FnSetLoginInfo)(g_base + kAccountSetLoginInfoRva);
+        FnAccountConnect connect = (FnAccountConnect)(g_base + kAccountConnectRva);
+        if (IsBadCodePtr((FARPROC)setNet) || IsBadCodePtr((FARPROC)setAcc) ||
+            IsBadCodePtr((FARPROC)connect))
+        {
+            g_lastReason = "login natives missing";
+            return true;
+        }
+
+        CaptureLogin(cmd.account.c_str(), cmd.password.c_str());
+        g_loginPort = cmd.port;
+        if (!SafeSetLogin(g_setLoginInfo ? g_setLoginInfo : setNet, net, cmd.account.c_str(), cmd.password.c_str()))
+        {
+            g_lastReason = "SetLoginInfo trapped";
+            return true;
+        }
+        SafeSetLogin(setAcc, account, cmd.account.c_str(), cmd.password.c_str());
+        SafePyPrepareLogin(cmd);
+        SafePyEnsureServerInfo();
+
+        const char* authHost = cmd.authHost.empty() ? cmd.host.c_str() : cmd.authHost.c_str();
+        const int authPort = cmd.authPort > 0 ? cmd.authPort : cmd.port;
+        if (!SafeConnect(connect, account, cmd.host.c_str(), cmd.port, authHost, authPort))
+        {
+            g_lastReason = "ConnectToAccountServer failed";
+            return true;
+        }
+        g_loginSent = 1;
+        RefreshSession();
+        g_lastOk = true;
+        g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "login sent";
+        return true;
+    }
+
+    if (cmd.type == "enter_game")
+    {
+        void* net = NetStream();
+        if (!net)
+        {
+            g_lastReason = "network stream is null";
+            return true;
+        }
+        if (g_inWorld)
+        {
+            g_lastOk = true;
+            g_lastReason = g_sessionPhase.empty() ? "Game" : g_sessionPhase;
+            return true;
+        }
+        if (!g_loadFinished)
+        {
+            RefreshSession();
+            const int steps = LoadingStepCount();
+            g_lastOk = true;
+            if (steps > 0)
+                g_lastReason = "still loading";
+            else if (!g_sawLoadSteps)
+                g_lastReason = "waiting for LoadData";
+            else
+                g_lastReason = "waiting for load steps";
+            return true;
+        }
+        if (IsPythonGameWindow())
+        {
+            g_openedGameWindow = 1;
+            g_inWorld = 1;
+            g_lastOk = true;
+            g_lastReason = g_sessionPhase.empty() ? "Game" : g_sessionPhase;
+            return true;
+        }
+        if (!SafePyAskGamePhase(net))
+        {
+            g_lastReason = "waiting for GameWindow";
+            RefreshSession();
+            g_lastOk = true;
+            return true;
+        }
+        RefreshSession();
+        g_lastOk = g_inWorld != 0;
+        g_lastReason = g_inWorld ? (g_sessionPhase.empty() ? "Game" : g_sessionPhase) : "GameWindow did not open";
+        return true;
+    }
+
+    void* net = NetStream();
+    if (!net)
+    {
+        g_lastReason = "network stream is null";
+        return true;
+    }
+    if (g_inWorld || g_selectSent || PhaseHas("Load") || PhaseHas("Game"))
+    {
+        g_selectSent = 1;
+        g_lastOk = true;
+        g_lastReason = g_sessionPhase.empty() ? "already entering" : g_sessionPhase;
+        return true;
+    }
+    SafePyAutoSelect(net, (unsigned)cmd.slot);
+    if (!WindowClassIs("SelectCharacterWindow"))
+    {
+        RefreshSession();
+        g_lastOk = true;
+        g_lastReason = "waiting for SelectCharacterWindow";
+        return true;
+    }
+    if (!SafePyClickStart(net))
+    {
+        RefreshSession();
+        g_lastOk = true;
+        g_lastReason = "waiting for auto DirectEnter";
+        return true;
+    }
+    g_selectSent = 1;
+    RefreshSession();
+    g_lastOk = true;
+    g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "select sent";
+    return true;
+}
+
 static bool CallSendAttackPacket(unsigned vid)
 {
     void* net = NetStream();
@@ -1357,6 +2270,9 @@ static void Execute(const Command& cmd)
     g_lastOk = false;
     g_lastReason = "not executed";
     g_lastVid = 0;
+    if (cmd.type == "get_phase" || cmd.type == "get_session" || cmd.type == "skip_intro" ||
+        cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game")
+        RefreshSession();
 
     if (cmd.type == "loot_loop")
     {
@@ -1388,6 +2304,9 @@ static void Execute(const Command& cmd)
         CaptureAtlas();
         return;
     }
+
+    if (ExecuteSession(cmd))
+        return;
 
     void* player = Player();
     if (!player)
@@ -1585,6 +2504,21 @@ static BOOL WINAPI HookGetW(LPMSG msg, HWND hwnd, UINT min, UINT max)
     return g_getW(msg, hwnd, min, max);
 }
 
+static void CaptureLogin(const char* id, const char* pwd)
+{
+    if (id && id[0])
+        g_capturedAccount = id;
+    if (pwd && pwd[0])
+        g_capturedPassword = pwd;
+}
+
+static void __fastcall HookSetLoginInfo(void* self, void*, const char* id, const char* pwd)
+{
+    CaptureLogin(id, pwd);
+    if (g_setLoginInfo)
+        g_setLoginInfo(self, id, pwd);
+}
+
 static void __fastcall HookUpdate(void* self)
 {
     g_loopTid = GetCurrentThreadId();
@@ -1626,6 +2560,10 @@ static unsigned StealLen(const BYTE* p)
         return 6;
     if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x5D)
         return 5;
+    if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x56 && p[4] == 0x8B && p[5] == 0x75)
+        return 7;
+    if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x56 && p[4] == 0x8B && p[5] == 0xF1)
+        return 7;
     if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x56)
         return 5;
     if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x53)
@@ -1728,11 +2666,40 @@ static void InstallLoopHooks(HMODULE client)
         ++g_iatHooks;
     if (client && Trampoline((BYTE*)client + kPlayerUpdateRva, (void*)HookUpdate, (void**)&g_playerUpdate))
         ++g_iatHooks;
+    if (client && Trampoline((BYTE*)client + kSetLoginInfoRva, (void*)HookSetLoginInfo, (void**)&g_setLoginInfo))
+        ++g_iatHooks;
 }
 
 static bool JsonSpace(char c)
 {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static void JsonEscape(const char* in, char* out, int cap)
+{
+    if (!out || cap < 2)
+        return;
+    int w = 0;
+    if (!in)
+        in = "";
+    for (int i = 0; in[i] && w + 2 < cap; ++i)
+    {
+        const char c = in[i];
+        if (c == '\\' || c == '"')
+        {
+            if (w + 3 >= cap)
+                break;
+            out[w++] = '\\';
+            out[w++] = c;
+        }
+        else if ((unsigned char)c < 32)
+        {
+            out[w++] = ' ';
+        }
+        else
+            out[w++] = c;
+    }
+    out[w] = 0;
 }
 
 static std::string JsonString(const std::string& src, const char* key)
@@ -1809,12 +2776,17 @@ static bool ReadFrame(std::string* json)
 
 static void LoadConfig()
 {
+    char dir[MAX_PATH];
+    GetTempPathA(MAX_PATH, dir);
     char path[MAX_PATH];
-    GetTempPathA(MAX_PATH, path);
-    strcat_s(path, "FarmBotAction.cfg");
+    _snprintf_s(path, _TRUNCATE, "%sFarmBotAction_%lu.cfg", dir, GetCurrentProcessId());
     FILE* f = nullptr;
     if (fopen_s(&f, path, "r") != 0 || !f)
-        return;
+    {
+        _snprintf_s(path, _TRUNCATE, "%sFarmBotAction.cfg", dir);
+        if (fopen_s(&f, path, "r") != 0 || !f)
+            return;
+    }
     char line[512];
     while (fgets(line, sizeof(line), f))
     {
@@ -1845,10 +2817,27 @@ static HMODULE FindClient()
     return GetModuleHandleA(nullptr);
 }
 
+static void ClosePipe()
+{
+    if (!g_pipe || g_pipe == INVALID_HANDLE_VALUE)
+        return;
+    FlushFileBuffers(g_pipe);
+    DisconnectNamedPipe(g_pipe);
+    CloseHandle(g_pipe);
+    g_pipe = INVALID_HANDLE_VALUE;
+}
+
 static void Serve()
 {
     char path[256];
     _snprintf_s(path, _TRUNCATE, "\\\\.\\pipe\\%s", g_pipeName.c_str());
+    char readyName[256];
+    _snprintf_s(readyName, _TRUNCATE, "Local\\FarmBotReady_%s", g_pipeName.c_str());
+    HANDLE ready = CreateEventA(nullptr, TRUE, FALSE, readyName);
+
+    for (;;)
+    {
+    ClosePipe();
     g_pipe = CreateNamedPipeA(
         path,
         PIPE_ACCESS_DUPLEX,
@@ -1859,24 +2848,23 @@ static void Serve()
         0,
         nullptr);
     if (g_pipe == INVALID_HANDLE_VALUE)
-        return;
-
-    char readyName[256];
-    _snprintf_s(readyName, _TRUNCATE, "Local\\FarmBotReady_%s", g_pipeName.c_str());
-    HANDLE ready = CreateEventA(nullptr, TRUE, FALSE, readyName);
+    {
+        Sleep(200);
+        continue;
+    }
     if (ready)
         SetEvent(ready);
 
     if (!ConnectNamedPipe(g_pipe, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED)
-        return;
+        continue;
 
     std::string json;
     if (!ReadFrame(&json))
-        return;
+        continue;
     if (JsonString(json, "type") != "auth" || !TokensEqual(JsonString(json, "token"), g_token))
     {
         WriteFrame("{\"ok\":false,\"type\":\"auth\",\"reason\":\"unauthorized\",\"targetVid\":0,\"convention\":\"vtable-thiscall\"}");
-        return;
+        continue;
     }
     char auth[256];
     _snprintf_s(auth, _TRUNCATE,
@@ -1894,6 +2882,13 @@ static void Serve()
         cmd.x = JsonFloat(json, "x");
         cmd.y = JsonFloat(json, "y");
         ParseHits(&cmd, JsonString(json, "hits"));
+        cmd.account = JsonString(json, "account");
+        cmd.password = JsonString(json, "password");
+        cmd.host = JsonString(json, "host");
+        cmd.authHost = JsonString(json, "authHost");
+        cmd.port = (int)JsonU32(json, "port");
+        cmd.authPort = (int)JsonU32(json, "authPort");
+        cmd.slot = (int)JsonU32(json, "slot");
         if (!TokensEqual(JsonString(json, "token"), g_token))
         {
             WriteFrame("{\"ok\":false,\"type\":\"error\",\"reason\":\"unauthorized\",\"targetVid\":0,\"convention\":\"loop-iat\"}");
@@ -1908,7 +2903,8 @@ static void Serve()
         g_queue.push(cmd);
         LeaveCriticalSection(&g_lock);
 
-        const DWORD wait = WaitForSingleObject(g_done, 2000);
+        const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
+        const DWORD wait = WaitForSingleObject(g_done, waitMs);
         if (wait != WAIT_OBJECT_0 && (g_lastReason.empty() || g_lastReason == "not executed"))
         {
             char why[192];
@@ -1922,14 +2918,24 @@ static void Serve()
             g_lastOk = false;
         }
 
-        char reply[768];
+        char reason[192];
+        char phase[64];
+        char character[64];
+        char account[64];
+        char password[80];
+        JsonEscape(g_lastReason.c_str(), reason, 192);
+        JsonEscape(g_sessionPhase.c_str(), phase, 64);
+        JsonEscape(g_sessionCharacter.c_str(), character, 64);
+        JsonEscape(g_sessionAccount.c_str(), account, 64);
+        JsonEscape(g_capturedPassword.c_str(), password, 80);
+        char reply[1536];
         _snprintf_s(
             reply,
             _TRUNCATE,
-            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d,\"atlasWidth\":%u,\"atlasHeight\":%u,\"worldW\":%.1f,\"worldH\":%.1f}",
+            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d,\"atlasWidth\":%u,\"atlasHeight\":%u,\"worldW\":%.1f,\"worldH\":%.1f,\"phase\":\"%s\",\"character\":\"%s\",\"account\":\"%s\",\"password\":\"%s\",\"characterSlot\":%d,\"startGame\":%s,\"inWorld\":%s}",
             g_lastOk ? "true" : "false",
             cmd.type.c_str(),
-            g_lastReason.c_str(),
+            reason,
             g_lastVid,
             g_hudLevel,
             g_hudExp,
@@ -1941,9 +2947,17 @@ static void Serve()
             g_atlasWidth,
             g_atlasHeight,
             g_atlasWorldW,
-            g_atlasWorldH);
+            g_atlasWorldH,
+            phase,
+            character,
+            account,
+            password,
+            g_sessionCharacterSlot,
+            g_startGame ? "true" : "false",
+            g_inWorld ? "true" : "false");
         if (!WriteFrame(reply))
             break;
+    }
     }
 }
 

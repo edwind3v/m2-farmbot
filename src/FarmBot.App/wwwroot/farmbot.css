@@ -213,3 +213,77 @@ tr.tgt td { color: var(--accent-2); }
     .dash, .home-grid, .field-grid { grid-template-columns: 1fr; }
     .dash .wide { grid-column: auto; }
 }
+
+.launcher {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background:
+        radial-gradient(900px 420px at 0% 0%, var(--glow), transparent 55%),
+        var(--ink);
+}
+
+.launch-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+}
+
+.launch-body {
+    padding: 16px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.launch-status {
+    color: var(--muted);
+    font-size: 12px;
+    margin: 0 0 4px;
+}
+
+.slot {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+
+.slot.on { border-color: var(--ok-border); }
+
+.slot-main {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: baseline;
+}
+
+.slot-main b { font-size: 13px; }
+.slot-main span {
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.slot-cmd {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.slot-edit {
+    padding: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    display: grid;
+    gap: 8px;
+}

@@ -7,11 +7,12 @@
 
 // x86 helper: load FarmBotAction.dll into the user's own 32-bit Metin2 process.
 
-static void WriteConfig(const std::string& pipe, const std::string& token)
+static void WriteConfig(const std::string& pipe, const std::string& token, DWORD pid)
 {
+    char dir[MAX_PATH];
+    GetTempPathA(MAX_PATH, dir);
     char path[MAX_PATH];
-    GetTempPathA(MAX_PATH, path);
-    strcat_s(path, "FarmBotAction.cfg");
+    _snprintf_s(path, _TRUNCATE, "%sFarmBotAction_%lu.cfg", dir, pid);
     FILE* f = nullptr;
     if (fopen_s(&f, path, "w") == 0 && f)
     {
@@ -127,8 +128,6 @@ int main(int argc, char** argv)
     if (!CopyFileA(fullDll, injectDll, FALSE))
         strcpy_s(injectDll, fullDll);
 
-    WriteConfig(pipe, token);
-
     if (mode == "launch")
     {
         STARTUPINFOA si = {};
@@ -147,6 +146,7 @@ int main(int argc, char** argv)
             return 4;
         }
         CloseHandle(pi.hThread);
+        WriteConfig(pipe, token, pi.dwProcessId);
         if (!WaitForWindow(pi.dwProcessId, 30000))
         {
             printf("client window did not appear; injecting anyway\n");
@@ -164,6 +164,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    WriteConfig(pipe, token, pid);
     HANDLE process = OpenProcess(kAccess, FALSE, pid);
     if (!process)
     {

@@ -16,6 +16,13 @@ public sealed class ActionRequest
     public float Y { get; set; }
     public bool Avoid { get; set; }
     public string Hits { get; set; } = "";
+    public string Account { get; set; } = "";
+    public string Password { get; set; } = "";
+    public string Host { get; set; } = "";
+    public int Port { get; set; }
+    public string AuthHost { get; set; } = "";
+    public int AuthPort { get; set; }
+    public int Slot { get; set; }
 }
 
 public sealed class ActionResponse
@@ -36,6 +43,13 @@ public sealed class ActionResponse
     public int AtlasHeight { get; set; }
     public float WorldW { get; set; }
     public float WorldH { get; set; }
+    public string Phase { get; set; } = "";
+    public string Character { get; set; } = "";
+    public string Account { get; set; } = "";
+    public string Password { get; set; } = "";
+    public int CharacterSlot { get; set; } = -1;
+    public bool StartGame { get; set; }
+    public bool InWorld { get; set; }
 }
 
 public static class ActionProtocol
@@ -54,6 +68,12 @@ public static class ActionProtocol
     public const string LootLoop = "loot_loop";
     public const string Move = "move";
     public const string GetAtlas = "get_atlas";
+    public const string GetPhase = "get_phase";
+    public const string GetSession = "get_session";
+    public const string SkipIntro = "skip_intro";
+    public const string Login = "login";
+    public const string SelectCharacter = "select_character";
+    public const string EnterGame = "enter_game";
     public const int Version = 1;
 
     public static byte[] Encode(object value) => FrameEncode(JsonSerializer.SerializeToUtf8Bytes(value, JsonDefaults.Instance));

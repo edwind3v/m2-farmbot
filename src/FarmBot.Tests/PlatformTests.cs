@@ -10,6 +10,14 @@ namespace FarmBot.Tests;
 public class PlatformTests
 {
     [Fact]
+    public void AttachByPidFailsClosedWhenTheProcessIsMissing()
+    {
+        Assert.False(FarmBot.Platform.Client.ProcessMemory.TryAttach(int.MaxValue - 7, out var memory, out var status));
+        Assert.Null(memory);
+        Assert.Contains("not running", status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void MapsAttackAndSkillKeys()
     {
         Assert.Equal(0x20, VirtualKeys.FromName("space"));

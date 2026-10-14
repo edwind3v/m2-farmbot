@@ -1,0 +1,89 @@
+@inject LauncherShell Shell
+@inject ThemeService Themes
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="launcher">
+    <header class="launch-top">
+        <div class="brand">
+            <b>FarmBot</b>
+            <span>launcher</span>
+        </div>
+        <button class="btn btn-save" @onclick="Shell.AddSlot">+ New slot</button>
+    </header>
+
+    <div class="launch-body">
+        <div class="field-row">
+            <label>Client</label>
+            <input @bind="Shell.ClientPath" />
+        </div>
+        <p class="launch-status">@Shell.Status</p>
+
+        @foreach (var slot in Shell.State.Slots)
+        {
+            <div class="slot @(Shell.IsRunning(slot) ? "on" : null)">
+                <div class="slot-main">
+                    <b>@slot.DisplayName</b>
+                    <span>@Shell.SessionStatus(slot)</span>
+                </div>
+                <div class="slot-cmd">
+                    <button class="btn btn-ok" disabled="@Shell.IsRunning(slot)" @onclick="() => Shell.Play(slot)">Play</button>
+                    <button class="btn" @onclick="() => Shell.EditSlot(slot)">Edit</button>
+                    <button class="btn btn-danger" disabled="@(!Shell.IsRunning(slot))" @onclick="() => Shell.CloseSlot(slot)">X</button>
+                    <button class="btn btn-ghost" @onclick="() => Shell.DeleteSlot(slot)" title="Remove saved slot">Del</button>
+                </div>
+            </div>
+        }
+
+        @if (Shell.Editor is { } editor)
+        {
+            <div class="slot-edit">
+                <div class="eyebrow">Slot</div>
+                <div class="field-row"><label>Account</label><input @bind="editor.Account" /></div>
+                <div class="field-row"><label>Password</label><input type="password" @bind="Shell.EditorPassword" placeholder="unchanged if empty" /></div>
+                <div class="field-row">
+                    <label>Character slot</label>
+                    <select @bind="editor.CharacterSlot">
+                        @for (var i = 0; i < 5; i++)
+                        {
+                            <option value="@i">@(i + 1)</option>
+                        }
+                    </select>
+                </div>
+                <div class="field-row">
+                    <label>Channel</label>
+                    <select @bind="editor.ChannelIndex">
+                        @foreach (var channel in Shell.Channels)
+                        {
+                            <option value="@channel.Index">@channel.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="field-row"><label>Character name</label><input @bind="editor.CharacterName" placeholder="filled in-game" /></div>
+                <div class="slot-cmd">
+                    <button class="btn btn-save" @onclick="Shell.SaveEditor">Save</button>
+                    <button class="btn" @onclick="Shell.CancelEdit">Cancel</button>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private bool _themeApplied;
+
+    protected override void OnInitialized() => Shell.Changed += OnChanged;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_themeApplied)
+        {
+            _themeApplied = true;
+            await Themes.SelectAsync(Themes.CurrentId, JS);
+        }
+    }
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Shell.Changed -= OnChanged;
+}

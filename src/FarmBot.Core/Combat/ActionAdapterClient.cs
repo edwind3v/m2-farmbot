@@ -12,6 +12,7 @@ public sealed class ActionAdapterClient : IDisposable
     public string Token { get; }
     public bool Connected { get; private set; }
     public string Status { get; private set; } = "adapter not connected";
+    public ActionResponse LastResponse { get; private set; } = new();
 
     public ActionAdapterClient(string pipeName, string token)
     {
@@ -23,6 +24,9 @@ public sealed class ActionAdapterClient : IDisposable
     {
         lock (_gate)
         {
+            if (Connected && _pipe != null && _pipe.IsConnected)
+                return true;
+
             DisposePipe();
             try
             {
@@ -60,6 +64,38 @@ public sealed class ActionAdapterClient : IDisposable
     public ActionResponse SetTarget(uint vid, bool force = true) =>
         Submit(ActionProtocol.SetTarget, vid, force);
 
+    public ActionResponse GetPhase() =>
+        Submit(ActionProtocol.GetPhase, 0, true, updateStatus: false);
+
+    public ActionResponse GetSession() =>
+        Submit(ActionProtocol.GetSession, 0, true, updateStatus: false);
+
+    public ActionResponse SkipIntro() =>
+        Submit(ActionProtocol.SkipIntro, 0, true);
+
+    public ActionResponse Login(string account, string password, string host, int port, string authHost, int authPort, int slot) =>
+        Submit(new ActionRequest
+        {
+            Type = ActionProtocol.Login,
+            Account = account,
+            Password = password,
+            Host = host,
+            Port = port,
+            AuthHost = authHost,
+            AuthPort = authPort,
+            Slot = slot
+        });
+
+    public ActionResponse SelectCharacter(int slot) =>
+        Submit(new ActionRequest
+        {
+            Type = ActionProtocol.SelectCharacter,
+            Slot = slot
+        }, updateStatus: false);
+
+    public ActionResponse EnterGame(bool setGamePhase = false) =>
+        Submit(ActionProtocol.EnterGame, 0, setGamePhase, updateStatus: false);
+
     public ActionResponse Submit(string type, uint vid = 0, bool force = true) =>
         Submit(type, vid, force, updateStatus: true);
 
@@ -73,23 +109,33 @@ public sealed class ActionAdapterClient : IDisposable
             if (_pipe == null || !Connected)
                 return new ActionResponse { Reason = Status };
             request.Token = Token;
-            if (!Write(_pipe, request) ||
-                !ActionProtocol.TryReadFrame(_pipe, out var payload))
+            try
+            {
+                if (!Write(_pipe, request) ||
+                    !ActionProtocol.TryReadFrame(_pipe, out var payload))
+                {
+                    Connected = false;
+                    Status = "adapter I/O failed";
+                    return new ActionResponse { Reason = Status };
+                }
+
+                var response = ActionProtocol.DecodeResponse(payload);
+                LastResponse = response;
+                if (updateStatus)
+                {
+                    Status = response.Ok
+                        ? $"{request.Type} ok vid={response.TargetVid}"
+                        : request.Type + " rejected: " + response.Reason;
+                }
+
+                return response;
+            }
+            catch (Exception ex)
             {
                 Connected = false;
-                Status = "adapter I/O failed";
+                Status = "adapter I/O failed: " + ex.Message;
                 return new ActionResponse { Reason = Status };
             }
-
-            var response = ActionProtocol.DecodeResponse(payload);
-            if (updateStatus)
-            {
-                Status = response.Ok
-                    ? $"{request.Type} ok vid={response.TargetVid}"
-                    : request.Type + " rejected: " + response.Reason;
-            }
-
-            return response;
         }
     }
 
@@ -127,6 +173,8 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
             pipeName ?? ActionProtocol.DefaultPipeName,
             token ?? Environment.GetEnvironmentVariable("FARMBOT_ACTION_TOKEN") ?? "");
     }
+
+    public ActionResponse LastSession => _client.LastResponse;
 
     public bool Available
     {
@@ -252,7 +300,38 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }
     }
 
+    public ActionResponse GetPhase() => Session(_client.GetPhase);
+    public ActionResponse GetSession() => Session(_client.GetSession);
+    public ActionResponse SkipIntro() => Session(_client.SkipIntro);
+    public ActionResponse EnterGame(bool setGamePhase = false) => Session(() => _client.EnterGame(setGamePhase));
+
+    public ActionResponse Login(string account, string password, string host, int port, string authHost, int authPort, int slot)
+    {
+        Ensure();
+        if (!_client.Connected && !_client.TryConnect(500))
+            return new ActionResponse { Reason = Status };
+        return _client.Login(account, password, host, port, authHost, authPort, slot);
+    }
+
+    public ActionResponse SelectCharacter(int slot)
+    {
+        Ensure();
+        if (!_client.Connected && !_client.TryConnect(500))
+            return new ActionResponse { Reason = Status };
+        return _client.SelectCharacter(slot);
+    }
+
     public void Dispose() => _client.Dispose();
+
+    private ActionResponse Session(Func<ActionResponse> send)
+    {
+        Ensure();
+        if (!_client.Connected)
+            _client.TryConnect(500);
+        if (!_client.Connected)
+            return new ActionResponse { Reason = Status };
+        return send();
+    }
 
     private void Ensure()
     {

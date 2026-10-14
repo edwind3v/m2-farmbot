@@ -25,6 +25,7 @@ public sealed class FarmBotShell : IDisposable
     private IGameStateProvider? _provider;
     private ActionModuleHost? _actionHost;
     private AdapterActionSink? _actionSink;
+    private readonly bool _ownsCompanion;
     private bool _live = true;
     private PlayerHudPoints? _hud;
     private long _hudAt;
@@ -32,8 +33,17 @@ public sealed class FarmBotShell : IDisposable
     private string _atlasMap = "";
 
     public FarmBotShell()
+        : this(ConfigStore.DefaultPath(AppContext.BaseDirectory), 0, null, null)
     {
-        _configPath = ConfigStore.DefaultPath(AppContext.BaseDirectory);
+    }
+
+    public FarmBotShell(string configPath, int targetPid, ActionModuleHost? host, AdapterActionSink? sink)
+    {
+        _configPath = configPath;
+        BoundClientPid = targetPid;
+        _actionHost = host;
+        _actionSink = sink;
+        _ownsCompanion = host == null;
         _config = ConfigStore.LoadOrCreate(_configPath);
         _config.MaxFarmDistance = 8000;
         SyncTextsFromConfig();
@@ -42,7 +52,9 @@ public sealed class FarmBotShell : IDisposable
         WireRuntime();
         _runtime?.StartLoop();
         View = _runtime?.Capture() ?? new BotView(false, BotPhase.Stopped, "stopped", null, null);
-        _log.Info("FarmBot ready. Live mode: Attach or Launch the local client, then Start.");
+        _log.Info(targetPid > 0
+            ? $"FarmBot ready for client PID {targetPid}."
+            : "FarmBot ready. Live mode: Attach or Launch the local client, then Start.");
     }
 
     public event Action? Changed;
@@ -56,8 +68,10 @@ public sealed class FarmBotShell : IDisposable
     public BotView View { get; private set; }
     public IReadOnlyList<ClientProcessInfo> Clients { get; private set; } = Array.Empty<ClientProcessInfo>();
     public int SelectedClientPid { get; set; }
+    public int BoundClientPid { get; private set; }
     public bool IsLive => _live;
     public bool CompanionConnected => _actionSink?.Available == true;
+    public AdapterActionSink? ActionSink => _actionSink;
 
     public int ModeIndex
     {
@@ -354,6 +368,8 @@ public sealed class FarmBotShell : IDisposable
             disposable.Dispose();
         _pipe?.Dispose();
         _actionSink?.Dispose();
+        _actionSink = null;
+        _actionHost = null;
     }
 
     private BotView OverlayHud(BotView view)
@@ -420,6 +436,8 @@ public sealed class FarmBotShell : IDisposable
     {
         if (_actionSink?.Available == true)
             return true;
+        if (BoundClientPid > 0)
+            SelectedClientPid = BoundClientPid;
         RefreshClientList();
         if (Clients.Any(item => item.ProcessId == SelectedClientPid))
         {
@@ -438,9 +456,12 @@ public sealed class FarmBotShell : IDisposable
         if (_provider is IDisposable disposable)
             disposable.Dispose();
         _provider = null;
-        _actionSink?.Dispose();
-        _actionSink = null;
-        _actionHost = null;
+        if (_ownsCompanion)
+        {
+            _actionSink?.Dispose();
+            _actionSink = null;
+            _actionHost = null;
+        }
         _pipe?.Dispose();
         _pipe = null;
 
@@ -452,10 +473,12 @@ public sealed class FarmBotShell : IDisposable
             return;
         }
 
-        var live = new LiveGameStateProvider(_log);
+        var live = new LiveGameStateProvider(_log, BoundClientPid);
         _provider = live;
-        _actionHost = new ActionModuleHost();
-        _actionSink = new AdapterActionSink(_actionHost.PipeName, _actionHost.Token);
+        _actionHost ??= new ActionModuleHost();
+        _actionSink ??= new AdapterActionSink(_actionHost.PipeName, _actionHost.Token);
+        if (BoundClientPid > 0)
+            SelectedClientPid = BoundClientPid;
         RefreshClientList();
         var native = new NativeGameControl(_actionSink, _log);
         _runtime = new BotRuntime(

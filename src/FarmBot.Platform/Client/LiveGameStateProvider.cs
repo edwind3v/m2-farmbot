@@ -24,6 +24,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
     private const uint ItemPixelY = 0xC;
 
     private readonly IBotLog? _log;
+    private readonly int _targetPid;
     private readonly object _gate = new();
     private ProcessMemory? _memory;
     private ReleaseLayout? _layout;
@@ -40,9 +41,10 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
     private float _facingDeg;
     private bool _hasLastPos;
 
-    public LiveGameStateProvider(IBotLog? log = null)
+    public LiveGameStateProvider(IBotLog? log = null, int targetPid = 0)
     {
         _log = log;
+        _targetPid = targetPid;
     }
 
     public string Name => "Live client";
@@ -77,9 +79,19 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 
         if (_memory == null)
         {
-            if (!ProcessMemory.TryAttach(ProcessNames, out var memory, out var attachStatus) || memory == null)
+            var attached = _targetPid > 0
+                ? ProcessMemory.TryAttach(_targetPid, out var memory, out var attachStatus)
+                : ProcessMemory.TryAttach(ProcessNames, out memory, out attachStatus);
+            if (!attached || memory == null)
             {
                 Status = attachStatus;
+                return null;
+            }
+
+            if (_targetPid > 0 && memory.ProcessId != _targetPid)
+            {
+                memory.Dispose();
+                Status = $"live client PID {_targetPid} is not the attached process";
                 return null;
             }
 

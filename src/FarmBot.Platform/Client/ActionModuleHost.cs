@@ -11,8 +11,16 @@ public sealed record ClientProcessInfo(int ProcessId, string Name, string Path)
 public sealed class ActionModuleHost
 {
     public string Token { get; } = ActionProtocol.NewToken();
-    public string PipeName { get; } = "FarmBotAction";
+    public string PipeName { get; }
+    public int LastProcessId { get; private set; }
     public string Status { get; private set; } = "companion not loaded";
+
+    public ActionModuleHost(string? pipeName = null)
+    {
+        PipeName = string.IsNullOrWhiteSpace(pipeName)
+            ? LoaderOutput.UniquePipeName()
+            : pipeName.Trim();
+    }
 
     public static IReadOnlyList<ClientProcessInfo> ListClients()
     {
@@ -34,11 +42,19 @@ public sealed class ActionModuleHost
         return list;
     }
 
-    public bool TryAttach(int processId, out string status) =>
-        RunLoader($"--attach {processId}", out status, 20000);
-
-    public bool TryLaunch(string exePath, out string status)
+    public bool TryAttach(int processId, out string status)
     {
+        LastProcessId = processId;
+        return RunLoader($"--attach {processId}", out status, 20000);
+    }
+
+    public bool TryLaunch(string exePath, out string status) =>
+        TryLaunch(exePath, out status, out _);
+
+    public bool TryLaunch(string exePath, out string status, out int processId)
+    {
+        processId = 0;
+        LastProcessId = 0;
         if (!File.Exists(exePath))
         {
             status = Status = "client executable not found: " + exePath;
@@ -46,7 +62,16 @@ public sealed class ActionModuleHost
         }
 
         var workdir = Path.GetDirectoryName(exePath) ?? "";
-        return RunLoader($"--launch \"{exePath}\" --workdir \"{workdir}\"", out status, 45000);
+        if (!RunLoader($"--launch \"{exePath}\" --workdir \"{workdir}\"", out status, 45000))
+            return false;
+        if (!LoaderOutput.TryParseLaunchedPid(status, out processId))
+        {
+            status = Status = "client launched but FarmBotLoad did not report a PID: " + status;
+            return false;
+        }
+
+        LastProcessId = processId;
+        return true;
     }
 
     public bool WaitUntilListening(AdapterActionSink sink, int timeoutMs = 15000)

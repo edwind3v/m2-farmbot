@@ -8,36 +8,64 @@ public sealed class MainForm : Form
     private readonly FarmBotShell _shell;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 200 };
     private bool _hotkeysRegistered;
+    private bool _closing;
 
     public MainForm()
+        : this(new FarmBotShell(), "FarmBot")
     {
-        _shell = new FarmBotShell
-        {
-            PickClientPath = PickClientPath
-        };
+    }
 
-        Text = "FarmBot";
+    public MainForm(FarmBotShell shell, string title)
+    {
+        _shell = shell;
+        _shell.PickClientPath = PickClientPath;
+        Text = title;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(19, 21, 28);
         ForeColor = Color.FromArgb(236, 232, 223);
         ClientSize = new Size(1280, 820);
         MinimumSize = new Size(960, 620);
         HostBlazor();
-        _timer.Tick += (_, _) => _shell.Tick();
+        _timer.Tick += (_, _) =>
+        {
+            _shell.Tick();
+            var name = _shell.View.Snapshot?.Player?.Name;
+            if (!string.IsNullOrWhiteSpace(name) && !Text.Contains(name, StringComparison.Ordinal))
+                Text = $"FarmBot — {name}";
+        };
         _timer.Start();
+    }
+
+    public Action? SessionClosing { get; set; }
+
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        RegisterHotkeys();
+    }
+
+    protected override void OnDeactivate(EventArgs e)
+    {
+        UnregisterHotkeys();
+        base.OnDeactivate(e);
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        RegisterHotkeys();
+        if (Focused)
+            RegisterHotkeys();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (_closing)
+            return;
+        _closing = true;
         _timer.Stop();
         UnregisterHotkeys();
         _shell.PersistOnExit();
+        SessionClosing?.Invoke();
         _shell.Dispose();
         base.OnFormClosing(e);
     }

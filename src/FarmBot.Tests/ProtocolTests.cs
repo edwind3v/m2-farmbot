@@ -17,6 +17,106 @@ namespace FarmBot.Tests;
 public class ProtocolTests
 {
     [Fact]
+    public void EncodesLoginAndSelectCharacter()
+    {
+        var packet = ActionProtocol.Encode(new ActionRequest
+        {
+            Type = ActionProtocol.Login,
+            Token = "tok",
+            Account = "acc",
+            Password = "secret",
+            Host = "192.168.1.100",
+            Port = 30003,
+            AuthHost = "192.168.1.100",
+            AuthPort = 30001,
+            Slot = 2
+        });
+        var json = Encoding.UTF8.GetString(packet, 4, packet.Length - 4);
+        Assert.Contains("\"type\": \"login\"", json);
+        Assert.Contains("\"account\": \"acc\"", json);
+        Assert.Contains("\"password\": \"secret\"", json);
+        Assert.Contains("\"slot\": 2", json);
+
+        var select = ActionProtocol.Encode(new ActionRequest
+        {
+            Type = ActionProtocol.SelectCharacter,
+            Token = "tok",
+            Slot = 1
+        });
+        var selectJson = Encoding.UTF8.GetString(select, 4, select.Length - 4);
+        Assert.Contains("\"type\": \"select_character\"", selectJson);
+    }
+
+    [Fact]
+    public void DecodesGetSessionAccountWithoutUsingCharacterAsAccount()
+    {
+        var json = """{"ok":true,"type":"get_session","reason":"Game","phase":"Game","character":"Hero","account":"player1","password":"pw","characterSlot":2}""";
+        var response = ActionProtocol.DecodeResponse(Encoding.UTF8.GetBytes(json));
+        Assert.Equal("player1", response.Account);
+        Assert.Equal("Hero", response.Character);
+        Assert.Equal("pw", response.Password);
+        Assert.Equal(2, response.CharacterSlot);
+        Assert.NotEqual(response.Character, response.Account);
+    }
+
+    [Fact]
+    public void LoadingPhaseDoesNotRequestAnotherCharacterSelect()
+    {
+        Assert.False(QuickPlayOrchestrator.NeedsCharacterSelect("Loading"));
+        Assert.True(QuickPlayOrchestrator.IsEnteringWorld("Loading"));
+        Assert.True(QuickPlayOrchestrator.NeedsCharacterSelect("Select"));
+        Assert.False(QuickPlayOrchestrator.NeedsCharacterSelect("Handshake"));
+        Assert.False(QuickPlayOrchestrator.IsGame("Loading"));
+        Assert.True(QuickPlayOrchestrator.IsGame("Game"));
+        Assert.False(QuickPlayOrchestrator.IsGame("GameLoading"));
+        Assert.False(QuickPlayOrchestrator.IsEnteringWorld("Login"));
+        Assert.False(QuickPlayOrchestrator.IsGame("Login"));
+    }
+
+    [Fact]
+    public void StartGameNativeSetsTheLoadingFlagNotThePhaseString()
+    {
+        Assert.Equal(0x13CD40u, LoginNativeContract.StartGameRva);
+        Assert.Equal(0x8Cu, LoginNativeContract.StartGameFlagDisplacement);
+        Assert.Equal(0x1367F0u, LoginNativeContract.SetGamePhaseRva);
+        Assert.Equal(0x11C0C0u, LoginNativeContract.NotifyGamePhaseRva);
+        Assert.Equal(0x13CC00u, LoginNativeContract.SendEnterGamePacketRva);
+        Assert.Equal(0x160u, LoginNativeContract.PythonHandlerDisplacement);
+        Assert.Equal(0x8u, LoginNativeContract.GameWindowDisplacement);
+    }
+
+    [Fact]
+    public void DecodesStartGameFlagAndInWorld()
+    {
+        var json = """{"ok":true,"type":"get_phase","phase":"Loading","startGame":true,"inWorld":false}""";
+        var response = ActionProtocol.DecodeResponse(Encoding.UTF8.GetBytes(json));
+        Assert.Equal("Loading", response.Phase);
+        Assert.True(response.StartGame);
+        Assert.False(response.InWorld);
+
+        var world = ActionProtocol.DecodeResponse(Encoding.UTF8.GetBytes(
+            """{"ok":true,"type":"enter_game","phase":"Game","startGame":false,"inWorld":true}"""));
+        Assert.True(world.InWorld);
+        Assert.False(world.StartGame);
+
+        Assert.False(QuickPlayOrchestrator.IsGame("Loading"));
+        Assert.True(QuickPlayOrchestrator.IsEnteringWorld("Loading"));
+        Assert.False(QuickPlayOrchestrator.IsEnteringWorld("Login"));
+        Assert.False(QuickPlayOrchestrator.IsGame("Login"));
+    }
+
+    [Fact]
+    public void DecodesHudReplyAccountWithoutConfusingItForCharacter()
+    {
+        var json = """{"ok":true,"type":"get_hud","reason":"hud","character":"Hero","account":"loginid","password":"secret","characterSlot":0}""";
+        var response = ActionProtocol.DecodeResponse(Encoding.UTF8.GetBytes(json));
+        Assert.Equal("loginid", response.Account);
+        Assert.Equal("Hero", response.Character);
+        Assert.Equal("secret", response.Password);
+        Assert.Equal(0, response.CharacterSlot);
+    }
+
+    [Fact]
     public void EncodesShotWithVid()
     {
         var packet = ActionProtocol.Encode(new ActionRequest

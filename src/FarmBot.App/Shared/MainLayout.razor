@@ -20,21 +20,7 @@
             <option value="1">Live</option>
             <option value="0">Simulator</option>
         </select>
-        <select class="client" disabled="@(!Shell.IsLive)" @bind="Shell.SelectedClientPid">
-            @if (Shell.Clients.Count == 0)
-            {
-                <option value="0">no client</option>
-            }
-            else
-            {
-                @foreach (var client in Shell.Clients)
-                {
-                    <option value="@client.ProcessId">@client.ToString()</option>
-                }
-            }
-        </select>
-        <button class="btn" disabled="@(!Shell.IsLive)" @onclick="Shell.AttachSelectedClient">Attach</button>
-        <button class="btn" disabled="@(!Shell.IsLive)" @onclick="Shell.LaunchClient">Launch</button>
+        <span class="pill">PID @(Shell.BoundClientPid > 0 ? Shell.BoundClientPid : Shell.SelectedClientPid)</span>
         <div class="theme-wrap">
             <button type="button" class="theme-btn" @onclick="ToggleThemeMenu" title="Theme">
                 <span class="theme-swatch" aria-hidden="true">
