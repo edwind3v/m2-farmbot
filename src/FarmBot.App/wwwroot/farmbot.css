@@ -315,3 +315,105 @@ tr.tgt td { color: var(--accent-2); }
     display: grid;
     gap: 8px;
 }
+
+.pots {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.pot-group {
+    display: grid;
+    gap: 6px;
+}
+
+.pot-label {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.pot-empty {
+    font-size: 11px;
+    color: var(--muted);
+    align-self: center;
+}
+
+.pot-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.pot {
+    width: 44px;
+    min-height: 52px;
+    padding: 4px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: var(--panel-2);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+}
+
+.pot img {
+    width: 32px;
+    height: 32px;
+    image-rendering: pixelated;
+}
+
+.pot-face {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.pot.hp .pot-face { background: #c45c5c; }
+.pot.mp .pot-face { background: #4a7ec4; }
+.pot.green .pot-face { background: #4aa05c; }
+.pot.purple .pot-face { background: #8c5cb4; }
+.pot.on { border-color: var(--accent-border); box-shadow: 0 0 0 1px var(--accent-border); }
+.pot:disabled { opacity: 0.4; }
+
+.pot b {
+    font-size: 10px;
+    font-family: var(--mono);
+    font-weight: 500;
+}
+
+.pot-pct {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.pot-pct input {
+    width: 56px;
+    background: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 4px 6px;
+}
+
+.pot-remain {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
+}

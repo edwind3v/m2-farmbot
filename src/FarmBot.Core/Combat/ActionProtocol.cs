@@ -50,6 +50,9 @@ public sealed class ActionResponse
     public int CharacterSlot { get; set; } = -1;
     public bool StartGame { get; set; }
     public bool InWorld { get; set; }
+    public System.Text.Json.JsonElement Pots { get; set; }
+    public int GreenRemain { get; set; }
+    public int PurpleRemain { get; set; }
 }
 
 public static class ActionProtocol
@@ -74,6 +77,8 @@ public static class ActionProtocol
     public const string Login = "login";
     public const string SelectCharacter = "select_character";
     public const string EnterGame = "enter_game";
+    public const string GetPots = "get_pots";
+    public const string UseItem = "use_item";
     public const int Version = 1;
 
     public static byte[] Encode(object value) => FrameEncode(JsonSerializer.SerializeToUtf8Bytes(value, JsonDefaults.Instance));

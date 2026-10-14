@@ -10,4 +10,12 @@ public interface INativeActionSink
         hud = default;
         return false;
     }
+
+    bool TryReadPots(out PotionScan scan)
+    {
+        scan = new PotionScan();
+        return false;
+    }
+
+    bool TryUseItem(int slot) => false;
 }

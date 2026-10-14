@@ -38,6 +38,19 @@ public sealed record PlayerActionLayout(
     public uint SendAttackPacketRva { get; init; }
     public uint SendStatePacketRva { get; init; }
     public uint SendPickupPacketRva { get; init; }
+    public uint SendItemUsePacketRva { get; init; }
+    public uint GetItemIndexRva { get; init; }
+    public uint GetItemCountRva { get; init; }
+    public uint SelectItemRva { get; init; }
+    public uint GetItemNameRva { get; init; }
+    public uint GetItemTypeRva { get; init; }
+    public uint GetItemSubTypeRva { get; init; }
+    public uint GetAffectRva { get; init; }
+    public uint GetValueRva { get; init; }
+    public uint GetIconImageRva { get; init; }
+    public uint UseItemRva { get; init; }
+    public uint ItemManagerRva { get; init; }
+    public uint GetSelectedRva { get; init; }
     public uint ItemSingletonRva { get; init; }
     public uint GetCloseItemRva { get; init; }
     public uint SetAutoRva { get; init; }
@@ -141,6 +154,7 @@ public static class PlayerActionLayoutRecoverer
             sendAttack = RecoverLoginExport(pe, "SendBattleAttackPacket", evidence);
         var sendState = RecoverLoginExport(pe, "SendCharacterStatePacket", evidence);
         var sendPickup = RecoverLoginExport(pe, "SendItemPickUpPacket", evidence);
+        var sendUse = RecoverLoginExport(pe, "SendItemUsePacket", evidence);
         var singleton = PreferInImage(pe, getTarget.singleton, setTarget.singleton, attackKey.singleton, newAttack.singleton);
         if (singleton == 0)
             evidence.Add("CPythonPlayer singleton was not recovered from SetTarget/GetTargetVID wrappers.");
@@ -272,6 +286,32 @@ public static class PlayerActionLayoutRecoverer
 
         var mini = RecoverMiniMap(pe, evidence);
         evidence.Add($"MiniMap singleton=0x{mini.singleton:X} load=0x{mini.load:X} update=0x{mini.update:X} render=0x{mini.render:X}.");
+        var getItemIndex = RecoverItemMethod(pe, "GetItemIndex", singleton, evidence);
+        var getItemCount = RecoverItemMethod(pe, "GetItemCount", singleton, evidence);
+        var selectItem = RecoverItemMethod(pe, "SelectItem", 0, evidence);
+        var getItemName = RecoverItemMethod(pe, "GetItemName", selectItem.singleton, evidence);
+        var getItemType = RecoverItemMethod(pe, "GetItemType", selectItem.singleton, evidence);
+        var getItemSubType = RecoverItemMethod(pe, "GetItemSubType", selectItem.singleton, evidence);
+        var getAffect = RecoverItemMethod(pe, "GetAffect", selectItem.singleton, evidence);
+        var getValue = RecoverItemMethod(pe, "GetValue", selectItem.singleton, evidence);
+        var getIcon = RecoverItemMethod(pe, "GetIconImage", selectItem.singleton, evidence);
+        var useItem = RecoverItemMethod(pe, "UseItem", singleton, evidence);
+        var getNameOnItem = CallAfterMovEcxEax(pe, getItemName.wrapper);
+        var getTypeOnItem = CallAfterMovEcxEax(pe, getItemType.wrapper);
+        var getSubOnItem = CallAfterMovEcxEax(pe, getItemSubType.wrapper);
+        var getSelected = FirstE8AfterEcxLoad(pe, getItemType.wrapper != 0 ? getItemType.wrapper : getItemName.wrapper);
+        if (getSelected == 0)
+            getSelected = FirstCallAllowShort(pe, getItemType.wrapper != 0 ? getItemType.wrapper : getItemName.wrapper, selectItem.singleton == 0 ? 0 : pe.ImageBase + selectItem.singleton);
+        if (getNameOnItem != 0)
+            getItemName = (getNameOnItem, getItemName.singleton, getItemName.wrapper);
+        if (getTypeOnItem != 0)
+            getItemType = (getTypeOnItem, getItemType.singleton, getItemType.wrapper);
+        if (getSubOnItem != 0)
+            getItemSubType = (getSubOnItem, getItemSubType.singleton, getItemSubType.wrapper);
+        var getIconOnItem = CallAfterMovEcxEax(pe, getIcon.wrapper);
+        if (getIconOnItem != 0)
+            getIcon = (getIconOnItem, getIcon.singleton, getIcon.wrapper);
+        evidence.Add($"itemMgr=0x{selectItem.singleton:X} getSelected=0x{getSelected:X} getName=0x{getItemName.native:X} getType=0x{getItemType.native:X} getSub=0x{getItemSubType.native:X} getIcon=0x{getIcon.native:X} useItem=0x{useItem.native:X}.");
 
         return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKeyRva, combo.native, pickClose.native, targetDisp, virt.thisAdj != 0 ? virt.thisAdj : attackVirt.thisAdj, setTargetSlot, prologue, hud.points, hud.name != 0 ? hud.name : 0x14, hud.xor, evidence)
         {
@@ -288,6 +328,19 @@ public static class PlayerActionLayoutRecoverer
             SendAttackPacketRva = sendAttack.native,
             SendStatePacketRva = sendState.native,
             SendPickupPacketRva = sendPickup.native,
+            SendItemUsePacketRva = sendUse.native,
+            GetItemIndexRva = getItemIndex.native,
+            GetItemCountRva = getItemCount.native,
+            SelectItemRva = selectItem.native,
+            GetItemNameRva = getItemName.native,
+            GetItemTypeRva = getItemType.native,
+            GetItemSubTypeRva = getItemSubType.native,
+            GetAffectRva = getAffect.native,
+            GetValueRva = getValue.native,
+            GetIconImageRva = getIcon.native,
+            UseItemRva = useItem.native,
+            ItemManagerRva = selectItem.singleton,
+            GetSelectedRva = getSelected,
             ItemSingletonRva = loot.item,
             GetCloseItemRva = loot.getClose,
             SetAutoRva = setAuto.native,
@@ -1487,7 +1540,7 @@ public static class PlayerActionLayoutRecoverer
         var start = off;
         if (singletonVa != 0)
         {
-            for (var i = off; i < off + 0x80 && i + 6 < pe.Length; i++)
+            for (var i = off; i < off + 0x140 && i + 6 < pe.Length; i++)
             {
                 if (pe.Byte(i) == 0xA1 && pe.ReadU32(i + 1) == singletonVa)
                 {
@@ -1505,7 +1558,7 @@ public static class PlayerActionLayoutRecoverer
             }
         }
 
-        var first = SubstantialThiscall(pe, start, off + 0x100);
+        var first = SubstantialThiscall(pe, start, off + 0x160);
         if (first != 0)
             return first;
 
@@ -1526,6 +1579,11 @@ public static class PlayerActionLayoutRecoverer
 
     private static uint SubstantialThiscall(ActionPe pe, int start, int end)
     {
+        return SubstantialThiscall(pe, start, end, skipPythonHelper: false);
+    }
+
+    private static uint SubstantialThiscall(ActionPe pe, int start, int end, bool skipPythonHelper)
+    {
         for (var i = start; i < end && i + 5 < pe.Length; i++)
         {
             if (pe.Byte(i) != 0xE8)
@@ -1538,10 +1596,48 @@ public static class PlayerActionLayoutRecoverer
                 continue;
             if (LooksLikePythonStub(pe, destOff))
                 continue;
-            return target - pe.ImageBase;
+            if (skipPythonHelper && LooksLikePythonHelper(pe, destOff))
+                continue;
+            var rva = target - pe.ImageBase;
+            if (skipPythonHelper && rva is 0x608290 or 0x608470 or 0x6081F0)
+                continue;
+            return rva;
         }
 
         return 0;
+    }
+
+    private static uint NativeCallSkippingPython(ActionPe pe, uint wrapperRva, uint singletonVa)
+    {
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+
+        var start = off;
+        if (singletonVa != 0)
+        {
+            for (var i = off; i < off + 0xC0 && i + 6 < pe.Length; i++)
+            {
+                if (pe.Byte(i) == 0xA1 && pe.ReadU32(i + 1) == singletonVa)
+                {
+                    start = i + 5;
+                    break;
+                }
+
+                if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15 ||
+                                           pe.Byte(i + 1) == 0x35 || pe.Byte(i + 1) == 0x3D) &&
+                    pe.ReadU32(i + 2) == singletonVa)
+                {
+                    start = i + 6;
+                    break;
+                }
+            }
+        }
+
+        var found = SubstantialThiscall(pe, start, off + 0x160, skipPythonHelper: true);
+        if (found != 0)
+            return found;
+        return SubstantialThiscall(pe, off, off + 0x160, skipPythonHelper: true);
     }
 
     private static bool LooksLikePythonHelper(ActionPe pe, int off)
@@ -2294,6 +2390,108 @@ public static class PlayerActionLayoutRecoverer
 
         evidence.Add("CPythonPlayer::GetName string displacement was not recovered.");
         return 0;
+    }
+
+    private static uint CallAfterMovEcxEax(ActionPe pe, uint wrapperRva)
+    {
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+        for (var i = off; i < off + 0xA0 && i + 7 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0x8B || pe.Byte(i + 1) != 0xC8 || pe.Byte(i + 2) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 7) + pe.ReadI32(i + 3));
+            if (pe.IsCode(target))
+                return target - pe.ImageBase;
+        }
+
+        return 0;
+    }
+
+    private static uint FirstE8AfterEcxLoad(ActionPe pe, uint wrapperRva)
+    {
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0 || off + 11 >= pe.Length)
+            return 0;
+        if (pe.Byte(off) != 0x8B || pe.Byte(off + 1) != 0x0D || pe.Byte(off + 6) != 0xE8)
+            return 0;
+        var target = (uint)(pe.FileToVa(off + 11) + pe.ReadI32(off + 7));
+        if (!pe.IsCode(target))
+            return 0;
+        var rva = target - pe.ImageBase;
+        return rva is 0x608290 or 0x608470 or 0x6081F0 ? 0 : rva;
+    }
+
+    private static uint FirstCallAllowShort(ActionPe pe, uint wrapperRva, uint singletonVa)
+    {
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+        var start = off;
+        if (singletonVa != 0)
+        {
+            for (var i = off; i < off + 0x40 && i + 6 < pe.Length; i++)
+            {
+                if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x0D && pe.ReadU32(i + 2) == singletonVa)
+                {
+                    start = i + 6;
+                    break;
+                }
+            }
+        }
+
+        for (var i = start; i < off + 0x40 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            if (!pe.IsCode(target))
+                continue;
+            var rva = target - pe.ImageBase;
+            if (rva is 0x608290 or 0x608470 or 0x6081F0)
+                continue;
+            return rva;
+        }
+
+        return 0;
+    }
+
+    private static (uint native, uint singleton, uint wrapper) RecoverItemMethod(
+        ActionPe pe, string name, uint preferSingletonRva, List<string> evidence)
+    {
+        var preferVa = preferSingletonRva == 0 ? 0 : pe.ImageBase + preferSingletonRva;
+        (uint native, uint singleton, uint wrapper) fallback = (0, 0, 0);
+        foreach (var va in pe.FindAsciiZ(name))
+        {
+            foreach (var site in pe.FindImmediateXrefs(va))
+            {
+                var off = pe.VaToFile(site);
+                if (off < 0 || !TryMethodTable(pe, off, out var fn))
+                    continue;
+                var wrapperRva = fn - pe.ImageBase;
+                var singleton = FirstGlobalLoad(pe, wrapperRva);
+                var native = NativeCallSkippingPython(pe, wrapperRva, singleton);
+                var singletonRva = singleton == 0 ? 0 : singleton - pe.ImageBase;
+                var candidate = (native, pe.IsRva(singletonRva) ? singletonRva : 0u, wrapperRva);
+                var bytes = pe.Hex(pe.ImageBase + wrapperRva, 128);
+                if (preferVa != 0 && singleton == preferVa)
+                {
+                    evidence.Add($"Python {name} wrapper RVA 0x{wrapperRva:X} nativeRVA=0x{native:X} bytes={bytes}.");
+                    return candidate;
+                }
+
+                if (fallback.wrapper == 0)
+                {
+                    fallback = candidate;
+                    evidence.Add($"Python {name} wrapper RVA 0x{wrapperRva:X} nativeRVA=0x{native:X} singleton=0x{singletonRva:X} bytes={bytes}.");
+                }
+            }
+        }
+
+        if (fallback.wrapper == 0)
+            evidence.Add($"Python method '{name}' was not recovered.");
+        return fallback;
     }
 
     private static (uint native, uint singleton, uint wrapper) RecoverNamedNativePrefer(

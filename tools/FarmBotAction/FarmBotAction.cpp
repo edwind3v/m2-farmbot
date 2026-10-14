@@ -5,8 +5,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstdarg>
+#include <cctype>
 #include <cstring>
+#include <map>
 #include <queue>
 #include <string>
 #include <vector>
@@ -48,6 +51,19 @@ static const unsigned kGameWindowDisp = 8;
 static unsigned kSendAttackRva = 0x134BE0;
 static unsigned kSendStateRva = 0x134DA0;
 static unsigned kSendPickupRva = 0x13B690;
+static unsigned kSendItemUseRva = 0x13A6F0;
+static unsigned kGetItemIndexRva = 0;
+static unsigned kGetItemCountRva = 0;
+static unsigned kSelectItemRva = 0;
+static unsigned kItemMgrRva = 0;
+static unsigned kGetSelectedRva = 0;
+static unsigned kGetItemNameRva = 0;
+static unsigned kGetItemTypeRva = 0;
+static unsigned kGetItemSubTypeRva = 0;
+static unsigned kGetAffectRva = 0;
+static unsigned kGetValueRva = 0;
+static unsigned kGetIconImageRva = 0;
+static unsigned kUseItemRva = 0;
 static unsigned kSendClickRva = 0xCE930;
 static unsigned kItemSingletonRva = 0x482CAC;
 static unsigned kGetCloseItemRva = 0xBB480;
@@ -132,6 +148,10 @@ typedef void (__thiscall* FnNewAttack)(void* self);
 typedef int (__thiscall* FnSendAttack)(void* self, unsigned mot, unsigned vid);
 typedef int (__thiscall* FnSendState)(void* self, const float* pos, float rot, unsigned func, unsigned arg);
 typedef int (__thiscall* FnSendPickup)(void* self, unsigned vid);
+#pragma pack(push, 1)
+struct ItemPos { unsigned char window; unsigned short cell; };
+#pragma pack(pop)
+typedef int (__thiscall* FnSendItemUse)(void* self, unsigned posPacked, unsigned extra);
 typedef void (__thiscall* FnSendClick)(void* self, unsigned vid);
 typedef void* (__thiscall* FnTreeInc)(void* it);
 typedef int (__thiscall* FnGetCloseItem)(void* self, float* pos, unsigned* vid, unsigned dist);
@@ -203,6 +223,9 @@ static CRITICAL_SECTION g_lock;
 static std::queue<Command> g_queue;
 static bool g_lastOk;
 static std::string g_lastReason;
+static std::string g_potsJson = "[]";
+static int g_greenRemain;
+static int g_purpleRemain;
 static unsigned g_lastVid;
 static unsigned g_chaseVid;
 static unsigned g_walkVid;
@@ -587,6 +610,7 @@ static bool CallPickCloseMoney(void* player)
     }
 }
 
+static void JsonEscape(const char* in, char* out, int cap);
 static bool CallSendPickup(unsigned vid);
 static bool CallSendClick(void* player, unsigned vid);
 static bool CallSendState(float x, float y, unsigned func);
@@ -709,6 +733,23 @@ static IDirect3DTexture9* QueryTexture(void* p, HMODULE d3d)
     D3DSURFACE_DESC desc;
     if (FAILED(tex->GetLevelDesc(0, &desc)) ||
         desc.Width < 64 || desc.Height < 64 || desc.Width > 4096 || desc.Height > 4096)
+    {
+        tex->Release();
+        return nullptr;
+    }
+    return tex;
+}
+
+static IDirect3DTexture9* QueryIconTexture(void* p, HMODULE d3d)
+{
+    if (!d3d || !UserPtr(p) || !UserPtr(*(void**)p) || !InModule(*(void**)p, d3d))
+        return nullptr;
+    IDirect3DTexture9* tex = nullptr;
+    if (FAILED(((IUnknown*)p)->QueryInterface(__uuidof(IDirect3DTexture9), (void**)&tex)) || !tex)
+        return nullptr;
+    D3DSURFACE_DESC desc;
+    if (FAILED(tex->GetLevelDesc(0, &desc)) ||
+        desc.Width < 16 || desc.Height < 16 || desc.Width > 128 || desc.Height > 128)
     {
         tex->Release();
         return nullptr;
@@ -1590,12 +1631,206 @@ static HMODULE PythonDll()
     if (!py)
         py = GetModuleHandleA("python22.dll");
     if (!py)
+        py = GetModuleHandleA("python37.dll");
+    if (!py)
+        py = GetModuleHandleA("python38.dll");
+    if (!py)
+        py = GetModuleHandleA("python39.dll");
+    if (!py)
+        py = GetModuleHandleA("python311.dll");
+    if (!py)
     {
         HMODULE exe = GetModuleHandleA(nullptr);
         if (exe && (GetProcAddress(exe, "PyObject_CallMethod") || GetProcAddress(exe, "Py_Initialize")))
             py = exe;
     }
     return py;
+}
+
+static void PyDec(void* obj)
+{
+    if (!obj)
+        return;
+    HMODULE py = PythonDll();
+    typedef void (__cdecl* FnDec)(void*);
+    FnDec dec = py ? (FnDec)GetProcAddress(py, "Py_DecRef") : nullptr;
+    if (!dec)
+        dec = py ? (FnDec)GetProcAddress(py, "Py_XDECREF") : nullptr;
+    if (!dec)
+        return;
+    __try { dec(obj); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+static void* PyMod(const char* name)
+{
+    HMODULE py = PythonDll();
+    if (!py || !name)
+        return nullptr;
+    typedef void* (__cdecl* FnImport)(const char*);
+    FnImport imp = (FnImport)GetProcAddress(py, "PyImport_ImportModule");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!imp)
+        return nullptr;
+    __try
+    {
+        void* mod = imp(name);
+        if (!mod && errClear)
+            errClear();
+        return mod;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
+static void* PyCall(void* obj, const char* name, const char* fmt, int a = 0, int b = 0)
+{
+    HMODULE py = PythonDll();
+    if (!obj || !py || !name)
+        return nullptr;
+    FnPyCallMethod call = (FnPyCallMethod)GetProcAddress(py, "PyObject_CallMethod");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!call)
+        return nullptr;
+    char method[64];
+    char format[8];
+    lstrcpynA(method, name, 64);
+    if (fmt && fmt[0])
+        lstrcpynA(format, fmt, 8);
+    else
+        format[0] = 0;
+    __try
+    {
+        void* result = nullptr;
+        if (!format[0])
+            result = call(obj, method, NULL);
+        else if (format[1] == 0)
+            result = call(obj, method, format, a);
+        else
+            result = call(obj, method, format, a, b);
+        if (errClear)
+            errClear();
+        return result;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
+static long PyAsInt(void* obj)
+{
+    if (!obj)
+        return 0;
+    HMODULE py = PythonDll();
+    typedef long (__cdecl* FnAsLong)(void*);
+    FnAsLong asLong = py ? (FnAsLong)GetProcAddress(py, "PyInt_AsLong") : nullptr;
+    if (!asLong)
+        asLong = py ? (FnAsLong)GetProcAddress(py, "PyLong_AsLong") : nullptr;
+    long v = 0;
+    __try { v = asLong ? asLong(obj) : 0; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    PyDec(obj);
+    return v;
+}
+
+static void PyAsStr(void* obj, char* out, int cap)
+{
+    if (out && cap > 0)
+        out[0] = 0;
+    if (!obj || !out || cap < 2)
+    {
+        PyDec(obj);
+        return;
+    }
+    HMODULE py = PythonDll();
+    FnPyStringAsString asString = py ? (FnPyStringAsString)GetProcAddress(py, "PyString_AsString") : nullptr;
+    typedef const char* (__cdecl* FnUtf8)(void*);
+    FnUtf8 asUtf8 = py ? (FnUtf8)GetProcAddress(py, "PyUnicode_AsUTF8") : nullptr;
+    __try
+    {
+        const char* text = asString ? asString(obj) : nullptr;
+        if (!text && asUtf8)
+            text = asUtf8(obj);
+        if (text)
+            lstrcpynA(out, text, cap);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    PyDec(obj);
+}
+
+static unsigned PyItemIndex(void* player, int slot)
+{
+    void* r = PyCall(player, "GetItemIndex", "i", slot);
+    if (!r)
+        r = PyCall(player, "GetItemIndex", "ii", 1, slot);
+    long v = PyAsInt(r);
+    return v > 0 ? (unsigned)v : 0;
+}
+
+static int PyItemCount(void* player, int slot)
+{
+    void* r = PyCall(player, "GetItemCount", "i", slot);
+    if (!r)
+        r = PyCall(player, "GetItemCount", "ii", 1, slot);
+    long v = PyAsInt(r);
+    return v > 0 ? (int)v : 1;
+}
+
+static void PySlotName(void* player, int slot, char* out, int cap)
+{
+    if (out && cap > 0)
+        out[0] = 0;
+    PyAsStr(PyCall(player, "GetItemName", "i", slot), out, cap);
+    if (out && out[0])
+        return;
+    PyAsStr(PyCall(player, "GetItemName", "ii", 1, slot), out, cap);
+}
+
+static int GilEnter(int* state)
+{
+    HMODULE py = PythonDll();
+    FnPyGilEnsure gilEnsure = py ? (FnPyGilEnsure)GetProcAddress(py, "PyGILState_Ensure") : nullptr;
+    if (!py || !gilEnsure || !state)
+        return 0;
+    __try
+    {
+        *state = gilEnsure();
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static void GilLeave(int have, int state)
+{
+    if (!have)
+        return;
+    HMODULE py = PythonDll();
+    FnPyGilRelease gilRelease = py ? (FnPyGilRelease)GetProcAddress(py, "PyGILState_Release") : nullptr;
+    if (!gilRelease)
+        return;
+    __try { gilRelease(state); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+static int ParseAffectPair(void* aff, int* apply, int* aval)
+{
+    if (!aff || !apply || !aval)
+        return 0;
+    HMODULE py = PythonDll();
+    typedef int (__cdecl* FnParse)(void*, const char*, ...);
+    FnParse parse = py ? (FnParse)GetProcAddress(py, "PyArg_ParseTuple") : nullptr;
+    if (!parse)
+        return 0;
+    __try { return parse(aff, "ii", apply, aval) ? 1 : 0; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
 
 static int SafePySetInt(void* obj, const char* name, long value)
@@ -2194,6 +2429,309 @@ static bool CallSendPickup(unsigned vid)
     {
         return false;
     }
+}
+
+static bool CallSendItemUse(unsigned cell)
+{
+    void* net = NetStream();
+    if (!g_base || !kSendItemUseRva || !net)
+        return false;
+    FnSendItemUse fn = (FnSendItemUse)(g_base + kSendItemUseRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    const unsigned packed = 1u | (cell << 8);
+    int ok = 0;
+    __try
+    {
+        ok = fn(net, packed, 0);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    return ok != 0;
+}
+
+typedef unsigned (__thiscall* FnItemPosU32)(void* self, ItemPos pos);
+typedef int (__thiscall* FnSelectItem)(void* self, unsigned vnum);
+typedef void* (__thiscall* FnGetSelected)(void* self);
+typedef const char* (__thiscall* FnItemCStr)(void* self);
+typedef unsigned (__thiscall* FnItemU32)(void* self);
+typedef unsigned (__thiscall* FnItemU32Arg)(void* self, int index);
+
+static void* ItemDataMgr()
+{
+    if (!g_base || !kItemMgrRva)
+        return nullptr;
+    void* p = *(void**)(g_base + kItemMgrRva);
+    return UserPtr(p) ? p : nullptr;
+}
+
+static unsigned NativeItemIndex(int slot)
+{
+    void* player = Player();
+    if (!player || !kGetItemIndexRva || !g_base)
+        return 0;
+    FnItemPosU32 fn = (FnItemPosU32)(g_base + kGetItemIndexRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return 0;
+    ItemPos pos;
+    pos.window = 1;
+    pos.cell = (unsigned short)slot;
+    unsigned v = 0;
+    __try { v = fn((char*)player + kThisAdj, pos); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    return v;
+}
+
+static int NativeItemCount(int slot)
+{
+    void* player = Player();
+    if (!player || !kGetItemCountRva || !g_base)
+        return 1;
+    FnItemPosU32 fn = (FnItemPosU32)(g_base + kGetItemCountRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return 1;
+    ItemPos pos;
+    pos.window = 1;
+    pos.cell = (unsigned short)slot;
+    unsigned v = 0;
+    __try { v = fn((char*)player + kThisAdj, pos); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    return v > 0 ? (int)v : 1;
+}
+
+static bool WriteBgraIconBmp(const char* path, const BYTE* bgra, unsigned srcW, unsigned srcH)
+{
+    if (!path || !bgra || !srcW || !srcH)
+        return false;
+    const unsigned dim = 32;
+    unsigned char hdr[54];
+    memset(hdr, 0, 54);
+    hdr[0] = 'B';
+    hdr[1] = 'M';
+    const unsigned size = 54 + dim * dim * 3;
+    memcpy(hdr + 2, &size, 4);
+    hdr[10] = 54;
+    hdr[14] = 40;
+    memcpy(hdr + 18, &dim, 4);
+    memcpy(hdr + 22, &dim, 4);
+    hdr[26] = 1;
+    hdr[28] = 24;
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "wb") != 0 || !f)
+        return false;
+    fwrite(hdr, 1, 54, f);
+    for (int y = (int)dim - 1; y >= 0; --y)
+    {
+        for (unsigned x = 0; x < dim; ++x)
+        {
+            const unsigned sx = srcW == dim ? x : x * srcW / dim;
+            const unsigned sy = srcH == dim ? (unsigned)y : (unsigned)y * srcH / dim;
+            const BYTE* s = bgra + (sy * srcW + sx) * 4;
+            unsigned char px[3] = { s[0], s[1], s[2] };
+            fwrite(px, 1, 3, f);
+        }
+    }
+    fclose(f);
+    return true;
+}
+
+static bool DumpItemIcon(void* data, const char* path)
+{
+    if (!data || !path || !g_base)
+        return false;
+    void* img = nullptr;
+    if (kGetIconImageRva)
+    {
+        FnGetSelected getImg = (FnGetSelected)(g_base + kGetIconImageRva);
+        if (!IsBadCodePtr((FARPROC)getImg))
+        {
+            __try { img = getImg(data); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { img = nullptr; }
+        }
+    }
+    HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+    IDirect3DTexture9* best = nullptr;
+    unsigned bestArea = 0;
+    void* roots[2] = { img, data };
+    for (int r = 0; r < 2; ++r)
+    {
+        void* obj = roots[r];
+        if (!UserPtr(obj))
+            continue;
+        const int n = ReadableBytes(obj, 0x200) & ~3;
+        BYTE* p = (BYTE*)obj;
+        for (int i = 0; i + 4 <= n; i += 4)
+        {
+            void* child = *(void**)(p + i);
+            IDirect3DTexture9* tex = QueryIconTexture(child, d3d9);
+            if (!tex && UserPtr(child))
+            {
+                const int m = ReadableBytes(child, 0x120) & ~3;
+                BYTE* o = (BYTE*)child;
+                for (int j = 0; j + 4 <= m; j += 4)
+                    if (!tex)
+                        tex = QueryIconTexture(*(void**)(o + j), d3d9);
+            }
+            if (!tex)
+                continue;
+            D3DSURFACE_DESC desc;
+            if (FAILED(tex->GetLevelDesc(0, &desc)))
+            {
+                tex->Release();
+                continue;
+            }
+            const unsigned area = desc.Width * desc.Height;
+            if (area > bestArea)
+            {
+                if (best)
+                    best->Release();
+                best = tex;
+                bestArea = area;
+            }
+            else
+                tex->Release();
+        }
+    }
+    if (!best)
+        return false;
+    BYTE pixels[128 * 128 * 4];
+    unsigned w = 0, h = 0;
+    const bool ok = CopyTexture(best, pixels, &w, &h) && w && h && WriteBgraIconBmp(path, pixels, w, h);
+    best->Release();
+    return ok;
+}
+
+static bool CallUseItem(unsigned cell)
+{
+    void* player = Player();
+    if (!player || !kUseItemRva || !g_base)
+        return false;
+    typedef void (__thiscall* FnUse)(void* self, ItemPos pos);
+    FnUse fn = (FnUse)(g_base + kUseItemRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    ItemPos pos;
+    pos.window = 1;
+    pos.cell = (unsigned short)cell;
+    __try
+    {
+        fn((char*)player + kThisAdj, pos);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static void* NativeItemInfo(unsigned vnum, char* name, int nameCap, int* type, int* sub, int* apply, int* aval, int* v0, int* v1)
+{
+    if (name && nameCap > 0)
+        name[0] = 0;
+    if (type) *type = 0;
+    if (sub) *sub = 0;
+    if (apply) *apply = 0;
+    if (aval) *aval = 0;
+    if (v0) *v0 = 0;
+    if (v1) *v1 = 0;
+    void* mgr = ItemDataMgr();
+    if (!mgr || !vnum)
+        return nullptr;
+    if (kSelectItemRva)
+    {
+        FnSelectItem select = (FnSelectItem)(g_base + kSelectItemRva);
+        if (!IsBadCodePtr((FARPROC)select))
+        {
+            __try { select(mgr, vnum); }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+    }
+    void* data = nullptr;
+    if (kGetSelectedRva)
+    {
+        FnGetSelected selected = (FnGetSelected)(g_base + kGetSelectedRva);
+        if (!IsBadCodePtr((FARPROC)selected))
+        {
+            __try { data = selected(mgr); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { data = nullptr; }
+        }
+    }
+    if (!data)
+        return nullptr;
+    if (name && kGetItemNameRva)
+    {
+        FnItemCStr getName = (FnItemCStr)(g_base + kGetItemNameRva);
+        if (!IsBadCodePtr((FARPROC)getName))
+        {
+            const char* text = nullptr;
+            __try { text = getName(data); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { text = nullptr; }
+            if (text && !IsBadStringPtrA(text, (UINT_PTR)nameCap))
+                lstrcpynA(name, text, nameCap);
+        }
+    }
+    if (type && kGetItemTypeRva)
+    {
+        FnItemU32 getType = (FnItemU32)(g_base + kGetItemTypeRva);
+        if (!IsBadCodePtr((FARPROC)getType))
+        {
+            unsigned v = 0;
+            __try { v = getType(data); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+            *type = (int)(v & 0xFF);
+        }
+    }
+    if (sub && kGetItemSubTypeRva)
+    {
+        FnItemU32 getSub = (FnItemU32)(g_base + kGetItemSubTypeRva);
+        if (!IsBadCodePtr((FARPROC)getSub))
+        {
+            unsigned v = 0;
+            __try { v = getSub(data); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+            *sub = (int)(v & 0xFF);
+        }
+    }
+    if (kGetValueRva)
+    {
+        FnItemU32Arg getVal = (FnItemU32Arg)(g_base + kGetValueRva);
+        if (!IsBadCodePtr((FARPROC)getVal))
+        {
+            if (v0)
+            {
+                unsigned v = 0;
+                __try { v = getVal(data, 0); }
+                __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+                *v0 = (int)v;
+            }
+            if (v1)
+            {
+                unsigned v = 0;
+                __try { v = getVal(data, 1); }
+                __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+                *v1 = (int)v;
+            }
+        }
+    }
+    if (apply && aval && kGetAffectRva)
+    {
+        typedef int (__thiscall* FnAffect)(void* self, int index, int* pair);
+        FnAffect getAff = (FnAffect)(g_base + kGetAffectRva);
+        if (!IsBadCodePtr((FARPROC)getAff))
+        {
+            int pair[2] = { 0, 0 };
+            __try { getAff(data, 0, pair); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { pair[0] = 0; pair[1] = 0; }
+            if (pair[0] || pair[1])
+            {
+                *apply = pair[0];
+                *aval = pair[1];
+            }
+        }
+    }
+    return data;
 }
 
 static bool CallSendClick(void* player, unsigned vid)
@@ -2955,6 +3493,263 @@ static bool StartCombat(void* player, unsigned vid, float x, float y, bool click
     return false;
 }
 
+static void SlashPath(char* path)
+{
+    for (int i = 0; path[i]; ++i)
+    {
+        if (path[i] == '\\')
+            path[i] = '/';
+    }
+}
+
+static void WritePotBmp(const char* path, unsigned char r, unsigned char g, unsigned char b)
+{
+    unsigned char hdr[54];
+    memset(hdr, 0, 54);
+    hdr[0] = 'B';
+    hdr[1] = 'M';
+    const unsigned size = 54 + 32 * 32 * 3;
+    memcpy(hdr + 2, &size, 4);
+    hdr[10] = 54;
+    hdr[14] = 40;
+    const unsigned dim = 32;
+    memcpy(hdr + 18, &dim, 4);
+    memcpy(hdr + 22, &dim, 4);
+    hdr[26] = 1;
+    hdr[28] = 24;
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "wb") != 0 || !f)
+        return;
+    fwrite(hdr, 1, 54, f);
+    unsigned char px[3] = { b, g, r };
+    for (int i = 0; i < 32 * 32; ++i)
+        fwrite(px, 1, 3, f);
+    fclose(f);
+}
+
+static const char* ClassifyPot(int type, int sub, int apply, unsigned vnum, const char* name)
+{
+    if (type == 1 || type == 2)
+        return nullptr;
+    char low[160];
+    int w = 0;
+    for (int i = 0; name && name[i] && w + 1 < 160; ++i)
+        low[w++] = (char)tolower((unsigned char)name[i]);
+    low[w] = 0;
+    const int potName = strstr(low, "potion") || strstr(low, "iksir") ? 1 : 0;
+    if (vnum >= 27100 && vnum <= 27102)
+        return "green";
+    if (vnum >= 27103 && vnum <= 27105)
+        return "purple";
+    if (potName && (strstr(low, "green") || strstr(low, "yesil") || strstr(low, "yeşil") ||
+        strstr(low, "mov_speed") || strstr(low, "movement") || apply == 8))
+        return "green";
+    if (potName && (strstr(low, "purple") || strstr(low, "violet") || strstr(low, "att_speed") ||
+        strstr(low, "attack speed") || strstr(low, "dxup") || strstr(low, "dx up") || apply == 7))
+        return "purple";
+    if ((vnum >= 27004 && vnum <= 27006) ||
+        (potName && (strstr(low, "blue") || strstr(low, "mana") || strstr(low, "mavi") ||
+            strstr(low, "sp potion") || strstr(low, "sp(") || strstr(low, "mp("))))
+        return "mp";
+    if ((vnum >= 27001 && vnum <= 27003) ||
+        (potName && (strstr(low, "red") || strstr(low, "hp") || strstr(low, "life") ||
+            strstr(low, "kirmizi") || strstr(low, "kırmızı") || strstr(low, "hp("))))
+        return "hp";
+    if (type == 3 && sub == 0 && potName)
+        return "hp";
+    return nullptr;
+}
+
+static bool CopyIconFile(const char* src, const char* dst)
+{
+    if (!src || !src[0] || !dst)
+        return false;
+    FILE* in = nullptr;
+    if (fopen_s(&in, src, "rb") != 0 || !in)
+        return false;
+    FILE* out = nullptr;
+    if (fopen_s(&out, dst, "wb") != 0 || !out)
+    {
+        fclose(in);
+        return false;
+    }
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+        fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+    return true;
+}
+
+static void ScanPots()
+{
+    g_potsJson = "[]";
+    HMODULE py = PythonDll();
+    const int nativeInv = kGetItemIndexRva ? 1 : 0;
+    NativeLog("pots scan begin py=%p nativeIndex=0x%X nativeCount=0x%X itemMgr=0x%X",
+        py, kGetItemIndexRva, kGetItemCountRva, kItemMgrRva);
+
+    int gil = 0;
+    int haveGil = 0;
+    void* playerMod = nullptr;
+    void* itemMod = nullptr;
+    if (!nativeInv && py)
+    {
+        haveGil = GilEnter(&gil);
+        playerMod = PyMod("player");
+        itemMod = PyMod("item");
+    }
+    else if (!nativeInv && !py)
+        return;
+    int seen = 0;
+    int kept = 0;
+    struct Acc
+    {
+        unsigned vnum;
+        int count;
+        int slot;
+        int duration;
+        std::string name;
+        std::string family;
+        std::string icon;
+        std::string tip;
+    };
+    std::map<unsigned, Acc> byVnum;
+    char dir[MAX_PATH];
+    GetTempPathA(MAX_PATH, dir);
+    char iconDir[MAX_PATH];
+    _snprintf_s(iconDir, _TRUNCATE, "%sfarmbot-icons", dir);
+    CreateDirectoryA(iconDir, nullptr);
+
+    if (nativeInv || playerMod)
+    {
+        for (int i = 0; i < 180; ++i)
+        {
+            unsigned vnum = nativeInv ? NativeItemIndex(i) : PyItemIndex(playerMod, i);
+            if (!vnum)
+                continue;
+            ++seen;
+            int count = nativeInv ? NativeItemCount(i) : PyItemCount(playerMod, i);
+            char name[160] = { 0 };
+            char icon[260] = { 0 };
+            int type = 0, sub = 0, apply = 0, aval = 0, v0 = 0, v1 = 0;
+            if (nativeInv)
+                NativeItemInfo(vnum, name, 160, &type, &sub, &apply, &aval, &v0, &v1);
+            else
+            {
+                PySlotName(playerMod, i, name, 160);
+                if (itemMod)
+                {
+                    PyDec(PyCall(itemMod, "SelectItem", "i", (int)vnum));
+                    if (!name[0])
+                        PyAsStr(PyCall(itemMod, "GetItemName", nullptr), name, 160);
+                    type = (int)PyAsInt(PyCall(itemMod, "GetItemType", nullptr));
+                    sub = (int)PyAsInt(PyCall(itemMod, "GetItemSubType", nullptr));
+                    void* aff = PyCall(itemMod, "GetAffect", "i", 0);
+                    if (aff)
+                    {
+                        ParseAffectPair(aff, &apply, &aval);
+                        PyDec(aff);
+                    }
+                    if (apply == 0)
+                    {
+                        void* aff1 = PyCall(itemMod, "GetAffect", "i", 1);
+                        if (aff1)
+                        {
+                            ParseAffectPair(aff1, &apply, &aval);
+                            PyDec(aff1);
+                        }
+                    }
+                    v1 = (int)PyAsInt(PyCall(itemMod, "GetValue", "i", 1));
+                    PyAsStr(PyCall(itemMod, "GetIconImageFileName", nullptr), icon, 260);
+                }
+            }
+            const char* fam = ClassifyPot(type, sub, apply, vnum, name);
+            NativeLog("pot slot=%d vnum=%u type=%d sub=%d apply=%d name=%s fam=%s",
+                i, vnum, type, sub, apply, name, fam ? fam : "-");
+            if (!fam)
+                continue;
+            Acc& acc = byVnum[vnum];
+            if (acc.vnum == 0)
+            {
+                acc.vnum = vnum;
+                acc.slot = i;
+                acc.name = name[0] ? name : "potion";
+                acc.family = fam;
+                int dur = v1;
+                if (dur < 15 || dur > 600)
+                    dur = aval;
+                if (dur >= 15 && dur <= 600)
+                    acc.duration = dur;
+                char tip[240];
+                if (acc.family == "hp" && v0 > 0)
+                    _snprintf_s(tip, _TRUNCATE, "%s | HP +%d", acc.name.c_str(), v0);
+                else if (acc.family == "mp" && v0 > 0)
+                    _snprintf_s(tip, _TRUNCATE, "%s | MP +%d", acc.name.c_str(), v0);
+                else if (acc.family == "green")
+                    _snprintf_s(tip, _TRUNCATE, "%s | Movement Speed%s%d | %ds",
+                        acc.name.c_str(), aval ? " +" : " ", aval, acc.duration ? acc.duration : 90);
+                else if (acc.family == "purple")
+                    _snprintf_s(tip, _TRUNCATE, "%s | Attack Speed%s%d | %ds",
+                        acc.name.c_str(), aval ? " +" : " ", aval, acc.duration ? acc.duration : 90);
+                else
+                    _snprintf_s(tip, _TRUNCATE, "%s", acc.name.c_str());
+                acc.tip = tip;
+                char bmp[MAX_PATH];
+                _snprintf_s(bmp, _TRUNCATE, "%s\\%u.bmp", iconDir, vnum);
+                if (icon[0] && CopyIconFile(icon, bmp))
+                    acc.icon = bmp;
+                else
+                {
+                    unsigned char r = 196, g = 92, b = 92;
+                    if (acc.family == "mp") { r = 74; g = 126; b = 196; }
+                    else if (acc.family == "green") { r = 74; g = 160; b = 92; }
+                    else if (acc.family == "purple") { r = 140; g = 92; b = 180; }
+                    WritePotBmp(bmp, r, g, b);
+                    acc.icon = bmp;
+                }
+            }
+            acc.count += count > 0 ? count : 1;
+            ++kept;
+        }
+    }
+    PyDec(playerMod);
+    PyDec(itemMod);
+    GilLeave(haveGil, gil);
+
+    std::string json = "[";
+    bool first = true;
+    for (std::map<unsigned, Acc>::iterator it = byVnum.begin(); it != byVnum.end(); ++it)
+    {
+        const Acc& acc = it->second;
+        char nameEsc[192];
+        char iconEsc[MAX_PATH * 2];
+        JsonEscape(acc.name.c_str(), nameEsc, 192);
+        JsonEscape(acc.icon.c_str(), iconEsc, (int)sizeof(iconEsc));
+        char item[900];
+        char tipEsc[280];
+        JsonEscape(acc.tip.c_str(), tipEsc, 280);
+        _snprintf_s(item, _TRUNCATE,
+            "%s{\"v\":%u,\"n\":\"%s\",\"c\":%d,\"s\":%d,\"f\":\"%s\",\"i\":\"%s\",\"d\":%d,\"t\":\"%s\"}",
+            first ? "" : ",",
+            acc.vnum, nameEsc, acc.count, acc.slot, acc.family.c_str(), iconEsc, acc.duration, tipEsc);
+        json += item;
+        first = false;
+    }
+    json += "]";
+    g_potsJson = json;
+    NativeLog("pots scan py=%p native=%d player=%d seen=%d kept=%d json=%u",
+        py, nativeInv, playerMod ? 1 : 0, seen, kept, (unsigned)g_potsJson.size());
+}
+
+static bool PyUseItem(unsigned cell)
+{
+    char code[96];
+    _snprintf_s(code, _TRUNCATE, "import net\nnet.SendItemUsePacket(%u)\n", cell);
+    return SafePyRun(code) != 0;
+}
+
 static void Execute(const Command& cmd)
 {
     g_lastOk = false;
@@ -2997,6 +3792,33 @@ static void Execute(const Command& cmd)
 
     if (ExecuteSession(cmd))
         return;
+
+    if (cmd.type == "get_pots")
+    {
+        ScanPots();
+        g_lastOk = true;
+        g_lastReason = "pots";
+        return;
+    }
+
+    if (cmd.type == "use_item")
+    {
+        const unsigned cell = cmd.slot >= 0 ? (unsigned)cmd.slot : cmd.vid;
+        NativeLog("use_item cell=%u useItem=0x%X sendUse=0x%X", cell, kUseItemRva, kSendItemUseRva);
+        const int used = CallSendItemUse(cell) ? 1 : 0;
+        const int playerUse = !used && CallUseItem(cell) ? 1 : 0;
+        const int pyUse = !used && !playerUse && PyUseItem(cell) ? 1 : 0;
+        NativeLog("use_item cell=%u send=%d player=%d py=%d", cell, used, playerUse, pyUse);
+        if (used || playerUse || pyUse)
+        {
+            g_lastOk = true;
+            g_lastReason = "SendItemUsePacket";
+            g_lastVid = cell;
+        }
+        else
+            g_lastReason = "SendItemUsePacket missing";
+        return;
+    }
 
     void* player = Player();
     if (!player)
@@ -3714,6 +4536,19 @@ static void ClearLoginRvas()
     kSendAttackRva = 0;
     kSendStateRva = 0;
     kSendPickupRva = 0;
+    kSendItemUseRva = 0;
+    kGetItemIndexRva = 0;
+    kGetItemCountRva = 0;
+    kSelectItemRva = 0;
+    kItemMgrRva = 0;
+    kGetSelectedRva = 0;
+    kGetItemNameRva = 0;
+    kGetItemTypeRva = 0;
+    kGetItemSubTypeRva = 0;
+    kGetAffectRva = 0;
+    kGetValueRva = 0;
+    kGetIconImageRva = 0;
+    kUseItemRva = 0;
     kGetStatusRva = 0;
     kGetStatusSlot = 0;
     kPointsDisp = 0;
@@ -3872,6 +4707,32 @@ static void LoadConfig()
             kSendStateRva = ParseHex(line + 10);
         else if (strncmp(line, "sendPickup=", 11) == 0)
             kSendPickupRva = ParseHex(line + 11);
+        else if (strncmp(line, "sendUse=", 8) == 0)
+            kSendItemUseRva = ParseHex(line + 8);
+        else if (strncmp(line, "getItemIndex=", 13) == 0)
+            kGetItemIndexRva = ParseHex(line + 13);
+        else if (strncmp(line, "getItemCount=", 13) == 0)
+            kGetItemCountRva = ParseHex(line + 13);
+        else if (strncmp(line, "selectItem=", 11) == 0)
+            kSelectItemRva = ParseHex(line + 11);
+        else if (strncmp(line, "itemMgr=", 8) == 0)
+            kItemMgrRva = ParseHex(line + 8);
+        else if (strncmp(line, "getSelected=", 12) == 0)
+            kGetSelectedRva = ParseHex(line + 12);
+        else if (strncmp(line, "getItemName=", 12) == 0)
+            kGetItemNameRva = ParseHex(line + 12);
+        else if (strncmp(line, "getItemType=", 12) == 0)
+            kGetItemTypeRva = ParseHex(line + 12);
+        else if (strncmp(line, "getItemSubType=", 15) == 0)
+            kGetItemSubTypeRva = ParseHex(line + 15);
+        else if (strncmp(line, "getAffect=", 10) == 0)
+            kGetAffectRva = ParseHex(line + 10);
+        else if (strncmp(line, "getValue=", 9) == 0)
+            kGetValueRva = ParseHex(line + 9);
+        else if (strncmp(line, "getIconImage=", 13) == 0)
+            kGetIconImageRva = ParseHex(line + 13);
+        else if (strncmp(line, "useItem=", 8) == 0)
+            kUseItemRva = ParseHex(line + 8);
         else if (strncmp(line, "mainPtr=", 8) == 0)
             kMainPtrDisp = ParseHex(line + 8);
         else if (strncmp(line, "mapDisp=", 8) == 0)
@@ -3928,6 +4789,7 @@ static void LoadConfig()
         kSendAttackRva = 0x134BE0;
         kSendStateRva = 0x134DA0;
         kSendPickupRva = 0x13B690;
+        kSendItemUseRva = 0x13A6F0;
         kSendClickRva = 0xCE930;
         kItemSingletonRva = 0x482CAC;
         kGetCloseItemRva = 0xBB480;
@@ -3972,6 +4834,8 @@ static void LoadConfig()
         kPointsDisp = 0;
         kPointXor = 0;
     }
+    else if (kSendItemUseRva == 0x37D360)
+        kSendItemUseRva = 0x369550;
 }
 
 static HMODULE FindClient()
@@ -4060,37 +4924,47 @@ static void Serve()
         g_lastOk = false;
         g_lastReason = "not executed";
         g_lastVid = 0;
-        ResetEvent(g_done);
-        EnterCriticalSection(&g_lock);
-        g_queue.push(cmd);
-        LeaveCriticalSection(&g_lock);
-
-        const bool waitReply = cmd.type == "get_phase" || cmd.type == "get_session" ||
-            cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game" ||
-            cmd.type == "skip_intro" || cmd.type == "get_atlas";
         DWORD wait = WAIT_OBJECT_0;
-        if (waitReply)
+        if (cmd.type == "get_pots")
         {
-            const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
-            wait = WaitForSingleObject(g_done, waitMs);
-        }
-        else if (g_lastReason.empty() || g_lastReason == "not executed")
-        {
+            ScanPots();
             g_lastOk = true;
-            g_lastVid = cmd.vid;
-            g_lastReason = "queued";
+            g_lastReason = "pots";
         }
-        if (wait != WAIT_OBJECT_0 && (g_lastReason.empty() || g_lastReason == "not executed"))
+        else
         {
-            char why[192];
-            _snprintf_s(
-                why,
-                _TRUNCATE,
-                "game-loop timeout iat=%d tid=%lu",
-                g_iatHooks,
-                g_loopTid);
-            g_lastReason = why;
-            g_lastOk = false;
+            ResetEvent(g_done);
+            EnterCriticalSection(&g_lock);
+            g_queue.push(cmd);
+            LeaveCriticalSection(&g_lock);
+
+            const bool waitReply = cmd.type == "get_phase" || cmd.type == "get_session" ||
+                cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game" ||
+                cmd.type == "skip_intro" || cmd.type == "get_atlas" ||
+                cmd.type == "use_item";
+            if (waitReply)
+            {
+                const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
+                wait = WaitForSingleObject(g_done, waitMs);
+            }
+            else if (g_lastReason.empty() || g_lastReason == "not executed")
+            {
+                g_lastOk = true;
+                g_lastVid = cmd.vid;
+                g_lastReason = "queued";
+            }
+            if (wait != WAIT_OBJECT_0 && (g_lastReason.empty() || g_lastReason == "not executed"))
+            {
+                char why[192];
+                _snprintf_s(
+                    why,
+                    _TRUNCATE,
+                    "game-loop timeout iat=%d tid=%lu",
+                    g_iatHooks,
+                    g_loopTid);
+                g_lastReason = why;
+                g_lastOk = false;
+            }
         }
 
         char reason[192];
@@ -4103,11 +4977,11 @@ static void Serve()
         JsonEscape(g_sessionCharacter.c_str(), character, 64);
         JsonEscape(g_sessionAccount.c_str(), account, 64);
         JsonEscape(g_capturedPassword.c_str(), password, 80);
-        char reply[1536];
+        char head[1536];
         _snprintf_s(
-            reply,
+            head,
             _TRUNCATE,
-            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d,\"atlasWidth\":%u,\"atlasHeight\":%u,\"worldW\":%.1f,\"worldH\":%.1f,\"phase\":\"%s\",\"character\":\"%s\",\"account\":\"%s\",\"password\":\"%s\",\"characterSlot\":%d,\"startGame\":%s,\"inWorld\":%s}",
+            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d,\"atlasWidth\":%u,\"atlasHeight\":%u,\"worldW\":%.1f,\"worldH\":%.1f,\"phase\":\"%s\",\"character\":\"%s\",\"account\":\"%s\",\"password\":\"%s\",\"characterSlot\":%d,\"startGame\":%s,\"inWorld\":%s",
             g_lastOk ? "true" : "false",
             cmd.type.c_str(),
             reason,
@@ -4130,6 +5004,12 @@ static void Serve()
             g_sessionCharacterSlot,
             g_startGame ? "true" : "false",
             g_inWorld ? "true" : "false");
+        std::string reply = head;
+        reply += ",\"pots\":";
+        reply += (cmd.type == "get_pots" && !g_potsJson.empty()) ? g_potsJson : "[]";
+        char extra[96];
+        _snprintf_s(extra, _TRUNCATE, ",\"greenRemain\":%d,\"purpleRemain\":%d}", g_greenRemain, g_purpleRemain);
+        reply += extra;
         if (!WriteFrame(reply))
             break;
     }
@@ -4143,8 +5023,8 @@ static DWORD WINAPI InitThread(void*)
     g_base = (BYTE*)client;
     InitAtlasMap();
     InstallLoopHooks(client);
-    NativeLog("loaded base=%p profile=%s sendAttack=0x%X sendState=0x%X attackKey=0x%X combo=0x%X reserve=0x%X setTarget=0x%X hooks=%d comboPatch=%d",
-        g_base, g_arthion ? "arthion" : "normal", kSendAttackRva, kSendStateRva, kAttackKeyRva, kComboRva, kReserveClickRva, kSetTargetRva, g_iatHooks, g_updateComboCall ? 1 : 0);
+    NativeLog("loaded base=%p profile=%s sendAttack=0x%X sendState=0x%X attackKey=0x%X combo=0x%X reserve=0x%X setTarget=0x%X getItemIndex=0x%X itemMgr=0x%X hooks=%d comboPatch=%d",
+        g_base, g_arthion ? "arthion" : "normal", kSendAttackRva, kSendStateRva, kAttackKeyRva, kComboRva, kReserveClickRva, kSetTargetRva, kGetItemIndexRva, kItemMgrRva, g_iatHooks, g_updateComboCall ? 1 : 0);
     Serve();
     return 0;
 }

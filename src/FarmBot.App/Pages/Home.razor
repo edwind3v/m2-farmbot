@@ -27,6 +27,95 @@
             <div class="track"><div class="fill mp" style="width:@Pct(Player?.Mp ?? 0, Player?.MaxMp ?? 0)"></div></div>
             <b>@Frac(Player?.Mp, Player?.MaxMp)</b>
         </div>
+        @if (Shell.ShowPotions)
+        {
+            <div class="pots">
+                <div class="pot-group">
+                    <div class="pot-label">Red</div>
+                    <div class="pot-row">
+                        @foreach (var pot in Of(PotionFamily.Hp))
+                        {
+                            <button type="button" class="pot hp @(Sel(pot))" disabled="@(pot.Count <= 0)" title="@Tip(pot)" @onclick="() => Shell.TogglePotion(pot.Vnum)">
+                                @if (HasIcon(pot))
+                                {
+                                    <img src="@pot.Icon" alt="@pot.Name" />
+                                }
+                                else
+                                {
+                                    <span class="pot-face">@SizeMark(pot.Name)</span>
+                                }
+                                <b>@pot.Count</b>
+                            </button>
+                        }
+                        @if (!Of(PotionFamily.Hp).Any())
+                        {
+                            <span class="pot-empty">@(InGame ? "no red pots in bag" : "waiting for game")</span>
+                        }
+                    </div>
+                    <label class="pot-pct">HP <input type="number" min="0" max="100" value="@Shell.Config.PotionHpPercent.ToString("0")" @onchange="OnHpPct" /> %</label>
+                </div>
+                <div class="pot-group">
+                    <div class="pot-label">Blue</div>
+                    <div class="pot-row">
+                        @foreach (var pot in Of(PotionFamily.Mp))
+                        {
+                            <button type="button" class="pot mp @(Sel(pot))" disabled="@(pot.Count <= 0)" title="@Tip(pot)" @onclick="() => Shell.TogglePotion(pot.Vnum)">
+                                @if (HasIcon(pot))
+                                {
+                                    <img src="@pot.Icon" alt="@pot.Name" />
+                                }
+                                else
+                                {
+                                    <span class="pot-face">@SizeMark(pot.Name)</span>
+                                }
+                                <b>@pot.Count</b>
+                            </button>
+                        }
+                        @if (!Of(PotionFamily.Mp).Any())
+                        {
+                            <span class="pot-empty">@(InGame ? "no blue pots in bag" : "waiting for game")</span>
+                        }
+                    </div>
+                    <label class="pot-pct">MP <input type="number" min="0" max="100" value="@Shell.Config.PotionMpPercent.ToString("0")" @onchange="OnMpPct" /> %</label>
+                </div>
+                <div class="pot-group">
+                    <div class="pot-label">Green / purple</div>
+                    <div class="pot-row">
+                        @foreach (var pot in SpeedPots)
+                        {
+                            <button type="button" class="pot @Css(pot.Family) @(Sel(pot))" disabled="@(pot.Count <= 0)" title="@Tip(pot)" @onclick="() => Shell.TogglePotion(pot.Vnum)">
+                                @if (HasIcon(pot))
+                                {
+                                    <img src="@pot.Icon" alt="@pot.Name" />
+                                }
+                                else
+                                {
+                                    <span class="pot-face">@SizeMark(pot.Name)</span>
+                                }
+                                <b>@pot.Count</b>
+                            </button>
+                        }
+                        @if (!SpeedPots.Any())
+                        {
+                            <span class="pot-empty">@(InGame ? "no speed pots in bag" : "waiting for game")</span>
+                        }
+                    </div>
+                    @if (Shell.View.GreenRemain > 0 || Shell.View.PurpleRemain > 0)
+                    {
+                        <div class="pot-remain">
+                            @if (Shell.View.GreenRemain > 0)
+                            {
+                                <span>green @Shell.View.GreenRemain s</span>
+                            }
+                            @if (Shell.View.PurpleRemain > 0)
+                            {
+                                <span>purple @Shell.View.PurpleRemain s</span>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
         <div class="quick">
             <button class="btn btn-ok" disabled="@(Shell.View.Enabled)" @onclick="Shell.StartBot">Start bot</button>
             <button class="btn btn-danger" disabled="@(!Shell.View.Enabled)" @onclick="Shell.StopBot">Stop</button>
@@ -74,6 +163,8 @@
 @code {
     private PlayerState? Player => Shell.View.Snapshot?.Player;
 
+    private bool InGame => (Player?.MaxHp ?? 0) > 0;
+
     private string Name => string.IsNullOrWhiteSpace(Player?.Name) ? "—" : Player!.Name;
 
     private string Level => Player is { Level: > 0 } ? Player.Level.ToString() : "—";
@@ -97,5 +188,54 @@
         if (max <= 0 || current <= 0)
             return "0%";
         return $"{Math.Clamp(100.0 * current / max, 0, 100):0}%";
+    }
+
+    private IEnumerable<PotionStack> Of(PotionFamily family) =>
+        Shell.Potions.Where(item => item.Family == family);
+
+    private IEnumerable<PotionStack> SpeedPots =>
+        Shell.Potions.Where(item => item.Family is PotionFamily.Green or PotionFamily.Purple);
+
+    private string Sel(PotionStack pot) => Shell.PotionEnabled(pot.Vnum) ? "on" : "";
+
+    private static bool HasIcon(PotionStack pot) => !string.IsNullOrWhiteSpace(pot.Icon);
+
+    private static string Css(PotionFamily family) => family switch
+    {
+        PotionFamily.Mp => "mp",
+        PotionFamily.Green => "green",
+        PotionFamily.Purple => "purple",
+        _ => "hp"
+    };
+
+    private string Tip(PotionStack pot)
+    {
+        var text = string.IsNullOrWhiteSpace(pot.Tooltip) ? pot.Name : pot.Tooltip;
+        var remain = pot.Family == PotionFamily.Green ? Shell.View.GreenRemain
+            : pot.Family == PotionFamily.Purple ? Shell.View.PurpleRemain : 0;
+        return remain > 0 ? $"{text} · {remain}s left" : text;
+    }
+
+    private static string SizeMark(string name)
+    {
+        if (name.Contains("(L)", StringComparison.OrdinalIgnoreCase) || name.Contains("Large", StringComparison.OrdinalIgnoreCase))
+            return "L";
+        if (name.Contains("(M)", StringComparison.OrdinalIgnoreCase) || name.Contains("Medium", StringComparison.OrdinalIgnoreCase))
+            return "M";
+        if (name.Contains("(S)", StringComparison.OrdinalIgnoreCase) || name.Contains("Small", StringComparison.OrdinalIgnoreCase))
+            return "S";
+        return "•";
+    }
+
+    private void OnHpPct(ChangeEventArgs e)
+    {
+        if (double.TryParse(Convert.ToString(e.Value), out var value))
+            Shell.SetPotionHpPercent(value);
+    }
+
+    private void OnMpPct(ChangeEventArgs e)
+    {
+        if (double.TryParse(Convert.ToString(e.Value), out var value))
+            Shell.SetPotionMpPercent(value);
     }
 }

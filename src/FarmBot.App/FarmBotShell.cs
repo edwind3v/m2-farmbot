@@ -32,6 +32,7 @@ public sealed class FarmBotShell : IDisposable
     private long _atlasAt;
     private float _atlasX;
     private float _atlasY;
+    private bool _potsArmed;
 
     public FarmBotShell()
         : this(ConfigStore.DefaultPath(AppContext.BaseDirectory), 0, null, null)
@@ -147,6 +148,66 @@ public sealed class FarmBotShell : IDisposable
         Notify();
     }
 
+    public bool ShowPotions
+    {
+        get
+        {
+            lock (_configGate)
+                return _config.ClientProfile == ClientProfile.Arthion;
+        }
+    }
+
+    public IReadOnlyList<PotionStack> Potions => View.Potions ?? Array.Empty<PotionStack>();
+
+    public bool PotionEnabled(uint vnum)
+    {
+        lock (_configGate)
+            return _config.PotionEnabledVnums.Contains(vnum);
+    }
+
+    private void ArmFoundPots()
+    {
+        if (_potsArmed)
+            return;
+        var pots = View.Potions;
+        if (pots == null || pots.Count == 0)
+            return;
+        lock (_configGate)
+        {
+            if (_config.PotionEnabledVnums.Count == 0)
+            {
+                foreach (var pot in pots)
+                    _config.PotionEnabledVnums.Add(pot.Vnum);
+            }
+            _potsArmed = true;
+        }
+    }
+
+    public void TogglePotion(uint vnum)
+    {
+        lock (_configGate)
+        {
+            if (!_config.PotionEnabledVnums.Remove(vnum))
+                _config.PotionEnabledVnums.Add(vnum);
+        }
+
+        SaveSettings();
+    }
+
+    public void SetPotionHpPercent(double value)
+    {
+        lock (_configGate)
+            _config.PotionHpPercent = Math.Clamp(value, 0, 100);
+        SaveSettings();
+    }
+
+    public void SetPotionMpPercent(double value)
+    {
+        lock (_configGate)
+            _config.PotionMpPercent = Math.Clamp(value, 0, 100);
+        SaveSettings();
+    }
+
     public IReadOnlyList<uint> BossVnums()
     {
         lock (_configGate)
@@ -164,6 +225,7 @@ public sealed class FarmBotShell : IDisposable
             if (runtime == null)
                 return;
             View = runtime.Capture();
+            ArmFoundPots();
             RefreshAtlas();
             Notify();
         }

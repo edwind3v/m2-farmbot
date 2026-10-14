@@ -86,6 +86,9 @@ public sealed class BotConfig
     public string StopHotkey { get; set; } = "F10";
     public string ClientPath { get; set; } = @"E:\TeraBoxDownload\1.Client\1.metin2client.exe";
     public ClientProfile ClientProfile { get; set; } = ClientProfile.Normal;
+    public double PotionHpPercent { get; set; } = 75;
+    public double PotionMpPercent { get; set; } = 75;
+    public List<uint> PotionEnabledVnums { get; set; } = new();
 
     public static BotConfig CreateDefault()
     {
@@ -147,6 +150,9 @@ public sealed class BotConfig
         StateTimeoutMs = Math.Clamp(StateTimeoutMs, 200, 120_000);
         FailsafeHpPercent = Math.Clamp(FailsafeHpPercent, 0, 100);
         HealHpPercent = Math.Clamp(HealHpPercent, 0, 100);
+        PotionHpPercent = Math.Clamp(PotionHpPercent, 0, 100);
+        PotionMpPercent = Math.Clamp(PotionMpPercent, 0, 100);
+        PotionEnabledVnums ??= new List<uint>();
         FarmRadius = Math.Max(0, FarmRadius);
         MaxFarmDistance = Math.Max(0, MaxFarmDistance);
         MapZoom = Math.Clamp(MapZoom <= 0 ? 100 : MapZoom, 20, 100);

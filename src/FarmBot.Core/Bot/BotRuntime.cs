@@ -17,7 +17,10 @@ public sealed record BotView(
     EntityState? Target,
     CombatState CombatState = CombatState.Idle,
     string NativeInterface = "",
-    bool RangedOnly = false);
+    bool RangedOnly = false,
+    IReadOnlyList<PotionStack>? Potions = null,
+    int GreenRemain = 0,
+    int PurpleRemain = 0);
 
 public sealed class BotRuntime : IDisposable
 {
@@ -48,6 +51,13 @@ public sealed class BotRuntime : IDisposable
     private int _lootDelay;
     private bool _lootRanged;
     private float _lootRadius;
+    private readonly PotionController _potions = new();
+    private IReadOnlyList<PotionStack> _potionStacks = Array.Empty<PotionStack>();
+    private int _greenRemain;
+    private int _purpleRemain;
+    private long _potsAtMs;
+    private bool _potsInGame;
+    private int _potsEmptyTries;
 
     public BotRuntime(
         IGameStateSource source,
@@ -187,7 +197,7 @@ public sealed class BotRuntime : IDisposable
     public BotView Capture()
     {
         lock (_gate)
-            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface, _rangedOnly);
+            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface, _rangedOnly, _potionStacks, _greenRemain, _purpleRemain);
     }
 
     public void TickOnce(BotConfig config, long nowMs, int dtMs)
@@ -197,6 +207,7 @@ public sealed class BotRuntime : IDisposable
             advancing.Advance(dtMs);
 
         var snapshot = OverlayHud(_source.GetSnapshot(nowMs));
+        TickPotions(snapshot, config, nowMs);
         if (snapshot != null)
         {
             _everReceived = true;
@@ -429,6 +440,70 @@ public sealed class BotRuntime : IDisposable
         catch (ObjectDisposedException)
         {
             return true;
+        }
+    }
+
+    private void TickPotions(WorldSnapshot? snapshot, BotConfig config, long nowMs)
+    {
+        if (config.ClientProfile != ClientProfile.Arthion || _sink == null)
+            return;
+        if (snapshot == null || snapshot.Player.MaxHp <= 0)
+        {
+            if (_potsInGame)
+            {
+                _potsInGame = false;
+                _potsEmptyTries = 0;
+                _potsAtMs = 0;
+                lock (_gate)
+                    _potionStacks = Array.Empty<PotionStack>();
+            }
+            return;
+        }
+
+        int have;
+        lock (_gate)
+            have = _potionStacks.Count;
+        var interval = !_potsInGame ? 0 : (have == 0 && _potsEmptyTries < 12 ? 1000 : 8000);
+        if (nowMs - _potsAtMs >= interval && _sink.TryReadPots(out var scan))
+        {
+            var first = !_potsInGame;
+            _potsAtMs = nowMs;
+            _potsInGame = true;
+            if (scan.Pots.Count > 0)
+            {
+                _potsEmptyTries = 12;
+                if (first)
+                    _log.Info($"pots loaded {scan.Pots.Count} stacks");
+            }
+            else if (_potsEmptyTries < 12)
+            {
+                _potsEmptyTries++;
+                if (first)
+                    _log.Info("pots scan empty, will retry after stats");
+            }
+            lock (_gate)
+            {
+                if (scan.Pots.Count > 0 || have == 0)
+                    _potionStacks = scan.Pots;
+                _greenRemain = scan.GreenRemain;
+                _purpleRemain = scan.PurpleRemain;
+            }
+            _potions.NoteNativeRemain(scan.GreenRemain, scan.PurpleRemain, nowMs);
+        }
+
+        IReadOnlyList<PotionStack> pots;
+        lock (_gate)
+            pots = _potionStacks;
+        var slot = _potions.NextSlot(pots, snapshot?.Player, config,
+            _potions.GreenRemainSec(nowMs) > 0 ? _potions.GreenRemainSec(nowMs) : _greenRemain,
+            _potions.PurpleRemainSec(nowMs) > 0 ? _potions.PurpleRemainSec(nowMs) : _purpleRemain,
+            nowMs);
+        if (slot != null && _sink.TryUseItem(slot.Value))
+            _log.Info($"use pot slot={slot.Value}");
+        lock (_gate)
+        {
+            _greenRemain = _potions.GreenRemainSec(nowMs);
+            _purpleRemain = _potions.PurpleRemainSec(nowMs);
         }
     }
 

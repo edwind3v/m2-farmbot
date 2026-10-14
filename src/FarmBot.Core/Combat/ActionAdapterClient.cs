@@ -328,6 +328,129 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         return _client.SelectCharacter(slot);
     }
 
+    public bool TryReadPots(out PotionScan scan)
+    {
+        scan = new PotionScan();
+        Ensure();
+        if (!_client.Connected)
+            return false;
+        var response = _client.Submit(ActionProtocol.GetPots, 0, true, updateStatus: false);
+        if (!response.Ok)
+            return false;
+        scan = new PotionScan
+        {
+            Pots = ParsePots(response.Pots),
+            GreenRemain = response.GreenRemain,
+            PurpleRemain = response.PurpleRemain
+        };
+        return true;
+    }
+
+    public bool TryUseItem(int slot)
+    {
+        Ensure();
+        if (!_client.Connected || slot < 0)
+            return false;
+        return _client.Submit(new ActionRequest
+        {
+            Type = ActionProtocol.UseItem,
+            Slot = slot,
+            Force = true
+        }, updateStatus: false).Ok;
+    }
+
+    private static IReadOnlyList<PotionStack> ParsePots(System.Text.Json.JsonElement pots)
+    {
+        string json;
+        if (pots.ValueKind == System.Text.Json.JsonValueKind.Array)
+            json = pots.GetRawText();
+        else if (pots.ValueKind == System.Text.Json.JsonValueKind.String)
+            json = pots.GetString() ?? "";
+        else
+            return Array.Empty<PotionStack>();
+        if (string.IsNullOrWhiteSpace(json))
+            return Array.Empty<PotionStack>();
+        try
+        {
+            var rows = System.Text.Json.JsonSerializer.Deserialize<List<PotionWire>>(json, FarmBot.Core.Json.JsonDefaults.Instance);
+            if (rows == null)
+                return Array.Empty<PotionStack>();
+            var list = new List<PotionStack>(rows.Count);
+            foreach (var row in rows)
+            {
+                if (row.V == 0 || !TryFamily(row.F, out var family))
+                    continue;
+                list.Add(new PotionStack
+                {
+                    Vnum = row.V,
+                    Name = row.N ?? "",
+                    Count = row.C,
+                    Slot = row.S,
+                    Family = family,
+                    Icon = IconSrc(row.I),
+                    DurationSec = row.D,
+                    Tooltip = string.IsNullOrWhiteSpace(row.T) ? (row.N ?? "") : row.T
+                });
+            }
+
+            return list;
+        }
+        catch
+        {
+            return Array.Empty<PotionStack>();
+        }
+    }
+
+    private static bool TryFamily(string? value, out PotionFamily family)
+    {
+        family = PotionFamily.Hp;
+        if (string.Equals(value, "hp", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (string.Equals(value, "mp", StringComparison.OrdinalIgnoreCase))
+        {
+            family = PotionFamily.Mp;
+            return true;
+        }
+        if (string.Equals(value, "green", StringComparison.OrdinalIgnoreCase))
+        {
+            family = PotionFamily.Green;
+            return true;
+        }
+        if (string.Equals(value, "purple", StringComparison.OrdinalIgnoreCase))
+        {
+            family = PotionFamily.Purple;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string IconSrc(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return "";
+        try
+        {
+            return "data:image/bmp;base64," + Convert.ToBase64String(File.ReadAllBytes(path));
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private sealed class PotionWire
+    {
+        public uint V { get; set; }
+        public string? N { get; set; }
+        public int C { get; set; }
+        public int S { get; set; }
+        public string? F { get; set; }
+        public string? I { get; set; }
+        public int D { get; set; }
+        public string? T { get; set; }
+    }
+
     public void Dispose() => _client.Dispose();
 
     private ActionResponse Session(Func<ActionResponse> send)
