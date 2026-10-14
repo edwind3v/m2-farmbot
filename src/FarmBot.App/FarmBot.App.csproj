@@ -17,4 +17,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+  <Target Name="BuildActionModule" AfterTargets="Build">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\tools\FarmBotAction\build.ps1&quot;" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\tools\FarmBotAction\FarmBotAction.dll;$(MSBuildThisFileDirectory)..\..\tools\FarmBotAction\FarmBotLoad.exe" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
+
 </Project>

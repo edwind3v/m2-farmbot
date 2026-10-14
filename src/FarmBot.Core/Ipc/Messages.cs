@@ -74,6 +74,9 @@ public sealed class CommandMessage
                 BotCommandKind.Pickup => "pickup",
                 BotCommandKind.Heal => "heal",
                 BotCommandKind.Stop => "stop",
+                BotCommandKind.SetTarget => "set_target",
+                BotCommandKind.PressActor => "press_actor",
+                BotCommandKind.Face => "face",
                 _ => "stop"
             },
             Vid = command.Vid,

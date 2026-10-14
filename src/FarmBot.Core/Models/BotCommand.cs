@@ -7,7 +7,10 @@ public enum BotCommandKind
     Skill,
     Pickup,
     Heal,
-    Stop
+    Stop,
+    SetTarget,
+    PressActor,
+    Face
 }
 
 public enum BotPhase
@@ -44,6 +47,9 @@ public sealed record BotCommand
         BotCommandKind.Pickup => $"pickup {TargetName} vid={Vid}",
         BotCommandKind.Heal => $"heal key={Key}",
         BotCommandKind.Stop => "stop",
+        BotCommandKind.SetTarget => $"set_target vid={Vid}",
+        BotCommandKind.PressActor => $"press_actor vid={Vid}",
+        BotCommandKind.Face => $"face vid={Vid}",
         _ => Kind.ToString()
     };
 
@@ -104,6 +110,26 @@ public sealed record BotCommand
     public static BotCommand Stop() => new()
     {
         Kind = BotCommandKind.Stop
+    };
+
+    public static BotCommand SetTarget(uint vid) => new()
+    {
+        Kind = BotCommandKind.SetTarget,
+        Vid = vid
+    };
+
+    public static BotCommand PressActor(uint vid, float x, float y) => new()
+    {
+        Kind = BotCommandKind.PressActor,
+        Vid = vid,
+        X = x,
+        Y = y
+    };
+
+    public static BotCommand Face(uint vid) => new()
+    {
+        Kind = BotCommandKind.Face,
+        Vid = vid
     };
 }
 

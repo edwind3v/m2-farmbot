@@ -1,0 +1,244 @@
+using FarmBot.Core.Configuration;
+using FarmBot.Core.Entities;
+using FarmBot.Core.Models;
+
+namespace FarmBot.Core.Combat;
+
+public sealed class AutoCombatController
+{
+    private CombatState _state = CombatState.Idle;
+    private uint _targetVid;
+    private long _targetAcquiredMs;
+    private long _stateEnteredMs;
+    private long _lastActionMs;
+    private long _lastAttackMs;
+    private float _lastPlayerX;
+    private float _lastPlayerY;
+    private long _lastMoveSeenMs;
+    private int _recoveries;
+    private bool _stopEmitted;
+
+    public CombatState State => _state;
+    public uint TargetVid => _targetVid;
+
+    public void Reset()
+    {
+        _state = CombatState.Idle;
+        _targetVid = 0;
+        _targetAcquiredMs = 0;
+        _stateEnteredMs = 0;
+        _lastActionMs = 0;
+        _lastAttackMs = 0;
+        _lastPlayerX = 0;
+        _lastPlayerY = 0;
+        _lastMoveSeenMs = 0;
+        _recoveries = 0;
+        _stopEmitted = false;
+    }
+
+    public CombatTick Tick(WorldSnapshot? snapshot, BotConfig config, bool enabled, long nowMs)
+    {
+        config.Sanitize();
+        if (!enabled)
+        {
+            var stop = !_stopEmitted;
+            Reset();
+            _stopEmitted = true;
+            return new CombatTick(CombatState.Idle, null, stop ? NativeCombatAction.Stop() : null, "stopped", false);
+        }
+
+        _stopEmitted = false;
+        if (snapshot == null)
+            return Enter(CombatState.Idle, nowMs, null, null, "waiting for live entities");
+
+        WatchMovement(snapshot.Player, nowMs);
+
+        var target = CurrentTarget(snapshot, config);
+        if (target != null && !IsLegalPveTarget(target))
+            target = null;
+
+        return _state switch
+        {
+            CombatState.Idle => OnIdle(snapshot, config, nowMs),
+            CombatState.AcquireTarget => OnAcquire(snapshot, config, nowMs),
+            CombatState.Approach => OnApproach(snapshot, config, target, nowMs),
+            CombatState.FaceTarget => OnFace(target, nowMs),
+            CombatState.Attack => OnAttack(snapshot, config, target, nowMs),
+            CombatState.Wait => OnWait(config, target, nowMs),
+            CombatState.Verify => OnVerify(snapshot, config, target, nowMs),
+            CombatState.Recover => OnRecover(snapshot, config, nowMs),
+            _ => Enter(CombatState.Idle, nowMs, null, null, "unknown state")
+        };
+    }
+
+    private CombatTick OnIdle(WorldSnapshot snapshot, BotConfig config, long nowMs) =>
+        OnAcquire(snapshot, config, nowMs);
+
+    private CombatTick OnAcquire(WorldSnapshot snapshot, BotConfig config, long nowMs)
+    {
+        var picked = TargetSelector.Select(snapshot, config, 0);
+        if (picked == null || !IsLegalPveTarget(picked))
+            return Enter(CombatState.AcquireTarget, nowMs, null, null, "no farmable monster or Metin in range");
+
+        _targetVid = picked.Vid;
+        _targetAcquiredMs = nowMs;
+        _recoveries = 0;
+        NoteMove(snapshot.Player, nowMs);
+        return Enter(CombatState.Approach, nowMs, picked, NativeCombatAction.SetTarget(picked.Vid), $"acquired VID {picked.Vid}");
+    }
+
+    private CombatTick OnApproach(WorldSnapshot snapshot, BotConfig config, EntityState? target, long nowMs)
+    {
+        if (target == null)
+            return Enter(CombatState.Verify, nowMs, null, null, "target missing while approaching");
+        if (TimedOut(config, nowMs))
+            return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
+        if (IsStuck(snapshot.Player, config, nowMs) && !InRange(target, config))
+            return Enter(CombatState.Recover, nowMs, target, null, "stuck approaching");
+        if (InRange(target, config))
+            return Enter(CombatState.FaceTarget, nowMs, target, NativeCombatAction.Face(target.Vid), "in attack range");
+
+        if (ShouldEmit(nowMs, config.MoveIntervalMs))
+        {
+            _lastActionMs = nowMs;
+            return Stay(target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y),
+                $"approach VID {target.Vid} dist {target.Distance:0}");
+        }
+
+        return Stay(target, null, $"approaching VID {target.Vid} dist {target.Distance:0}");
+    }
+
+    private CombatTick OnFace(EntityState? target, long nowMs)
+    {
+        if (target == null)
+            return Enter(CombatState.Verify, nowMs, null, null, "target lost before facing");
+        return Enter(CombatState.Attack, nowMs, target, NativeCombatAction.Face(target.Vid), $"face VID {target.Vid}");
+    }
+
+    private CombatTick OnAttack(WorldSnapshot snapshot, BotConfig config, EntityState? target, long nowMs)
+    {
+        if (target == null)
+            return Enter(CombatState.Verify, nowMs, null, null, "target lost before attack");
+        if (!InRange(target, config))
+            return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "left attack range");
+
+        _lastAttackMs = nowMs;
+        return Enter(CombatState.Wait, nowMs, target, NativeCombatAction.Attack(target.Vid), $"attack VID {target.Vid}");
+    }
+
+    private CombatTick OnWait(BotConfig config, EntityState? target, long nowMs)
+    {
+        if (nowMs - _stateEnteredMs < config.AttackIntervalMs)
+            return Stay(target, null, "waiting for attack interval");
+        return Enter(CombatState.Verify, nowMs, target, null, "verify after attack");
+    }
+
+    private CombatTick OnVerify(WorldSnapshot snapshot, BotConfig config, EntityState? target, long nowMs)
+    {
+        if (target == null || IsDead(target))
+        {
+            _targetVid = 0;
+            return Enter(CombatState.AcquireTarget, nowMs, null, null, "target dead or missing; selecting next");
+        }
+
+        if (TimedOut(config, nowMs))
+            return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
+        if (InRange(target, config))
+            return Enter(CombatState.Attack, nowMs, target, null, "target still attackable");
+        return Enter(CombatState.Approach, nowMs, target, null, "target still alive out of range");
+    }
+
+    private CombatTick OnRecover(WorldSnapshot snapshot, BotConfig config, long nowMs)
+    {
+        _recoveries++;
+        var target = CurrentTarget(snapshot, config);
+        if (target == null || _recoveries >= 3 || TimedOut(config, nowMs))
+        {
+            _targetVid = 0;
+            return Enter(CombatState.AcquireTarget, nowMs, null, NativeCombatAction.Stop(), "recover: drop target");
+        }
+
+        NoteMove(snapshot.Player, nowMs);
+        return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y),
+            "recover: re-click actor");
+    }
+
+    private EntityState? CurrentTarget(WorldSnapshot snapshot, BotConfig config)
+    {
+        if (_targetVid == 0)
+            return null;
+        var found = snapshot.Entities.FirstOrDefault(item => item.Vid == _targetVid);
+        if (found == null)
+            return null;
+        if (!IsLegalPveTarget(found))
+            return null;
+        if (IsDead(found))
+            return null;
+        if (TargetSelector.Select(snapshot, config, _targetVid)?.Vid != _targetVid && !found.IsCombatant)
+            return null;
+        return found;
+    }
+
+    private static bool IsLegalPveTarget(EntityState entity)
+    {
+        if (entity.ResolvedType is ActorType.Player or ActorType.Npc)
+            return false;
+        if (entity.Kind is EntityKind.Player or EntityKind.Npc)
+            return false;
+        return entity.ResolvedType is ActorType.Enemy or ActorType.Stone ||
+               entity.Kind is EntityKind.Monster or EntityKind.Metin or EntityKind.Boss;
+    }
+
+    private static bool IsDead(EntityState entity) => entity.Hp <= 0;
+
+    private static bool InRange(EntityState target, BotConfig config) =>
+        target.Distance <= config.AttackRange;
+
+    private bool TimedOut(BotConfig config, long nowMs) =>
+        _targetVid != 0 && _targetAcquiredMs != 0 && nowMs - _targetAcquiredMs >= config.TargetTimeoutMs;
+
+    private bool IsStuck(PlayerState player, BotConfig config, long nowMs)
+    {
+        if (_lastMoveSeenMs == 0)
+            return false;
+        var dx = player.X - _lastPlayerX;
+        var dy = player.Y - _lastPlayerY;
+        if (dx * dx + dy * dy > 25)
+            return false;
+        return nowMs - _lastMoveSeenMs >= config.StuckTimeoutMs;
+    }
+
+    private void WatchMovement(PlayerState player, long nowMs)
+    {
+        var dx = player.X - _lastPlayerX;
+        var dy = player.Y - _lastPlayerY;
+        if (dx * dx + dy * dy > 25)
+            NoteMove(player, nowMs);
+    }
+
+    private void NoteMove(PlayerState player, long nowMs)
+    {
+        _lastPlayerX = player.X;
+        _lastPlayerY = player.Y;
+        _lastMoveSeenMs = nowMs;
+    }
+
+    private bool ShouldEmit(long nowMs, int intervalMs) =>
+        _lastActionMs == 0 || nowMs - _lastActionMs >= intervalMs;
+
+    private CombatTick Enter(CombatState state, long nowMs, EntityState? target, NativeCombatAction? action, string reason)
+    {
+        if (_state != state)
+        {
+            _state = state;
+            _stateEnteredMs = nowMs;
+            if (action != null)
+                _lastActionMs = nowMs;
+        }
+
+        return new CombatTick(state, target, action, reason, true);
+    }
+
+    private CombatTick Stay(EntityState? target, NativeCombatAction? action, string reason) =>
+        new(_state, target, action, reason, true);
+}

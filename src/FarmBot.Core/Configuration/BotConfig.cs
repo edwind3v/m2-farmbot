@@ -40,6 +40,8 @@ public sealed class BotConfig
     public int TickMs { get; set; } = 100;
     public float AttackRange { get; set; } = 300;
     public int AttackIntervalMs { get; set; } = 450;
+    public int TargetTimeoutMs { get; set; } = 20_000;
+    public int StuckTimeoutMs { get; set; } = 4_000;
     public bool AttackAlsoPaths { get; set; } = true;
     public string AttackKey { get; set; } = "space";
     public float FarmRadius { get; set; } = 1500;
@@ -73,6 +75,7 @@ public sealed class BotConfig
     public List<SkillSetting> Skills { get; set; } = new();
     public string StartHotkey { get; set; } = "F9";
     public string StopHotkey { get; set; } = "F10";
+    public string ClientPath { get; set; } = @"E:\TeraBoxDownload\1.Client\1.metin2client.exe";
 
     public static BotConfig CreateDefault()
     {
@@ -119,6 +122,8 @@ public sealed class BotConfig
         TickMs = Math.Clamp(TickMs, 20, 2000);
         AttackRange = Math.Max(1, AttackRange);
         AttackIntervalMs = Math.Clamp(AttackIntervalMs, 50, 60_000);
+        TargetTimeoutMs = Math.Clamp(TargetTimeoutMs, 500, 300_000);
+        StuckTimeoutMs = Math.Clamp(StuckTimeoutMs, 200, 60_000);
         PickupIntervalMs = Math.Clamp(PickupIntervalMs, 50, 60_000);
         MoveIntervalMs = Math.Clamp(MoveIntervalMs, 50, 60_000);
         HealCooldownMs = Math.Clamp(HealCooldownMs, 50, 60_000);
@@ -139,6 +144,7 @@ public sealed class BotConfig
         HealKey ??= "";
         StartHotkey = string.IsNullOrWhiteSpace(StartHotkey) ? "F9" : StartHotkey.Trim();
         StopHotkey = string.IsNullOrWhiteSpace(StopHotkey) ? "F10" : StopHotkey.Trim();
+        ClientPath ??= "";
     }
 
     public BotConfig DeepCopy()

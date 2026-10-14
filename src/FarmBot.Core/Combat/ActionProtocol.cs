@@ -1,0 +1,91 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using FarmBot.Core.Json;
+
+namespace FarmBot.Core.Combat;
+
+public sealed class ActionRequest
+{
+    public string Type { get; set; } = "";
+    public string Token { get; set; } = "";
+    public uint Vid { get; set; }
+    public bool Force { get; set; } = true;
+}
+
+public sealed class ActionResponse
+{
+    public bool Ok { get; set; }
+    public string Type { get; set; } = "";
+    public uint TargetVid { get; set; }
+    public string Reason { get; set; } = "";
+    public string Convention { get; set; } = "";
+}
+
+public static class ActionProtocol
+{
+    public const string DefaultPipeName = "FarmBotAction";
+    public const string Auth = "auth";
+    public const string SetTarget = "set_target";
+    public const string PressActor = "press_actor";
+    public const string Attack = "attack";
+    public const string AttackKey = "attack_key";
+    public const string Face = "face";
+    public const string Stop = "stop";
+    public const int Version = 1;
+
+    public static byte[] Encode(object value) => FrameEncode(JsonSerializer.SerializeToUtf8Bytes(value, JsonDefaults.Instance));
+
+    public static ActionRequest DecodeRequest(byte[] payload) =>
+        JsonSerializer.Deserialize<ActionRequest>(payload, JsonDefaults.Instance) ?? new ActionRequest();
+
+    public static ActionResponse DecodeResponse(byte[] payload) =>
+        JsonSerializer.Deserialize<ActionResponse>(payload, JsonDefaults.Instance) ?? new ActionResponse();
+
+    public static bool TokensEqual(string left, string right)
+    {
+        var a = Encoding.UTF8.GetBytes(left ?? "");
+        var b = Encoding.UTF8.GetBytes(right ?? "");
+        if (a.Length != b.Length)
+            return false;
+        return CryptographicOperations.FixedTimeEquals(a, b);
+    }
+
+    public static string NewToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+
+    public static byte[] FrameEncode(byte[] payload)
+    {
+        var packet = new byte[4 + payload.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(packet, payload.Length);
+        payload.CopyTo(packet, 4);
+        return packet;
+    }
+
+    public static bool TryReadFrame(Stream stream, out byte[] payload)
+    {
+        payload = Array.Empty<byte>();
+        var header = new byte[4];
+        if (!ReadExact(stream, header))
+            return false;
+        var length = BinaryPrimitives.ReadInt32LittleEndian(header);
+        if (length <= 0 || length > 64 * 1024)
+            return false;
+        payload = new byte[length];
+        return ReadExact(stream, payload);
+    }
+
+    private static bool ReadExact(Stream stream, byte[] buffer)
+    {
+        var read = 0;
+        while (read < buffer.Length)
+        {
+            var n = stream.Read(buffer, read, buffer.Length - read);
+            if (n <= 0)
+                return false;
+            read += n;
+        }
+
+        return true;
+    }
+}

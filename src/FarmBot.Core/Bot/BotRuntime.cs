@@ -4,6 +4,7 @@ using FarmBot.Core.Input;
 using FarmBot.Core.Logging;
 using FarmBot.Core.Models;
 using FarmBot.Core.Perception;
+using FarmBot.Core.Safety;
 
 namespace FarmBot.Core.Bot;
 
@@ -12,7 +13,9 @@ public sealed record BotView(
     BotPhase Phase,
     string Reason,
     WorldSnapshot? Snapshot,
-    EntityState? Target);
+    EntityState? Target,
+    CombatState CombatState = CombatState.Idle,
+    string NativeInterface = "");
 
 public sealed class BotRuntime : IDisposable
 {
@@ -21,8 +24,13 @@ public sealed class BotRuntime : IDisposable
     private readonly IBotLog _log;
     private readonly Func<BotConfig> _configProvider;
     private readonly Func<bool> _cornerProbe;
+    private readonly INativeActionSink? _sink;
+    private readonly bool _nativeCombat;
     private readonly BotBrain _brain = new();
+    private readonly AutoCombatController _combat = new();
     private readonly object _gate = new();
+    private CombatState _combatState = CombatState.Idle;
+    private string _nativeInterface = "";
     private CancellationTokenSource? _cts;
     private Thread? _thread;
     private bool _enabled;
@@ -38,13 +46,17 @@ public sealed class BotRuntime : IDisposable
         IGameControl control,
         IBotLog log,
         Func<BotConfig> configProvider,
-        Func<bool>? cornerProbe = null)
+        Func<bool>? cornerProbe = null,
+        bool nativeCombat = false,
+        INativeActionSink? sink = null)
     {
         _source = source;
         _control = control;
         _log = log;
         _configProvider = configProvider;
         _cornerProbe = cornerProbe ?? (() => false);
+        _nativeCombat = nativeCombat;
+        _sink = sink;
     }
 
     public void StartLoop()
@@ -65,7 +77,10 @@ public sealed class BotRuntime : IDisposable
         lock (_gate)
         {
             if (enabled && !_enabled)
+            {
                 _brain.Reset();
+                _combat.Reset();
+            }
             _enabled = enabled;
             if (!enabled)
             {
@@ -117,7 +132,7 @@ public sealed class BotRuntime : IDisposable
     public BotView Capture()
     {
         lock (_gate)
-            return new BotView(_enabled, _phase, _reason, _latest, _target);
+            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface);
     }
 
     public void TickOnce(BotConfig config, long nowMs, int dtMs)
@@ -139,7 +154,9 @@ public sealed class BotRuntime : IDisposable
 
         var corner = enabled && config.StopOnCorner && _cornerProbe();
         var context = new TickContext(enabled, corner, _everReceived, _lastStateAtMs);
-        var decision = _brain.Tick(snapshot, config, context, nowMs);
+        var decision = _nativeCombat
+            ? TickNative(snapshot, config, context, nowMs)
+            : _brain.Tick(snapshot, config, context, nowMs);
 
         if (decision.Phase == BotPhase.Failsafe && enabled)
         {
@@ -154,7 +171,15 @@ public sealed class BotRuntime : IDisposable
             {
                 _control.Execute(decision.Command);
                 if (decision.Command.Kind != BotCommandKind.Stop)
-                    _log.Info(decision.Command.Describe());
+                {
+                    var status = _sink?.Status ?? "";
+                    if (status.Contains("rejected", StringComparison.OrdinalIgnoreCase) ||
+                        status.Contains("not connected", StringComparison.OrdinalIgnoreCase) ||
+                        status.Contains("I/O failed", StringComparison.OrdinalIgnoreCase))
+                        _log.Warn($"{decision.Command.Describe()} failed: {status}");
+                    else
+                        _log.Info($"{decision.Command.Describe()} {status}");
+                }
             }
             catch (Exception ex)
             {
@@ -166,6 +191,7 @@ public sealed class BotRuntime : IDisposable
         {
             _latest = snapshot;
             _target = decision.Target;
+            _nativeInterface = _sink?.Status ?? "";
             if (_enabled || decision.Phase == BotPhase.Failsafe)
             {
                 _phase = decision.Phase;
@@ -173,6 +199,41 @@ public sealed class BotRuntime : IDisposable
             }
         }
     }
+
+    private BrainDecision TickNative(WorldSnapshot? snapshot, BotConfig config, TickContext context, long nowMs)
+    {
+        if (!context.Enabled)
+        {
+            _combat.Reset();
+            _combatState = CombatState.Idle;
+            return new BrainDecision(BotPhase.Stopped, null, null, "stopped");
+        }
+
+        var trip = FailsafeMonitor.Reason(snapshot, config, context, nowMs);
+        if (trip != null)
+        {
+            _combat.Reset();
+            _combatState = CombatState.Idle;
+            return new BrainDecision(BotPhase.Failsafe, null, BotCommand.Stop(), trip);
+        }
+
+        var tick = _combat.Tick(snapshot, config, context.Enabled, nowMs);
+        _combatState = tick.State;
+        return new BrainDecision(ToPhase(tick.State), tick.Target, tick.Action?.ToCommand(), tick.Reason);
+    }
+
+    private static BotPhase ToPhase(CombatState state) => state switch
+    {
+        CombatState.Idle => BotPhase.Idle,
+        CombatState.AcquireTarget => BotPhase.Idle,
+        CombatState.Approach => BotPhase.Moving,
+        CombatState.FaceTarget => BotPhase.Moving,
+        CombatState.Attack => BotPhase.Attacking,
+        CombatState.Wait => BotPhase.Attacking,
+        CombatState.Verify => BotPhase.Attacking,
+        CombatState.Recover => BotPhase.Moving,
+        _ => BotPhase.Idle
+    };
 
     public void Dispose()
     {

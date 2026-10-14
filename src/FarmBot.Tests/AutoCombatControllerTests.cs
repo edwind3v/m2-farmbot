@@ -1,0 +1,126 @@
+using FarmBot.Core.Combat;
+using FarmBot.Core.Models;
+
+namespace FarmBot.Tests;
+
+public class AutoCombatControllerTests
+{
+    [Fact]
+    public void StopEmitsOneNativeStopAndBlocksFurtherActions()
+    {
+        var controller = new AutoCombatController();
+        var world = Fixtures.World(Fixtures.Mob(11, "Wild Dog", EntityKind.Monster, 80, 0));
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+
+        var start = controller.Tick(world, config, true, 1_000);
+        Assert.Equal(CombatState.Approach, start.State);
+        Assert.Equal(11u, start.Target!.Vid);
+        Assert.Equal(NativeActionKind.SetTarget, start.Action!.Kind);
+
+        var stop = controller.Tick(world, config, false, 1_100);
+        Assert.Equal(CombatState.Idle, stop.State);
+        Assert.Equal(NativeActionKind.Stop, stop.Action!.Kind);
+
+        var again = controller.Tick(world, config, false, 1_200);
+        Assert.Null(again.Action);
+        Assert.Equal(0u, controller.TargetVid);
+    }
+
+    [Fact]
+    public void AcquiresApproachesAndAttacksALiveMonster()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.AttackIntervalMs = 400;
+        config.MoveIntervalMs = 100;
+
+        var far = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 800, 0));
+        var acquired = controller.Tick(far, config, true, 5_000);
+        Assert.Equal(21u, acquired.Target!.Vid);
+        Assert.Equal(NativeActionKind.SetTarget, acquired.Action!.Kind);
+
+        var approach = controller.Tick(far, config, true, 5_200);
+        Assert.Equal(CombatState.Approach, approach.State);
+        Assert.Equal(NativeActionKind.PressActor, approach.Action!.Kind);
+
+        var near = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 80, 0));
+        var face = controller.Tick(near, config, true, 5_400);
+        Assert.Equal(CombatState.FaceTarget, face.State);
+
+        var attack = controller.Tick(near, config, true, 5_500);
+        Assert.Equal(CombatState.Attack, attack.State);
+
+        var wait = controller.Tick(near, config, true, 5_501);
+        Assert.Equal(CombatState.Wait, wait.State);
+        Assert.Equal(NativeActionKind.Attack, wait.Action!.Kind);
+    }
+
+    [Fact]
+    public void DetectsDeathAndSelectsTheNextFarmableTarget()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+
+        var first = Fixtures.World(
+            Fixtures.Mob(31, "Dog", EntityKind.Monster, 40, 0),
+            Fixtures.Mob(32, "Metin", EntityKind.Metin, 60, 0));
+        controller.Tick(first, config, true, 8_000);
+        Assert.Equal(32u, controller.TargetVid);
+
+        var dead = Fixtures.World(
+            Fixtures.Mob(31, "Dog", EntityKind.Monster, 40, 0),
+            Fixtures.Mob(32, "Metin", EntityKind.Metin, 60, 0, hp: 0));
+        controller.Tick(dead, config, true, 8_100);
+        var verify = controller.Tick(dead, config, true, 8_200);
+        Assert.True(verify.State is CombatState.Verify or CombatState.AcquireTarget or CombatState.Approach);
+
+        var next = Fixtures.World(Fixtures.Mob(31, "Dog", EntityKind.Monster, 40, 0));
+        CombatTick tick = verify;
+        for (var t = 8_300; t <= 9_000 && controller.TargetVid != 31; t += 100)
+            tick = controller.Tick(next, config, true, t);
+
+        Assert.Equal(31u, controller.TargetVid);
+        Assert.DoesNotContain("player", tick.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NeverSelectsPlayersOrNpcs()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        var world = Fixtures.World(
+            Fixtures.Mob(41, "OtherPlayer", EntityKind.Player, 50, 0),
+            Fixtures.Mob(42, "Guard", EntityKind.Npc, 60, 0));
+
+        var tick = controller.Tick(world, config, true, 2_000);
+        Assert.Equal(CombatState.AcquireTarget, tick.State);
+        Assert.Null(tick.Target);
+        Assert.Equal(0u, controller.TargetVid);
+    }
+
+    [Fact]
+    public void DisconnectedSinkDoesNotPretendTheClientAttacked()
+    {
+        var sink = new DisconnectedActionSink();
+        var action = NativeCombatAction.Attack(99);
+        Assert.False(sink.Available);
+        Assert.False(sink.TrySubmit(action));
+        Assert.Contains("no external command interface", sink.Status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RecordingSinkKeepsSubmittedGameplayActions()
+    {
+        var sink = new RecordingActionSink();
+        Assert.True(sink.TrySubmit(NativeCombatAction.SetTarget(7)));
+        Assert.True(sink.TrySubmit(NativeCombatAction.PressActor(7, 10, 20)));
+        Assert.Equal(2, sink.Actions.Count);
+        Assert.Equal(NativeActionKind.SetTarget, sink.Actions[0].Kind);
+        Assert.Equal(7u, sink.Actions[1].Vid);
+    }
+}

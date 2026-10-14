@@ -1,4 +1,5 @@
 using FarmBot.Core.Bot;
+using FarmBot.Core.Combat;
 using FarmBot.Core.Configuration;
 using FarmBot.Core.Entities;
 using FarmBot.Core.Input;
@@ -34,8 +35,13 @@ public sealed class MainForm : Form
     private IGameStateProvider? _provider;
 
     private ComboBox _mode = null!;
+    private ComboBox _clientBox = null!;
+    private Button _attach = null!;
+    private Button _launch = null!;
     private Button _start = null!;
     private Button _stop = null!;
+    private ActionModuleHost? _actionHost;
+    private AdapterActionSink? _actionSink;
     private Label _status = null!;
     private Label _detail = null!;
     private Label _targetBanner = null!;
@@ -90,7 +96,7 @@ public sealed class MainForm : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        _log.Info("FarmBot ready. Simulator mode uses local test entities. Live mode reads 1.metin2client.exe through user-mode ReadProcessMemory.");
+        _log.Info("FarmBot ready. Live mode: Attach or Launch the local client, then Start.");
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -293,20 +299,27 @@ public sealed class MainForm : Form
             Left = 132,
             Top = 24
         };
-        _mode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
+        _mode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
         _mode.Items.AddRange(new object[] { "Simulator", "Live client" });
         _mode.SelectedIndex = 0;
+        _clientBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
+        _attach = new Button { Text = "Attach", Width = 72, Height = 28 };
+        _launch = new Button { Text = "Launch", Width = 72, Height = 28 };
         _start = new Button { Text = "Start", Width = 96, Height = 32 };
         _stop = new Button { Text = "Stop", Width = 96, Height = 32, Enabled = false };
+        StyleButton(_attach, Panel, Ink);
+        StyleButton(_launch, Panel, Ink);
         StyleButton(_start, Accent, Color.FromArgb(28, 24, 16));
         StyleButton(_stop, Danger, Color.White);
+        _attach.Click += (_, _) => AttachSelectedClient();
+        _launch.Click += (_, _) => LaunchClient();
         _start.Click += (_, _) => StartBot();
         _stop.Click += (_, _) => _runtime?.Stop();
         _status = new Label { AutoSize = false, Left = 16, Top = 58, Height = 22, ForeColor = Ink };
         _detail = new Label { AutoSize = false, Left = 16, Top = 80, Height = 20, ForeColor = Muted };
         _targetBanner = new Label { AutoSize = false, Left = 16, Top = 102, Height = 28, ForeColor = Accent, Font = new Font("Segoe UI", 11f, FontStyle.Bold) };
         header.Resize += (_, _) => LayoutHeader(header);
-        header.Controls.AddRange(new Control[] { title, subtitle, _mode, _start, _stop, _status, _detail, _targetBanner });
+        header.Controls.AddRange(new Control[] { title, subtitle, _mode, _clientBox, _attach, _launch, _start, _stop, _status, _detail, _targetBanner });
 
         Controls.Add(entitiesHost);
         Controls.Add(settingsHost);
@@ -321,7 +334,13 @@ public sealed class MainForm : Form
         _stop.Top = 16;
         _start.Left = header.Width - 216;
         _start.Top = 16;
-        _mode.Left = header.Width - 400;
+        _launch.Left = header.Width - 296;
+        _launch.Top = 18;
+        _attach.Left = header.Width - 372;
+        _attach.Top = 18;
+        _clientBox.Left = header.Width - 548;
+        _clientBox.Top = 18;
+        _mode.Left = header.Width - 686;
         _mode.Top = 18;
         _status.Width = header.Width - 32;
         _detail.Width = header.Width - 32;
@@ -421,6 +440,9 @@ public sealed class MainForm : Form
         if (_provider is IDisposable disposable)
             disposable.Dispose();
         _provider = null;
+        _actionSink?.Dispose();
+        _actionSink = null;
+        _actionHost = null;
         _pipe?.Dispose();
         _pipe = null;
 
@@ -434,15 +456,18 @@ public sealed class MainForm : Form
 
         var live = new LiveGameStateProvider(_log);
         _provider = live;
-        var sendInput = new SendInputGameControl(
-            () => GameWindowFinder.Find(CopyConfig().WindowTitleContains),
-            _log);
+        _actionHost = new ActionModuleHost();
+        _actionSink = new AdapterActionSink(_actionHost.PipeName, _actionHost.Token);
+        RefreshClientList();
+        var native = new NativeGameControl(_actionSink, _log);
         _runtime = new BotRuntime(
             live,
-            sendInput,
+            native,
             _log,
             CopyConfig,
-            () => CursorProbe.IsInTopLeftCorner());
+            () => CursorProbe.IsInTopLeftCorner(),
+            nativeCombat: true,
+            _actionSink);
     }
 
     private void OnModeChanged()
@@ -453,7 +478,116 @@ public sealed class MainForm : Form
         PullConfig();
         WireRuntime();
         _runtime?.StartLoop();
-        _log.Info(_mode.SelectedIndex <= 0 ? "simulator mode" : "live client mode — read-only process memory");
+        _log.Info(_mode.SelectedIndex <= 0
+            ? "simulator mode"
+            : "live client mode — Attach or Launch, then Start");
+    }
+
+    private void RefreshClientList()
+    {
+        if (_clientBox == null)
+            return;
+        var selectedPid = (_clientBox.SelectedItem as ClientProcessInfo)?.ProcessId;
+        _clientBox.Items.Clear();
+        foreach (var client in ActionModuleHost.ListClients())
+            _clientBox.Items.Add(client);
+        if (_clientBox.Items.Count == 0)
+            return;
+        for (var i = 0; i < _clientBox.Items.Count; i++)
+        {
+            if (_clientBox.Items[i] is ClientProcessInfo info && info.ProcessId == selectedPid)
+            {
+                _clientBox.SelectedIndex = i;
+                return;
+            }
+        }
+
+        _clientBox.SelectedIndex = 0;
+    }
+
+    private void AttachSelectedClient()
+    {
+        RefreshClientList();
+        if (_actionHost == null || _actionSink == null)
+        {
+            _log.Warn("switch to Live client first");
+            return;
+        }
+
+        if (_clientBox.SelectedItem is not ClientProcessInfo client)
+        {
+            _log.Warn("no running Metin2 client to attach");
+            return;
+        }
+
+        if (!_actionHost.TryAttach(client.ProcessId, out var status))
+        {
+            _log.Error(status);
+            return;
+        }
+
+        if (!_actionHost.WaitUntilListening(_actionSink))
+        {
+            _log.Error("companion loaded but pipe did not accept auth: " + _actionSink.Status);
+            return;
+        }
+
+        _log.Info($"companion attached to PID {client.ProcessId}: {_actionSink.Status}");
+    }
+
+    private void LaunchClient()
+    {
+        if (_actionHost == null || _actionSink == null)
+        {
+            _log.Warn("switch to Live client first");
+            return;
+        }
+
+        var path = _config.ClientPath;
+        if (!File.Exists(path))
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Filter = "Metin2 client|1.metin2client.exe;*.exe",
+                Title = "Select the original Metin2 client"
+            };
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+            path = dialog.FileName;
+            lock (_configGate)
+                _config.ClientPath = path;
+        }
+
+        if (!_actionHost.TryLaunch(path, out var status))
+        {
+            _log.Error(status);
+            return;
+        }
+
+        if (!_actionHost.WaitUntilListening(_actionSink))
+        {
+            _log.Error("client launched but companion pipe did not accept auth: " + _actionSink.Status);
+            return;
+        }
+
+        RefreshClientList();
+        _log.Info($"companion launched {path}: {_actionSink.Status}");
+    }
+
+    private bool EnsureCompanion()
+    {
+        if (_actionSink?.Available == true)
+            return true;
+        RefreshClientList();
+        if (_clientBox.SelectedItem is ClientProcessInfo)
+        {
+            AttachSelectedClient();
+            if (_actionSink?.Available == true)
+                return true;
+        }
+
+        _log.Error("companion is not connected. Attach a running client or Launch the original exe first.");
+        return false;
     }
 
     private void StartBot()
@@ -470,6 +604,9 @@ public sealed class MainForm : Form
             _centerX.Value = Clamp(_config.FarmCenterX, _centerX);
             _centerY.Value = Clamp(_config.FarmCenterY, _centerY);
         }
+
+        if (_mode.SelectedIndex > 0 && !EnsureCompanion())
+            return;
 
         RegisterHotkeys();
         ConfigStore.Save(_configPath, _config);
@@ -521,7 +658,9 @@ public sealed class MainForm : Form
         var player = view.Snapshot?.Player;
         var hp = player == null ? "no state" : $"HP {player.Hp}/{player.MaxHp} ({player.HpPercent:0}%)  MP {player.Mp}/{player.MaxMp}";
         var where = player == null ? "" : $"   pos {player.X:0},{player.Y:0},{player.Z:0}  {player.MapName}";
-        _status.Text = $"{view.Phase}  ·  {view.Reason}";
+        _status.Text = view.CombatState == CombatState.Idle
+            ? $"{view.Phase}  ·  {view.Reason}"
+            : $"{view.CombatState}  ·  {view.Reason}";
         _status.ForeColor = view.Phase == BotPhase.Failsafe ? Danger : view.Enabled ? Ok : Ink;
         _targetBanner.Text = view.Target == null
             ? "Farming target: none"
@@ -534,7 +673,8 @@ public sealed class MainForm : Form
             : GameWindowFinder.Find(_config.WindowTitleContains) is { } found
                 ? $"window \"{found.Title}\""
                 : "game window not found";
-        _detail.Text = hp + where + "   " + feed + "   " + window;
+        var bridge = string.IsNullOrEmpty(view.NativeInterface) ? "" : "   " + view.NativeInterface;
+        _detail.Text = hp + where + "   " + feed + "   " + window + bridge;
         FillEntities(view);
     }
 
