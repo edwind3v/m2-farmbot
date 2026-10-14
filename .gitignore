@@ -1,0 +1,11 @@
+bin/
+obj/
+publish/
+*.user
+*.exe
+.vs/
+TestResults/
+*.obj
+*.ilk
+*.pdb
+client-bridge/*.exe

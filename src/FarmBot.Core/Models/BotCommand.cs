@@ -1,0 +1,112 @@
+namespace FarmBot.Core.Models;
+
+public enum BotCommandKind
+{
+    Attack,
+    Move,
+    Skill,
+    Pickup,
+    Heal,
+    Stop
+}
+
+public enum BotPhase
+{
+    Stopped,
+    WaitingForClient,
+    Idle,
+    Moving,
+    Attacking,
+    Looting,
+    Returning,
+    Failsafe
+}
+
+public sealed record BotCommand
+{
+    public BotCommandKind Kind { get; init; }
+    public uint Vid { get; init; }
+    public string TargetName { get; init; } = "";
+    public float X { get; init; }
+    public float Y { get; init; }
+    public int ScreenX { get; init; }
+    public int ScreenY { get; init; }
+    public bool OnScreen { get; init; }
+    public int SkillSlot { get; init; }
+    public string Key { get; init; } = "";
+    public int MpCost { get; init; }
+
+    public string Describe() => Kind switch
+    {
+        BotCommandKind.Attack => $"attack {TargetName} vid={Vid}",
+        BotCommandKind.Move => $"move ({X:0},{Y:0})",
+        BotCommandKind.Skill => $"skill slot={SkillSlot} key={Key} on {TargetName} vid={Vid}",
+        BotCommandKind.Pickup => $"pickup {TargetName} vid={Vid}",
+        BotCommandKind.Heal => $"heal key={Key}",
+        BotCommandKind.Stop => "stop",
+        _ => Kind.ToString()
+    };
+
+    public static BotCommand Attack(EntityState target, string key) => new()
+    {
+        Kind = BotCommandKind.Attack,
+        Vid = target.Vid,
+        TargetName = target.Name,
+        X = target.X,
+        Y = target.Y,
+        ScreenX = target.ScreenX,
+        ScreenY = target.ScreenY,
+        OnScreen = target.OnScreen,
+        Key = key
+    };
+
+    public static BotCommand Move(float x, float y) => new()
+    {
+        Kind = BotCommandKind.Move,
+        X = x,
+        Y = y
+    };
+
+    public static BotCommand Skill(EntityState target, int slot, string key, int mpCost) => new()
+    {
+        Kind = BotCommandKind.Skill,
+        Vid = target.Vid,
+        TargetName = target.Name,
+        X = target.X,
+        Y = target.Y,
+        ScreenX = target.ScreenX,
+        ScreenY = target.ScreenY,
+        OnScreen = target.OnScreen,
+        SkillSlot = slot,
+        Key = key,
+        MpCost = mpCost
+    };
+
+    public static BotCommand Pickup(EntityState drop, string key) => new()
+    {
+        Kind = BotCommandKind.Pickup,
+        Vid = drop.Vid,
+        TargetName = drop.Name,
+        X = drop.X,
+        Y = drop.Y,
+        ScreenX = drop.ScreenX,
+        ScreenY = drop.ScreenY,
+        OnScreen = drop.OnScreen,
+        Key = key
+    };
+
+    public static BotCommand Heal(string key) => new()
+    {
+        Kind = BotCommandKind.Heal,
+        Key = key
+    };
+
+    public static BotCommand Stop() => new()
+    {
+        Kind = BotCommandKind.Stop
+    };
+}
+
+public sealed record BrainDecision(BotPhase Phase, EntityState? Target, BotCommand? Command, string Reason);
+
+public readonly record struct TickContext(bool Enabled, bool CornerTripped, bool EverReceivedState, long LastStateAtMs);

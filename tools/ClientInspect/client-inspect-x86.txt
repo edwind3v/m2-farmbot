@@ -1,0 +1,198 @@
+ClientInspect report
+generated 2026-10-14T02:27:46.8046579+03:00
+
+Inspector
+  architecture     x86
+  elevated         False
+  integrity        Medium
+  elevation type   TokenElevationTypeLimited
+  session          1
+  privilege        SeDebugPrivilege (absent)
+  privilege        SeRelabelPrivilege (absent)
+  privilege        SeTcbPrivilege (absent)
+
+Process
+  name             1.metin2client
+  pid              15856
+  image            E:\TeraBoxDownload\1.Client\1.metin2client.exe
+  wow64            True
+  protection query NTSTATUS 0, Type=0 (none), Signer=0
+  DACL query       GetSecurityInfo with 0x1000 returned Win32 5
+  target token     opened; integrity High, elevation TokenElevationTypeFull
+
+OpenProcess rights (masks requested exactly as listed)
+  PROCESS_QUERY_LIMITED_INFORMATION          0x00001000  granted
+      QueryFullProcessImageName, IsWow64Process
+  PROCESS_QUERY_INFORMATION                  0x00000400  denied Win32 5 (ERROR_ACCESS_DENIED)
+      full process query
+  PROCESS_VM_READ                            0x00000010  denied Win32 5 (ERROR_ACCESS_DENIED)
+      ReadProcessMemory
+  PROCESS_VM_OPERATION                       0x00000008  denied Win32 5 (ERROR_ACCESS_DENIED)
+      VirtualProtectEx / write setup; not used
+  PROCESS_SET_INFORMATION                    0x00000200  denied Win32 5 (ERROR_ACCESS_DENIED)
+      not used; probed only
+  PROCESS_DUP_HANDLE                         0x00000040  denied Win32 5 (ERROR_ACCESS_DENIED)
+      DuplicateHandle from the target
+  READ_CONTROL                               0x00020000  denied Win32 5 (ERROR_ACCESS_DENIED)
+      read the process security descriptor / DACL
+  SYNCHRONIZE                                0x00100000  granted
+      wait on process exit
+  QUERY_LIMITED|READ_CONTROL                 0x00021000  denied Win32 5 (ERROR_ACCESS_DENIED)
+      combined path + security-descriptor read
+  QUERY_INFORMATION|VM_READ                  0x00000410  denied Win32 5 (ERROR_ACCESS_DENIED)
+      classic Toolhelp / PSAPI module enumeration pair
+
+Module / process snapshots
+  TH32CS_SNAPPROCESS                       0x2  handle opened
+      enumerated 1
+      x86 inspector. Process snapshot opened; this API does not need VM_READ.
+  TH32CS_SNAPMODULE                        0x8  CreateToolhelp32Snapshot Win32 5 (ERROR_ACCESS_DENIED)
+      x86 inspector. ERROR_ACCESS_DENIED at snapshot create. On current Windows this matches missing PROCESS_VM_READ / PROCESS_QUERY_INFORMATION, not a Toolhelp handle format error.
+  TH32CS_SNAPMODULE32                      0x10  CreateToolhelp32Snapshot Win32 5 (ERROR_ACCESS_DENIED)
+      x86 inspector. ERROR_ACCESS_DENIED at snapshot create. On current Windows this matches missing PROCESS_VM_READ / PROCESS_QUERY_INFORMATION, not a Toolhelp handle format error.
+  TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32    0x18  CreateToolhelp32Snapshot Win32 5 (ERROR_ACCESS_DENIED)
+      x86 inspector. ERROR_ACCESS_DENIED at snapshot create. On current Windows this matches missing PROCESS_VM_READ / PROCESS_QUERY_INFORMATION, not a Toolhelp handle format error.
+
+Memory inspection
+  PROCESS_VM_READ is denied (Win32 5 / ERROR_ACCESS_DENIED) from this x86 Medium-integrity inspector (elevated=False, TokenElevationTypeLimited). ProcessProtectionInformation did not report a protected-process type. No privilege was enabled and no ACL was changed.
+
+Loaded modules
+  CreateToolhelp32Snapshot failed Win32 5
+
+On-disk PE (static)
+  path             E:\TeraBoxDownload\1.Client\1.metin2client.exe
+  size             4945408 bytes
+  machine          IMAGE_FILE_MACHINE_I386 (32-bit)
+  32-bit           True
+  image base       0x400000
+  dll chars        0x8140
+  ASLR             True
+  NX               True
+  sections         .text, .rdata, .data, .data1, .rsrc, .reloc
+
+Named client objects (string presence only; no field offsets)
+  .?AVCPythonCharacterManager@@              disk     RTTI: nearby-instance table owner
+  .?AVCInstanceBase@@                        disk     RTTI: one visible character / monster / stone
+  .?AVIAbstractCharacterManager@@            disk     RTTI: character-manager interface
+  .?AVCNetworkActorManager@@                 disk     RTTI: server-driven actor list
+  .?AVCActorInstance@@                       disk     RTTI: rendered actor
+  .?AVCPythonNetworkStream@@                 disk     RTTI: client network stream
+  CPythonCharacterManager::CreateInstance VID[%d] Race[%d] disk     create instance by VID + race
+  CPythonCharacterManager::CreateInstance: VID[%d] - ALREADY EXIST disk     VID is the instance key
+  DeleteCharacterInstance: no vid by %d      disk     delete instance by VID
+  SelectCharacterInstance: no vid by %d      disk     select instance by VID
+  CNetworkActorManager::__AppendCharacterManagerActor(%d, %s) disk     network actor appended with VID + name
+  TPacketGCCharacterAdditionalInfo name=%s vid=%d race=%d Error disk     name, VID, race arrive together
+  TPacketGCCharacterAdd2 is packet that doesn't write. disk     second character-add packet form
+  RecvCharacterMovePacket                    disk     move packet handler
+  RecvCharacterDeletePacket                  disk     delete packet handler
+  GetVID                                     disk     Python/C++ VID getter
+  GetNameByVID                               disk     name lookup by VID
+  GetPixelPosition                           disk     world/pixel position getter
+  GetInstanceType                            disk     instance type getter
+  INSTANCE_TYPE_PLAYER                       disk     instance type: player
+  INSTANCE_TYPE_NPC                          disk     instance type: NPC
+  INSTANCE_TYPE_ENEMY                        disk     instance type: enemy / monster
+  INSTANCE_TYPE_BUILDING                     disk     instance type: building
+  INSTANCE_TYPE_OBJECT                       disk     instance type: object
+  IsEnemy                                    disk     enemy predicate
+  IsNPC                                      disk     NPC predicate
+  IsDead                                     disk     dead predicate
+  HasInstance                                disk     VID present in manager
+  GetMainVID                                 disk     local player VID
+  GetMainCharacterIndex                      disk     local player VID (Python player module)
+  GetMainCharacterPosition                   disk     local player x,y,z
+  GetPickedVID                               disk     currently picked VID
+  GetTargetVID                               disk     current target VID
+  GetRace                                    disk     race / vnum getter
+  GetMaxHPByVID                              disk     max HP by VID
+  StoneDetect [VID:%d] [Distance:%d] [Angle:%d->%f] disk     Metin stone detector uses VID + distance
+  .?AV?$CDynamicPool@USGroundItemInstance@CPythonItem@@@@ disk     RTTI: ground item / drop pool
+
+Static function map (preferred image base of the named file; ASLR may relocate the live process)
+  0x4EA2F0  CPythonCharacterManager::CreateInstance VID[%d] Race[%d]
+      1.Debug-metin2client.exe  create CInstanceBase by VID and race (string xrefs at 0x4EA359)
+      callers: 0x4F7C00, 0x5FE540
+  0x4EA2F0  CPythonCharacterManager::CreateInstance: VID[%d] - ALREADY EXIST
+      1.Debug-metin2client.exe  duplicate-VID guard (string xrefs at 0x4EA327)
+      callers: 0x4F7C00, 0x5FE540
+  0x4EA3B0  DeleteCharacterInstance: no vid by %d
+      1.Debug-metin2client.exe  delete CInstanceBase by VID (string xrefs at 0x4EA5CC)
+      callers: 0x4EA2F0, 0x4F7C00, 0x4FBBC0
+  0x4EA9E0  SelectCharacterInstance: no vid by %d
+      1.Debug-metin2client.exe  select CInstanceBase by VID (string xrefs at 0x4EAA7C)
+      callers: 0x4EA2F0, 0x4F8070
+  0x5FE540  CNetworkActorManager::__AppendCharacterManagerActor(%d, %s)
+      1.Debug-metin2client.exe  network actor -> character manager (string xrefs at 0x5FE5AD)
+      callers: 0x5FD470, 0x5FDD40, 0x5FE9A0, 0x5FEA40
+  0x5FD310  CNetworkActorManager::RemoveActor(dwVID=%d) - NOT EXIST VID
+      1.Debug-metin2client.exe  remove network actor by VID (string xrefs at 0x5FD3AC)
+      callers: 0x649870
+  0x5FD870  CNetworkActorManager::MoveActor(dwVID=%d) - NOT EXIST VID
+      1.Debug-metin2client.exe  move network actor by VID (string xrefs at 0x5FD911)
+      callers: 0x649B60
+  0x5FD5C0  CNetworkActorManager::UpdateActor(dwVID=%d) - NOT EXIST VID
+      1.Debug-metin2client.exe  update network actor by VID (string xrefs at 0x5FD65E)
+      callers: 0x64A050
+  0x5FDA60  CNetworkActorManager::SyncActor(dwVID=%d) - NOT EXIST VID
+      1.Debug-metin2client.exe  sync network actor by VID (string xrefs at 0x5FDAFC)
+      callers: 0x649A30
+  0x606FFF  StoneDetect [VID:%d] [Distance:%d] [Angle:%d->%f]
+      1.Debug-metin2client.exe  Metin stone detector (string xrefs at 0x606FFF)
+  str 0xBD78C4  GetPixelPosition
+      1.Debug-metin2client.exe  instance position getter (Python/C++)
+  str 0xBD7964  GetInstanceType
+      1.Debug-metin2client.exe  instance type getter
+  str 0xBD7708  IsEnemy
+      1.Debug-metin2client.exe  enemy predicate
+  str 0xBD7710  IsNPC
+      1.Debug-metin2client.exe  NPC predicate
+  str 0xBD6E98  GetMainVID
+      1.Debug-metin2client.exe  local player VID
+  str 0xBD7920  GetNameByVID
+      1.Debug-metin2client.exe  name lookup
+  0x648F30  TPacketGCCharacterAdditionalInfo name=%s vid=%d race=%d Error
+      1.Debug-metin2client.exe  name/VID/race packet (string xrefs at 0x649371)
+      callers: 0x612CF0
+
+Confirmed vs unresolved
+  [confirmed] Python instance-type names present: INSTANCE_TYPE_PLAYER, INSTANCE_TYPE_NPC, INSTANCE_TYPE_ENEMY, INSTANCE_TYPE_BUILDING, INSTANCE_TYPE_OBJECT. INSTANCE_TYPE_STONE is absent.
+  [confirmed] INSTANCE_TYPE_ENEMY is added as integer 0 in a PyModule_AddIntConstant-style site.
+  [confirmed] StoneDetect formats VID, distance, and angle. That is the only stone-specific name recovered. There is no IsStone or INSTANCE_TYPE_STONE string.
+  [assumption] Ordinary monsters are therefore expected to be INSTANCE_TYPE_ENEMY / IsEnemy. Whether a Metin stone is also ENEMY, OBJECT, or only flagged inside StoneDetect is unresolved.
+  [confirmed] StoneDetect has a code xref in this image; see the function map. Runtime VID tables were not read.
+  [confirmed] GetPixelPosition and GetMainCharacterPosition exist. CNetworkActorManager::MoveActor / SyncActor take dwVID, so position updates are VID-keyed.
+  [unresolved] The in-memory layout of x/y/z (DWORD vs float, graphic-object vs actor-data) was not recovered. GetPixelPosition's return vector size is unknown.
+  [unresolved] GetPixelPosition has no immediate-string xref in .text (typical for a Python method name stored in a table, not pushed as a format string).
+  [confirmed] 1.Debug-metin2client.exe preferred base 0x400000. Function addresses below are file VAs at that base; the live release process has ASLR and may not match.
+  [unresolved] Member offsets of CInstanceBase, CPythonCharacterManager, and CNetworkActorManager were not recovered. No pointer or field displacement is claimed.
+  [confirmed] OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0x1000) succeeded.
+  [confirmed] OpenProcess(PROCESS_QUERY_INFORMATION, 0x400) returned Win32 5.
+  [confirmed] OpenProcess(PROCESS_VM_READ, 0x10) returned Win32 5.
+  [confirmed] OpenProcess(PROCESS_VM_OPERATION, 0x8) returned Win32 5.
+  [confirmed] OpenProcess(PROCESS_SET_INFORMATION, 0x200) returned Win32 5.
+  [confirmed] OpenProcess(PROCESS_DUP_HANDLE, 0x40) returned Win32 5.
+  [confirmed] OpenProcess(READ_CONTROL, 0x20000) returned Win32 5.
+  [confirmed] OpenProcess(SYNCHRONIZE, 0x100000) succeeded.
+  [confirmed] OpenProcess(QUERY_LIMITED|READ_CONTROL, 0x21000) returned Win32 5.
+  [confirmed] OpenProcess(QUERY_INFORMATION|VM_READ, 0x410) returned Win32 5.
+  [confirmed] TH32CS_SNAPPROCESS from x86: handle opened.
+  [confirmed] TH32CS_SNAPMODULE from x86: create failed 5.
+  [confirmed] TH32CS_SNAPMODULE32 from x86: create failed 5.
+  [confirmed] TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32 from x86: create failed 5.
+  [confirmed] Protected-process query: NTSTATUS 0, Type=0 (none), Signer=0
+  [unresolved] Process DACL: GetSecurityInfo with 0x1000 returned Win32 5
+  [assumption] A deny ACE, CShield, or another usermode guard may be responsible, but that is not established until the DACL or the protecting module is observed.
+  [confirmed] SeDebugPrivilege was not enabled by this tool. Privileges listed above are the inspector token as-is.
+
+Notes
+  - Field offsets and pointer values are not listed. They were not recovered from this binary and must not be guessed.
+  - Nearby entities live as CInstanceBase objects owned by CPythonCharacterManager, keyed by VID.
+  - CNetworkActorManager is the server-fed actor list that appends, moves, updates, and removes those instances.
+  - This client names instance types PLAYER, NPC, ENEMY, BUILDING, and OBJECT. INSTANCE_TYPE_STONE is not present as a string.
+  - Metin stones are addressed by VID through StoneDetect (VID, distance, angle), not through a recovered stone-type enum.
+  - Positions exist as GetPixelPosition on instances and GetMainCharacterPosition on the local player. The numeric layout of those vectors is not recovered here.
+  - The server fills name, VID, and race before the instance is fully usable. That is how the client learns who is nearby.
+  - Ground loot is a separate CPythonItem::SGroundItemInstance pool, not a CInstanceBase.
+  - Ordinary user-mode ReadProcessMemory of these objects is only valid if OpenProcess(PROCESS_VM_READ) is granted. This tool does not walk instances and does not alter process protection.
+  - PROCESS_VM_READ is denied (Win32 5 / ERROR_ACCESS_DENIED) from this x86 Medium-integrity inspector (elevated=False, TokenElevationTypeLimited). ProcessProtectionInformation did not report a protected-process type. No privilege was enabled and no ACL was changed.

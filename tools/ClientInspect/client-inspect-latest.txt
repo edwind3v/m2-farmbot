@@ -1,0 +1,95 @@
+ClientInspect report
+generated 2026-10-14T02:20:34.1394479+03:00
+
+Inspector
+  architecture     x64
+  elevated         False
+  integrity        Medium
+
+Process
+  name             1.metin2client
+  pid              15856
+  image            E:\TeraBoxDownload\1.Client\1.metin2client.exe
+  wow64            True
+
+OpenProcess rights (each mask tried alone)
+  PROCESS_QUERY_LIMITED_INFORMATION 0x1000  granted
+      path, wow64, limited identity
+  PROCESS_QUERY_INFORMATION    0x400  denied Win32 5
+      full query, often needed with VM_READ
+  PROCESS_VM_READ              0x10  denied Win32 5
+      ReadProcessMemory of instance objects
+  PROCESS_VM_OPERATION         0x8  denied Win32 5
+      VirtualProtectEx / write setup; not used here
+  PROCESS_DUP_HANDLE           0x40  denied Win32 5
+      duplicate handles from the target
+  SYNCHRONIZE                  0x100000  granted
+      wait on process exit
+
+Memory inspection
+  PROCESS_VM_READ is denied (Win32 5). The inspector is not elevated. Elevation may still be denied by the process DACL. This tool will not change that ACL or load a driver.
+
+Loaded modules
+  CreateToolhelp32Snapshot failed Win32 5
+
+On-disk PE (static)
+  path             E:\TeraBoxDownload\1.Client\1.metin2client.exe
+  size             4945408 bytes
+  machine          IMAGE_FILE_MACHINE_I386 (32-bit)
+  32-bit           True
+  image base       0x400000
+  dll chars        0x8140
+  ASLR             True
+  NX               True
+  sections         .text, .rdata, .data, .data1, .rsrc, .reloc
+
+Named client objects (string presence only; no field offsets)
+  .?AVCPythonCharacterManager@@              disk     RTTI: nearby-instance table owner
+  .?AVCInstanceBase@@                        disk     RTTI: one visible character / monster / stone
+  .?AVIAbstractCharacterManager@@            disk     RTTI: character-manager interface
+  .?AVCNetworkActorManager@@                 disk     RTTI: server-driven actor list
+  .?AVCActorInstance@@                       disk     RTTI: rendered actor
+  .?AVCPythonNetworkStream@@                 disk     RTTI: client network stream
+  CPythonCharacterManager::CreateInstance VID[%d] Race[%d] disk     create instance by VID + race
+  CPythonCharacterManager::CreateInstance: VID[%d] - ALREADY EXIST disk     VID is the instance key
+  DeleteCharacterInstance: no vid by %d      disk     delete instance by VID
+  SelectCharacterInstance: no vid by %d      disk     select instance by VID
+  CNetworkActorManager::__AppendCharacterManagerActor(%d, %s) disk     network actor appended with VID + name
+  TPacketGCCharacterAdditionalInfo name=%s vid=%d race=%d Error disk     name, VID, race arrive together
+  TPacketGCCharacterAdd2 is packet that doesn't write. disk     second character-add packet form
+  RecvCharacterMovePacket                    disk     move packet handler
+  RecvCharacterDeletePacket                  disk     delete packet handler
+  GetVID                                     disk     Python/C++ VID getter
+  GetNameByVID                               disk     name lookup by VID
+  GetPixelPosition                           disk     world/pixel position getter
+  GetInstanceType                            disk     instance type getter
+  INSTANCE_TYPE_PLAYER                       disk     instance type: player
+  INSTANCE_TYPE_NPC                          disk     instance type: NPC
+  INSTANCE_TYPE_ENEMY                        disk     instance type: enemy / monster
+  INSTANCE_TYPE_BUILDING                     disk     instance type: building
+  INSTANCE_TYPE_OBJECT                       disk     instance type: object
+  IsEnemy                                    disk     enemy predicate
+  IsNPC                                      disk     NPC predicate
+  IsDead                                     disk     dead predicate
+  HasInstance                                disk     VID present in manager
+  GetMainVID                                 disk     local player VID
+  GetMainCharacterIndex                      disk     local player VID (Python player module)
+  GetMainCharacterPosition                   disk     local player x,y,z
+  GetPickedVID                               disk     currently picked VID
+  GetTargetVID                               disk     current target VID
+  GetRace                                    disk     race / vnum getter
+  GetMaxHPByVID                              disk     max HP by VID
+  StoneDetect [VID:%d] [Distance:%d] [Angle:%d->%f] disk     Metin stone detector uses VID + distance
+  .?AV?$CDynamicPool@USGroundItemInstance@CPythonItem@@@@ disk     RTTI: ground item / drop pool
+
+Notes
+  - Field offsets and pointer values are not listed. They were not recovered from this binary and must not be guessed.
+  - Nearby entities live as CInstanceBase objects owned by CPythonCharacterManager, keyed by VID.
+  - CNetworkActorManager is the server-fed actor list that appends, moves, updates, and removes those instances.
+  - This client names instance types PLAYER, NPC, ENEMY, BUILDING, and OBJECT. INSTANCE_TYPE_STONE is not present as a string.
+  - Metin stones are addressed by VID through StoneDetect (VID, distance, angle), not through a recovered stone-type enum.
+  - Positions exist as GetPixelPosition on instances and GetMainCharacterPosition on the local player. The numeric layout of those vectors is not recovered here.
+  - The server fills name, VID, and race before the instance is fully usable. That is how the client learns who is nearby.
+  - Ground loot is a separate CPythonItem::SGroundItemInstance pool, not a CInstanceBase.
+  - Ordinary user-mode ReadProcessMemory of these objects is only valid if OpenProcess(PROCESS_VM_READ) is granted. This tool does not walk instances and does not alter process protection.
+  - PROCESS_VM_READ is denied (Win32 5). The inspector is not elevated. Elevation may still be denied by the process DACL. This tool will not change that ACL or load a driver.

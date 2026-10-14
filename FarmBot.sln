@@ -1,0 +1,64 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{43191ED5-007E-45E2-8BCD-99C975D73964}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FarmBot.Core", "src\FarmBot.Core\FarmBot.Core.csproj", "{7240BB8A-49E0-4167-8DB9-1A68BDF39638}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FarmBot.Platform", "src\FarmBot.Platform\FarmBot.Platform.csproj", "{0AB3BABC-C61E-45AB-939B-0FC8D76E1F4C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FarmBot.App", "src\FarmBot.App\FarmBot.App.csproj", "{08F752D9-B249-4249-9AC3-3A3DDA6F9AC7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FarmBot.Tests", "src\FarmBot.Tests\FarmBot.Tests.csproj", "{6C5D5124-BF5C-48C3-A525-270140385F0E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{B7A1C2D3-4E5F-6789-ABCD-EF0123456789}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientInspect", "tools\ClientInspect\ClientInspect.csproj", "{A11C1E57-0001-4000-8000-000000000001}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClientInspect.Tests", "tools\ClientInspect.Tests\ClientInspect.Tests.csproj", "{A11C1E57-0001-4000-8000-000000000002}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{7240BB8A-49E0-4167-8DB9-1A68BDF39638}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7240BB8A-49E0-4167-8DB9-1A68BDF39638}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7240BB8A-49E0-4167-8DB9-1A68BDF39638}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7240BB8A-49E0-4167-8DB9-1A68BDF39638}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0AB3BABC-C61E-45AB-939B-0FC8D76E1F4C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0AB3BABC-C61E-45AB-939B-0FC8D76E1F4C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0AB3BABC-C61E-45AB-939B-0FC8D76E1F4C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0AB3BABC-C61E-45AB-939B-0FC8D76E1F4C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{08F752D9-B249-4249-9AC3-3A3DDA6F9AC7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{08F752D9-B249-4249-9AC3-3A3DDA6F9AC7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{08F752D9-B249-4249-9AC3-3A3DDA6F9AC7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{08F752D9-B249-4249-9AC3-3A3DDA6F9AC7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6C5D5124-BF5C-48C3-A525-270140385F0E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6C5D5124-BF5C-48C3-A525-270140385F0E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6C5D5124-BF5C-48C3-A525-270140385F0E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6C5D5124-BF5C-48C3-A525-270140385F0E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A11C1E57-0001-4000-8000-000000000001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A11C1E57-0001-4000-8000-000000000001}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A11C1E57-0001-4000-8000-000000000001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A11C1E57-0001-4000-8000-000000000001}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A11C1E57-0001-4000-8000-000000000002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A11C1E57-0001-4000-8000-000000000002}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A11C1E57-0001-4000-8000-000000000002}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A11C1E57-0001-4000-8000-000000000002}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{7240BB8A-49E0-4167-8DB9-1A68BDF39638} = {43191ED5-007E-45E2-8BCD-99C975D73964}
+		{0AB3BABC-C61E-45AB-939B-0FC8D76E1F4C} = {43191ED5-007E-45E2-8BCD-99C975D73964}
+		{08F752D9-B249-4249-9AC3-3A3DDA6F9AC7} = {43191ED5-007E-45E2-8BCD-99C975D73964}
+		{6C5D5124-BF5C-48C3-A525-270140385F0E} = {43191ED5-007E-45E2-8BCD-99C975D73964}
+		{A11C1E57-0001-4000-8000-000000000001} = {B7A1C2D3-4E5F-6789-ABCD-EF0123456789}
+		{A11C1E57-0001-4000-8000-000000000002} = {B7A1C2D3-4E5F-6789-ABCD-EF0123456789}
+	EndGlobalSection
+EndGlobal
