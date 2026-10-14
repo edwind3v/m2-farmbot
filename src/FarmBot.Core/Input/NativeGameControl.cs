@@ -37,6 +37,7 @@ public sealed class NativeGameControl : IGameControl
         BotCommandKind.Attack => NativeCombatAction.Attack(command.Vid),
         BotCommandKind.Move => NativeCombatAction.MoveTo(command.X, command.Y),
         BotCommandKind.Stop => NativeCombatAction.Stop(),
+        BotCommandKind.Pickup => NativeCombatAction.Pickup(),
         _ => null
     };
 }

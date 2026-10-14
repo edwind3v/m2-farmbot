@@ -24,6 +24,7 @@ static const unsigned kTargetDisp = 0x10814;
 static const unsigned kReservedModeDisp = 0x54;
 static const unsigned kVidReservedDisp = 0x10770;
 static const unsigned kPlayerUpdateRva = 0xCF2D0;
+static const unsigned kPickCloseRva = 0xD1280;
 static const unsigned kGetStatusRva = 0xCDBB0;
 static const int kPointLevel = 1;
 static const int kPointExp = 3;
@@ -36,6 +37,7 @@ static const int kPointMaxSp = 8;
 typedef void (__thiscall* FnSetTarget)(void* self, unsigned vid, int force);
 typedef int (__thiscall* FnGetStatus)(void* self, int type);
 typedef void* (__thiscall* FnGetInst)(void* self, unsigned vid);
+typedef void (__thiscall* FnVoid)(void* self);
 typedef void (__thiscall* FnNewAttack)(void* self);
 typedef void (__thiscall* FnAttackKey)(void* self, bool press);
 typedef void (__thiscall* FnVid)(void* self, unsigned vid);
@@ -72,6 +74,8 @@ static int g_hudMaxHp;
 static int g_hudMp;
 static int g_hudMaxMp;
 static bool g_hudOk;
+static volatile long g_lootOn;
+static DWORD g_lastLootMs;
 
 static FnPeek g_peekA;
 static FnPeek g_peekW;
@@ -194,6 +198,26 @@ static bool CallRva(unsigned rva, void* player, unsigned vid)
     return true;
 }
 
+static bool CallPickClose(void* player)
+{
+    FnVoid fn = (FnVoid)(g_base + kPickCloseRva);
+    if (!g_base || !player || IsBadCodePtr((FARPROC)fn))
+        return false;
+    fn(player);
+    return true;
+}
+
+static void MaybeAutoLoot(void* player)
+{
+    if (!g_lootOn || !player)
+        return;
+    const DWORD now = GetTickCount();
+    if (g_lastLootMs != 0 && now - g_lastLootMs < 200)
+        return;
+    g_lastLootMs = now;
+    CallPickClose(player);
+}
+
 static bool CallNewAttack(void* player)
 {
     FnNewAttack fn = (FnNewAttack)(g_base + kNewAttackRva);
@@ -242,10 +266,33 @@ static void Execute(const Command& cmd)
     g_lastReason = "not executed";
     g_lastVid = 0;
 
+    if (cmd.type == "loot_loop")
+    {
+        g_lootOn = cmd.vid != 0 ? 1 : 0;
+        if (!g_lootOn)
+            g_lastLootMs = 0;
+        g_lastOk = true;
+        g_lastReason = g_lootOn ? "loot loop on" : "loot loop off";
+        return;
+    }
+
     void* player = Player();
     if (!player)
     {
         g_lastReason = "player singleton is null";
+        return;
+    }
+
+    if (cmd.type == "pickup")
+    {
+        if (!CallPickClose(player))
+        {
+            g_lastReason = "PickCloseItem missing";
+            return;
+        }
+        g_lastOk = true;
+        g_lastReason = "PickCloseItem";
+        g_lastVid = ReadTargetVid(player);
         return;
     }
 
@@ -356,6 +403,7 @@ static void __fastcall HookUpdate(void* self)
     g_loopTid = GetCurrentThreadId();
     Drain();
     g_playerUpdate(self);
+    MaybeAutoLoot(Player());
     RefreshHud(Player());
 }
 
@@ -495,6 +543,11 @@ static void InstallLoopHooks(HMODULE client)
         ++g_iatHooks;
 }
 
+static bool JsonSpace(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
 static std::string JsonString(const std::string& src, const char* key)
 {
     const std::string needle = std::string("\"") + key + "\"";
@@ -505,10 +558,18 @@ static std::string JsonString(const std::string& src, const char* key)
     if (i == std::string::npos)
         return "";
     ++i;
-    while (i < src.size() && (src[i] == ' ' || src[i] == '\"'))
+    while (i < src.size() && JsonSpace(src[i]))
         ++i;
+    if (i < src.size() && src[i] == '\"')
+    {
+        ++i;
+        size_t end = i;
+        while (end < src.size() && src[end] != '\"')
+            ++end;
+        return src.substr(i, end - i);
+    }
     size_t end = i;
-    while (end < src.size() && src[end] != '\"' && src[end] != ',' && src[end] != '}' && src[end] != ' ')
+    while (end < src.size() && !JsonSpace(src[end]) && src[end] != ',' && src[end] != '}' && src[end] != ']')
         ++end;
     return src.substr(i, end - i);
 }

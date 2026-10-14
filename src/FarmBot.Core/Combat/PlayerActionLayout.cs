@@ -9,6 +9,7 @@ public sealed record PlayerActionLayout(
     uint GetTargetVidRva,
     uint SetAttackKeyStateRva,
     uint ComboAttackRva,
+    uint PickCloseItemRva,
     uint TargetVidDisplacement,
     uint SetTargetThisAdjustment,
     uint SetTargetVtableSlot,
@@ -43,6 +44,9 @@ public static class PlayerActionLayoutRecoverer
         var getTarget = RecoverNamedNative(pe, "GetTargetVID", evidence);
         var attackKey = RecoverNamedNative(pe, "SetAttackKeyState", evidence);
         var combo = RecoverNamedNative(pe, "ComboAttack", evidence);
+        var pickClose = RecoverNamedNative(pe, "PickCloseItem", evidence);
+        if (pickClose.native == 0)
+            pickClose = RecoverNamedNative(pe, "PickCloseItemVector", evidence);
         var singleton = PreferInImage(pe, getTarget.singleton, setTarget.singleton, attackKey.singleton);
         if (singleton == 0)
             singleton = FindSingletonFromGetMainCharacterPosition(pe, evidence);
@@ -71,7 +75,12 @@ public static class PlayerActionLayoutRecoverer
         evidence.Add("An adapter pipe worker is not that thread. SetTarget must not be thiscall'd from it.");
         evidence.Add("Release RVAs are recovered from METH_VARARGS wrappers. Debug 0x4EA* addresses are not used.");
 
-        return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKey.native, combo.native, targetDisp, virt.thisAdj, virt.slot, prologue, hud.points, hud.name, hud.xor, evidence)
+        if (pickClose.native != 0)
+            evidence.Add($"CPythonPlayer::PickCloseItem native RVA 0x{pickClose.native:X}.");
+        else
+            evidence.Add("PickCloseItem Python wrapper was not recovered.");
+
+        return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKey.native, combo.native, pickClose.native, targetDisp, virt.thisAdj, virt.slot, prologue, hud.points, hud.name, hud.xor, evidence)
         {
             PointLevel = points.level,
             PointExp = points.exp,

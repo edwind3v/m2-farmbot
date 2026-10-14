@@ -16,6 +16,22 @@ namespace FarmBot.Tests;
 public class ProtocolTests
 {
     [Fact]
+    public void EncodesLootLoopWithVidAndForce()
+    {
+        var packet = ActionProtocol.Encode(new ActionRequest
+        {
+            Type = ActionProtocol.LootLoop,
+            Token = "tok",
+            Vid = 1,
+            Force = true
+        });
+        var json = Encoding.UTF8.GetString(packet, 4, packet.Length - 4);
+        Assert.Contains("\"type\": \"loot_loop\"", json);
+        Assert.Contains("\"vid\": 1", json);
+        Assert.Contains("\"force\": true", json);
+    }
+
+    [Fact]
     public void FrameBufferReassemblesPartialReads()
     {
         var payload = Encoding.UTF8.GetBytes("{\"type\":\"state\"}");

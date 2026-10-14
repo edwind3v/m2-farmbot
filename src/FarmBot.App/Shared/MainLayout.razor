@@ -17,8 +17,8 @@
         </div>
         <span class="pill @(Shell.View.Enabled ? "on" : "off")"><i></i>@(Shell.View.Enabled ? "Running" : "Stopped")</span>
         <select @bind="Shell.ModeIndex" @bind:event="onchange">
-            <option value="0">Simulator</option>
             <option value="1">Live</option>
+            <option value="0">Simulator</option>
         </select>
         <select class="client" disabled="@(!Shell.IsLive)" @bind="Shell.SelectedClientPid">
             @if (Shell.Clients.Count == 0)

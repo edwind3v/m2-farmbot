@@ -30,7 +30,7 @@
 else if (_page == 1)
 {
     <label class="check-row"><input type="checkbox" @bind="Shell.Config.AttackAlsoPaths" /> Attack also paths</label>
-    <label class="check-row"><input type="checkbox" @bind="Shell.Config.LootEnabled" /> Loot before next target</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.LootEnabled" /> Pick up nearby items</label>
     <div class="field-grid">
         <div class="field-row"><label>Attack range</label><input type="number" @bind="Shell.Config.AttackRange" /></div>
         <div class="field-row"><label>Attack interval ms</label><input type="number" @bind="Shell.Config.AttackIntervalMs" /></div>

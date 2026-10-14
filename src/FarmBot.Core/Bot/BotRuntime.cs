@@ -40,6 +40,7 @@ public sealed class BotRuntime : IDisposable
     private string _reason = "stopped";
     private WorldSnapshot? _latest;
     private EntityState? _target;
+    private bool _lootLoop;
 
     public BotRuntime(
         IGameStateSource source,
@@ -89,6 +90,7 @@ public sealed class BotRuntime : IDisposable
                 _target = null;
             }
         }
+        SyncLootLoop(_configProvider(), enabled);
     }
 
     public void Stop()
@@ -163,6 +165,7 @@ public sealed class BotRuntime : IDisposable
             lock (_gate)
                 _enabled = false;
             _log.Warn($"failsafe: {decision.Reason}");
+            SyncLootLoop(config, false);
         }
 
         if (decision.Command != null && (enabled || decision.Phase == BotPhase.Failsafe))
@@ -217,9 +220,21 @@ public sealed class BotRuntime : IDisposable
             return new BrainDecision(BotPhase.Failsafe, null, BotCommand.Stop(), trip);
         }
 
+        SyncLootLoop(config, true);
         var tick = _combat.Tick(snapshot, config, context.Enabled, nowMs);
         _combatState = tick.State;
         return new BrainDecision(ToPhase(tick.State), tick.Target, tick.Action?.ToCommand(), tick.Reason);
+    }
+
+    private void SyncLootLoop(BotConfig config, bool enabled)
+    {
+        var want = enabled && config.LootEnabled && _sink != null;
+        if (want == _lootLoop)
+            return;
+        if (!_sink!.TrySubmit(NativeCombatAction.LootLoop(want)))
+            return;
+        _lootLoop = want;
+        _log.Info(want ? "loot loop: PickCloseItem every 200ms" : "loot loop off");
     }
 
     private static BotPhase ToPhase(CombatState state) => state switch

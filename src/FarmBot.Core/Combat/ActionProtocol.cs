@@ -41,6 +41,8 @@ public static class ActionProtocol
     public const string Face = "face";
     public const string Stop = "stop";
     public const string GetHud = "get_hud";
+    public const string Pickup = "pickup";
+    public const string LootLoop = "loot_loop";
     public const int Version = 1;
 
     public static byte[] Encode(object value) => FrameEncode(JsonSerializer.SerializeToUtf8Bytes(value, JsonDefaults.Instance));

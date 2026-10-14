@@ -52,7 +52,7 @@ public sealed class BotConfig
     public float LootRange { get; set; } = 600;
     public bool LootBeforeNextTarget { get; set; } = true;
     public string PickupKey { get; set; } = "z";
-    public int PickupIntervalMs { get; set; } = 350;
+    public int PickupIntervalMs { get; set; } = 200;
     public bool ReturnToCenter { get; set; } = true;
     public float LeashSlack { get; set; } = 80;
     public int MoveIntervalMs { get; set; } = 500;

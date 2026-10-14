@@ -153,11 +153,13 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
             NativeActionKind.Face => ActionProtocol.Face,
             NativeActionKind.Attack => ActionProtocol.Attack,
             NativeActionKind.Stop => ActionProtocol.Stop,
+            NativeActionKind.Pickup => ActionProtocol.Pickup,
+            NativeActionKind.LootLoop => ActionProtocol.LootLoop,
             _ => ""
         };
         if (type.Length == 0)
             return false;
-        return _client.Submit(type, action.Vid).Ok;
+        return _client.Submit(type, action.Vid, action.Kind != NativeActionKind.LootLoop || action.Vid != 0, updateStatus: action.Kind != NativeActionKind.Pickup).Ok;
     }
 
     public bool TryReadHud(out PlayerHudPoints hud)

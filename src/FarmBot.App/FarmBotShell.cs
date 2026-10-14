@@ -25,7 +25,7 @@ public sealed class FarmBotShell : IDisposable
     private IGameStateProvider? _provider;
     private ActionModuleHost? _actionHost;
     private AdapterActionSink? _actionSink;
-    private bool _live;
+    private bool _live = true;
     private PlayerHudPoints? _hud;
     private long _hudAt;
 

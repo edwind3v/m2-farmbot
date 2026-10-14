@@ -11,7 +11,7 @@ public class PlayerActionLayoutTests
     {
         Assert.True(File.Exists(ReleaseClient), ReleaseClient);
         var layout = PlayerActionLayoutRecoverer.Recover(ReleaseClient);
-        var dump = $"singleton=0x{layout.PlayerSingletonRva:X} setTarget=0x{layout.SetTargetRva:X} getTarget=0x{layout.GetTargetVidRva:X} attackKey=0x{layout.SetAttackKeyStateRva:X} combo=0x{layout.ComboAttackRva:X} targetDisp=0x{layout.TargetVidDisplacement:X} thisAdj=0x{layout.SetTargetThisAdjustment:X} slot=0x{layout.SetTargetVtableSlot:X} prologue={layout.SetTargetPrologue} points=+0x{layout.StatusPointsDisplacement:X} name=+0x{layout.PlayerNameDisplacement:X} xor=0x{layout.PointXorMask:X}\n" +
+        var dump = $"singleton=0x{layout.PlayerSingletonRva:X} setTarget=0x{layout.SetTargetRva:X} getTarget=0x{layout.GetTargetVidRva:X} attackKey=0x{layout.SetAttackKeyStateRva:X} combo=0x{layout.ComboAttackRva:X} pick=0x{layout.PickCloseItemRva:X} targetDisp=0x{layout.TargetVidDisplacement:X} thisAdj=0x{layout.SetTargetThisAdjustment:X} slot=0x{layout.SetTargetVtableSlot:X} prologue={layout.SetTargetPrologue} points=+0x{layout.StatusPointsDisplacement:X} name=+0x{layout.PlayerNameDisplacement:X} xor=0x{layout.PointXorMask:X}\n" +
                    string.Join("\n", layout.Evidence);
         Directory.CreateDirectory(@"C:\Temp");
         File.WriteAllText(@"C:\Temp\playeraction.txt", dump);
@@ -33,5 +33,6 @@ public class PlayerActionLayoutTests
         Assert.Equal(6, layout.PointMaxHp);
         Assert.Equal(7, layout.PointSp);
         Assert.Equal(8, layout.PointMaxSp);
+        Assert.Equal(0xD1280u, layout.PickCloseItemRva);
     }
 }

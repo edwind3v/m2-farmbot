@@ -22,7 +22,9 @@ public enum NativeActionKind
     Face,
     Attack,
     MoveTo,
-    Stop
+    Stop,
+    Pickup,
+    LootLoop
 }
 
 public sealed record NativeCombatAction
@@ -40,6 +42,8 @@ public sealed record NativeCombatAction
         NativeActionKind.Attack => $"attack vid={Vid}",
         NativeActionKind.MoveTo => $"move ({X:0},{Y:0})",
         NativeActionKind.Stop => "stop",
+        NativeActionKind.Pickup => "pickup",
+        NativeActionKind.LootLoop => Vid != 0 ? "loot loop on" : "loot loop off",
         _ => "none"
     };
 
@@ -51,6 +55,8 @@ public sealed record NativeCombatAction
         NativeActionKind.Attack => new BotCommand { Kind = BotCommandKind.Attack, Vid = Vid, X = X, Y = Y },
         NativeActionKind.MoveTo => BotCommand.Move(X, Y),
         NativeActionKind.Stop => BotCommand.Stop(),
+        NativeActionKind.Pickup => BotCommand.Pickup(new EntityState(), ""),
+        NativeActionKind.LootLoop => BotCommand.Stop(),
         _ => BotCommand.Stop()
     };
 
@@ -60,6 +66,8 @@ public sealed record NativeCombatAction
     public static NativeCombatAction Attack(uint vid) => new() { Kind = NativeActionKind.Attack, Vid = vid };
     public static NativeCombatAction MoveTo(float x, float y) => new() { Kind = NativeActionKind.MoveTo, X = x, Y = y };
     public static NativeCombatAction Stop() => new() { Kind = NativeActionKind.Stop };
+    public static NativeCombatAction Pickup() => new() { Kind = NativeActionKind.Pickup };
+    public static NativeCombatAction LootLoop(bool on) => new() { Kind = NativeActionKind.LootLoop, Vid = on ? 1u : 0 };
 }
 
 public sealed record CombatTick(
