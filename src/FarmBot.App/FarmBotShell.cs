@@ -28,6 +28,8 @@ public sealed class FarmBotShell : IDisposable
     private bool _live = true;
     private PlayerHudPoints? _hud;
     private long _hudAt;
+    private AtlasPixels? _atlas;
+    private string _atlasMap = "";
 
     public FarmBotShell()
     {
@@ -100,6 +102,20 @@ public sealed class FarmBotShell : IDisposable
     public string StatusKind =>
         View.Phase == BotPhase.Failsafe ? "fail" : View.Enabled ? "run" : "";
 
+    public string AtlasUrl { get; private set; } = "";
+
+    public float MapViewRadius
+    {
+        get
+        {
+            var player = View.Snapshot?.Player;
+            return AtlasPixels.MinimapViewRadius(
+                _config.MapZoom,
+                player?.MapWorldW ?? 0,
+                player?.MapWorldH ?? 0);
+        }
+    }
+
     public void SetFarmRadius(float value)
     {
         lock (_configGate)
@@ -133,6 +149,7 @@ public sealed class FarmBotShell : IDisposable
             if (runtime == null)
                 return;
             View = OverlayHud(runtime.Capture());
+            RefreshAtlas();
             Notify();
         }
         catch (Exception ex)
@@ -185,6 +202,8 @@ public sealed class FarmBotShell : IDisposable
             return;
         }
 
+        _atlas = null;
+        _atlasMap = "";
         _log.Info($"companion attached to PID {client.ProcessId}: {_actionSink.Status}");
         Notify();
     }
@@ -220,6 +239,8 @@ public sealed class FarmBotShell : IDisposable
         }
 
         RefreshClientList();
+        _atlas = null;
+        _atlasMap = "";
         _log.Info($"companion launched {path}: {_actionSink.Status}");
         Notify();
     }
@@ -348,6 +369,34 @@ public sealed class FarmBotShell : IDisposable
                 }
             }
         };
+    }
+
+    private void RefreshAtlas()
+    {
+        var player = View.Snapshot?.Player;
+        var map = player?.MapName ?? "";
+        if (!_live || string.IsNullOrWhiteSpace(map))
+        {
+            AtlasUrl = "";
+            return;
+        }
+
+        if (_atlas == null || !string.Equals(_atlasMap, map, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!AtlasPixels.TryLoadFromClient(_config.ClientPath, map, player?.MapWorldW ?? 0, player?.MapWorldH ?? 0, out var atlas))
+            {
+                AtlasUrl = "";
+                return;
+            }
+
+            _atlas = atlas;
+            _atlasMap = map;
+            _log.Info($"atlas {map} {atlas.Width}x{atlas.Height}  world {atlas.WorldW:0} x {atlas.WorldH:0}");
+        }
+
+        var worldW = player is { MapWorldW: >= 1000 } ? player.MapWorldW : _atlas.WorldW;
+        var worldH = player is { MapWorldH: >= 1000 } ? player.MapWorldH : _atlas.WorldH;
+        AtlasUrl = _atlas.ToCroppedBmpUrl(player?.X ?? 0, player?.Y ?? 0, MapViewRadius, worldW, worldH);
     }
 
     private bool EnsureCompanion()

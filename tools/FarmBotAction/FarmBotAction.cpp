@@ -1,5 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <d3d9.h>
+#include <psapi.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -7,6 +9,8 @@
 #include <string>
 
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "d3d9.lib")
+#pragma comment(lib, "psapi.lib")
 
 // In-process x86 adapter. Drains on CPythonApplication::Loop (PeekMessage/GetMessage)
 // and calls existing CPythonPlayer methods on that same thread.
@@ -26,6 +30,25 @@ static const unsigned kVidReservedDisp = 0x10770;
 static const unsigned kPlayerUpdateRva = 0xCF2D0;
 static const unsigned kPickCloseRva = 0xD1280;
 static const unsigned kGetStatusRva = 0xCDBB0;
+static const unsigned kMiniMapRva = 0x482BA8;
+static const unsigned kBackgroundRva = 0x48238C;
+static const unsigned kLoadAtlasRva = 0xF9980;
+static const unsigned kGetAtlasSizeRva = 0xF93B0;
+static const unsigned kUpdateAtlasRva = 0xFC0D0;
+static const unsigned kIsAtlasRva = 0xF9970;
+static const unsigned kShowAtlasRva = 0xFB7B0;
+static const unsigned kHideAtlasRva = 0xF9960;
+static const unsigned kAtlasImageDisp = 0x26C;
+static const unsigned kAtlasImageRefDisp = 0x1C;
+static const unsigned kAtlasImage2Disp = 0x2CC;
+static const unsigned kAtlasIsDisp = 0x170;
+static const unsigned kAtlasWorldXDisp = 0x328;
+static const unsigned kAtlasWorldYDisp = 0x32C;
+static const unsigned kImageTexDisp = 0x3C;
+static const unsigned kAtlasMagic = 0x534C5441;
+static const unsigned kAtlasMax = 1024;
+static const unsigned kAtlasPixels = kAtlasMax * kAtlasMax * 4;
+static const unsigned kAtlasBytes = 32 + kAtlasPixels;
 static const int kPointLevel = 1;
 static const int kPointExp = 3;
 static const int kPointNextExp = 4;
@@ -41,6 +64,9 @@ typedef void (__thiscall* FnVoid)(void* self);
 typedef void (__thiscall* FnNewAttack)(void* self);
 typedef void (__thiscall* FnAttackKey)(void* self, bool press);
 typedef void (__thiscall* FnVid)(void* self, unsigned vid);
+typedef int (__thiscall* FnLoadAtlas)(void* self);
+typedef void (__thiscall* FnAtlasSize)(void* self, float* x, float* y);
+typedef int (__thiscall* FnIsAtlas)(void* self);
 typedef BOOL (WINAPI* FnPeek)(LPMSG, HWND, UINT, UINT, UINT);
 typedef BOOL (WINAPI* FnGetMsg)(LPMSG, HWND, UINT, UINT);
 typedef void (__thiscall* FnUpdate)(void* self);
@@ -76,6 +102,15 @@ static int g_hudMaxMp;
 static bool g_hudOk;
 static volatile long g_lootOn;
 static DWORD g_lastLootMs;
+static HANDLE g_atlasMap;
+static BYTE* g_atlasView;
+static BYTE* g_atlasScratch;
+static unsigned g_atlasWidth;
+static unsigned g_atlasHeight;
+static float g_atlasWorldW;
+static float g_atlasWorldH;
+static unsigned g_atlasSeq;
+static volatile long g_atlasCrash;
 
 static FnPeek g_peekA;
 static FnPeek g_peekW;
@@ -218,6 +253,560 @@ static void MaybeAutoLoot(void* player)
     CallPickClose(player);
 }
 
+static void* MiniMap()
+{
+    if (!g_base)
+        return nullptr;
+    void* p = *(void**)(g_base + kMiniMapRva);
+    return UserPtr(p) ? p : nullptr;
+}
+
+static bool InModule(const void* p, HMODULE mod)
+{
+    MODULEINFO info;
+    if (!mod || !GetModuleInformation(GetCurrentProcess(), mod, &info, sizeof(info)))
+        return false;
+    const BYTE* b = (const BYTE*)p;
+    const BYTE* base = (const BYTE*)info.lpBaseOfDll;
+    return b >= base && b < base + info.SizeOfImage;
+}
+
+static IDirect3DTexture9* QueryTexture(void* p, HMODULE d3d)
+{
+    if (!d3d || !UserPtr(p) || !UserPtr(*(void**)p) || !InModule(*(void**)p, d3d))
+        return nullptr;
+    IDirect3DTexture9* tex = nullptr;
+    if (FAILED(((IUnknown*)p)->QueryInterface(__uuidof(IDirect3DTexture9), (void**)&tex)) || !tex)
+        return nullptr;
+    D3DSURFACE_DESC desc;
+    if (FAILED(tex->GetLevelDesc(0, &desc)) ||
+        desc.Width < 64 || desc.Height < 64 || desc.Width > 4096 || desc.Height > 4096)
+    {
+        tex->Release();
+        return nullptr;
+    }
+    return tex;
+}
+
+static void CopyRowBgra(BYTE* dst, const BYTE* src, unsigned w, unsigned format, unsigned srcPitch)
+{
+    if (format == 21 || format == 22)
+    {
+        memcpy(dst, src, w * 4);
+        return;
+    }
+    for (unsigned x = 0; x < w; ++x)
+    {
+        BYTE* d = dst + x * 4;
+        if (format == 23 && srcPitch >= w * 2)
+        {
+            const unsigned short pix = ((unsigned short*)src)[x];
+            d[0] = (BYTE)((pix & 0x1F) << 3);
+            d[1] = (BYTE)(((pix >> 5) & 0x3F) << 2);
+            d[2] = (BYTE)(((pix >> 11) & 0x1F) << 3);
+            d[3] = 255;
+        }
+        else if ((format == 24 || format == 25) && srcPitch >= w * 2)
+        {
+            const unsigned short pix = ((unsigned short*)src)[x];
+            d[0] = (BYTE)((pix & 0x1F) << 3);
+            d[1] = (BYTE)(((pix >> 5) & 0x1F) << 3);
+            d[2] = (BYTE)(((pix >> 10) & 0x1F) << 3);
+            d[3] = 255;
+        }
+        else if (srcPitch >= w * 4)
+            memcpy(d, src + x * 4, 4);
+        else
+            memset(d, 0, 4);
+    }
+}
+
+static bool CopyLocked8(const D3DLOCKED_RECT& lr, unsigned format, unsigned srcW, unsigned srcH, BYTE* dst, unsigned* outW, unsigned* outH)
+{
+    if (!lr.pBits || srcW < 64 || srcH < 64)
+        return false;
+    const unsigned w = srcW > kAtlasMax ? kAtlasMax : srcW;
+    const unsigned h = srcH > kAtlasMax ? kAtlasMax : srcH;
+    const unsigned bpp = (format == 23 || format == 24 || format == 25) ? 2u : 4u;
+    const unsigned srcPitch = lr.Pitch ? (unsigned)lr.Pitch : srcW * bpp;
+    BYTE* s = (BYTE*)lr.pBits;
+    for (unsigned y = 0; y < h; ++y)
+    {
+        const unsigned sy = h == srcH ? y : y * srcH / h;
+        CopyRowBgra(dst + y * w * 4, s + sy * srcPitch, w, format, srcPitch);
+    }
+    *outW = w;
+    *outH = h;
+    return true;
+}
+
+static int ReadableBytes(void* p, int want);
+
+static bool IsD3D8Object(void* obj)
+{
+    HMODULE d3d8 = GetModuleHandleA("d3d8.dll");
+    return d3d8 && UserPtr(obj) && UserPtr(*(void**)obj) && InModule(*(void**)obj, d3d8);
+}
+
+static bool CopyTexture8(void* tex, BYTE* dst, unsigned* outW, unsigned* outH)
+{
+    if (!IsD3D8Object(tex))
+        return false;
+    void** vt = *(void***)tex;
+    if (IsBadCodePtr((FARPROC)vt[16]) || IsBadCodePtr((FARPROC)vt[18]) || IsBadCodePtr((FARPROC)vt[19]))
+        return false;
+    typedef HRESULT (__stdcall* FnDesc)(void*, unsigned, void*);
+    typedef HRESULT (__stdcall* FnLock)(void*, unsigned, D3DLOCKED_RECT*, const void*, unsigned);
+    typedef HRESULT (__stdcall* FnUnlock)(void*, unsigned);
+    struct Desc8 { unsigned format, type, usage, pool, size, multi; unsigned width, height; };
+    Desc8 desc = {};
+    if (FAILED(((FnDesc)vt[16])(tex, 0, &desc)))
+        return false;
+    if (desc.width < 64 || desc.height < 64 || desc.width > 4096 || desc.height > 4096)
+        return false;
+    if (desc.format != 21 && desc.format != 22 && desc.format != 23)
+        return false;
+    D3DLOCKED_RECT lr = {};
+    HRESULT hr = ((FnLock)vt[18])(tex, 0, &lr, nullptr, 0x10);
+    if (FAILED(hr))
+        hr = ((FnLock)vt[18])(tex, 0, &lr, nullptr, 0);
+    if (FAILED(hr) || !lr.pBits)
+        return false;
+    const unsigned bpp = desc.format == 23 ? 2u : 4u;
+    const unsigned need = desc.height * (lr.Pitch ? (unsigned)lr.Pitch : desc.width * bpp);
+    const bool ok = ReadableBytes(lr.pBits, (int)need) >= (int)need &&
+        CopyLocked8(lr, desc.format, desc.width, desc.height, dst, outW, outH);
+    ((FnUnlock)vt[19])(tex, 0);
+    return ok;
+}
+
+static void* QueryTexture8(void* p, HMODULE d3d8)
+{
+    if (!d3d8 || !UserPtr(p) || !UserPtr(*(void**)p) || !InModule(*(void**)p, d3d8))
+        return nullptr;
+    static const GUID kTex8 = {0xE4CDD575,0x2866,0x4d51,{0xB7,0x8F,0x5E,0xCB,0x73,0xF7,0xB9,0xB9}};
+    IUnknown* unk = (IUnknown*)p;
+    void* tex = nullptr;
+    if (FAILED(unk->QueryInterface(kTex8, &tex)) || !tex)
+        return nullptr;
+    return tex;
+}
+
+static void ConsiderTexture(IDirect3DTexture9* tex, IDirect3DTexture9** best, unsigned* bestArea)
+{
+    if (!tex)
+        return;
+    D3DSURFACE_DESC desc;
+    if (FAILED(tex->GetLevelDesc(0, &desc)))
+    {
+        tex->Release();
+        return;
+    }
+    const unsigned area = desc.Width * desc.Height;
+    if (area > *bestArea)
+    {
+        if (*best)
+            (*best)->Release();
+        *best = tex;
+        *bestArea = area;
+    }
+    else
+        tex->Release();
+}
+
+static int ReadableBytes(void* p, int want)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!p || !VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
+        return 0;
+    const SIZE_T left = (SIZE_T)mbi.BaseAddress + mbi.RegionSize - (SIZE_T)p;
+    return left > (SIZE_T)want ? want : (int)left;
+}
+
+static void ScanImage(void* obj, int bytes, IDirect3DTexture9** best9, void** best8, unsigned* bestArea)
+{
+    HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+    HMODULE d3d8 = GetModuleHandleA("d3d8.dll");
+    HMODULE client = (HMODULE)g_base;
+    const int n = ReadableBytes(obj, bytes) & ~3;
+    BYTE* p = (BYTE*)obj;
+    for (int i = 0; i + 4 <= n; i += 4)
+    {
+        void* child = *(void**)(p + i);
+        ConsiderTexture(QueryTexture(child, d3d9), best9, bestArea);
+        if (!*best9)
+        {
+            void* t8 = QueryTexture8(child, d3d8);
+            if (t8)
+            {
+                if (*best8)
+                    ((IUnknown*)*best8)->Release();
+                *best8 = t8;
+            }
+        }
+        if (!UserPtr(child) || !UserPtr(*(void**)child) || !client || !InModule(*(void**)child, client))
+            continue;
+        const int m = ReadableBytes(child, 0x100) & ~3;
+        BYTE* o = (BYTE*)child;
+        for (int j = 0; j + 4 <= m; j += 4)
+        {
+            void* inner = *(void**)(o + j);
+            ConsiderTexture(QueryTexture(inner, d3d9), best9, bestArea);
+            if (*best9)
+                continue;
+            void* t8 = QueryTexture8(inner, d3d8);
+            if (t8)
+            {
+                if (*best8)
+                    ((IUnknown*)*best8)->Release();
+                *best8 = t8;
+            }
+        }
+    }
+}
+
+static IDirect3DTexture9* FindAtlasTexture(void* mini, void** tex8)
+{
+    if (tex8)
+        *tex8 = nullptr;
+    if (!mini)
+        return nullptr;
+    IDirect3DTexture9* best9 = nullptr;
+    void* best8 = nullptr;
+    unsigned bestArea = 0;
+    void* inst = (char*)mini + kAtlasImageDisp;
+    void* image = *(void**)((char*)inst + kAtlasImageRefDisp);
+    if (UserPtr(image))
+        ScanImage(image, 0x180, &best9, &best8, &bestArea);
+    if (!best9)
+        ScanImage(inst, 0x40, &best9, &best8, &bestArea);
+    if (!best9)
+        ScanImage((char*)mini + kAtlasImage2Disp, 0x80, &best9, &best8, &bestArea);
+    if (best9 && best8)
+    {
+        ((IUnknown*)best8)->Release();
+        best8 = nullptr;
+    }
+    if (tex8)
+        *tex8 = best8;
+    return best9;
+}
+
+static bool CopyCpuImage(void* image, BYTE* dst, unsigned* outW, unsigned* outH)
+{
+    if (!image)
+        return false;
+    if (ReadableBytes(image, 0x70) >= 0x70)
+    {
+        const int w = *(int*)((char*)image + 0x68) - *(int*)((char*)image + 0x60);
+        const int h = *(int*)((char*)image + 0x6C) - *(int*)((char*)image + 0x64);
+        if (w >= 64 && h >= 64 && w <= (int)kAtlasMax && h <= (int)kAtlasMax)
+        {
+            const unsigned bgra = (unsigned)w * (unsigned)h * 4;
+            const int n = ReadableBytes(image, 0x80) & ~3;
+            BYTE* p = (BYTE*)image;
+            for (int i = 0; i + 4 <= n; i += 4)
+            {
+                void* bits = *(void**)(p + i);
+                if (!UserPtr(bits) || ReadableBytes(bits, (int)bgra) < (int)bgra)
+                    continue;
+                memcpy(dst, bits, bgra);
+                *outW = (unsigned)w;
+                *outH = (unsigned)h;
+                return true;
+            }
+        }
+    }
+    const int n = ReadableBytes(image, 0x180) & ~3;
+    BYTE* p = (BYTE*)image;
+    for (int i = 0; i + 12 <= n; i += 4)
+    {
+        const unsigned w = *(unsigned*)(p + i);
+        const unsigned h = *(unsigned*)(p + i + 4);
+        void* bits = *(void**)(p + i + 8);
+        if (w < 64 || h < 64 || w > kAtlasMax || h > kAtlasMax || !UserPtr(bits))
+            continue;
+        const unsigned bgra = w * h * 4;
+        if (ReadableBytes(bits, (int)bgra) >= (int)bgra)
+        {
+            memcpy(dst, bits, bgra);
+            *outW = w;
+            *outH = h;
+            return true;
+        }
+        const unsigned rgb565 = w * h * 2;
+        if (ReadableBytes(bits, (int)rgb565) < (int)rgb565)
+            continue;
+        BYTE* s = (BYTE*)bits;
+        for (unsigned y = 0; y < h; ++y)
+        {
+            for (unsigned x = 0; x < w; ++x)
+            {
+                const unsigned pix = ((unsigned short*)s)[y * w + x];
+                BYTE* d = dst + (y * w + x) * 4;
+                d[0] = (BYTE)((pix & 0x1F) << 3);
+                d[1] = (BYTE)(((pix >> 5) & 0x3F) << 2);
+                d[2] = (BYTE)(((pix >> 11) & 0x1F) << 3);
+                d[3] = 255;
+            }
+        }
+        *outW = w;
+        *outH = h;
+        return true;
+    }
+    return false;
+}
+
+static void ReconstructAtlasImage(void* mini)
+{
+    void* inst = (char*)mini + kAtlasImageDisp;
+    if (!UserPtr(inst) || !UserPtr(*(void**)inst) || !g_base || !InModule(*(void**)inst, (HMODULE)g_base))
+        return;
+    void** vt = *(void***)inst;
+    if (!UserPtr(vt) || !UserPtr(vt[2]) || !InModule(vt[2], (HMODULE)g_base))
+        return;
+    ((FnVoid)vt[2])(inst);
+}
+
+static void GuessWorldSize(void* mini, float* w, float* h)
+{
+    if (!mini || !w || !h)
+        return;
+    float bestA = 0, bestB = 0;
+    BYTE* p = (BYTE*)mini;
+    const int n = ReadableBytes(mini, 0x4000);
+    for (int i = 0; i + 8 <= n; i += 4)
+    {
+        const float a = *(float*)(p + i);
+        const float b = *(float*)(p + i + 4);
+        if (a < 20000.f || a > 400000.f || b < 20000.f || b > 400000.f)
+            continue;
+        if (a >= bestA && b >= bestB * 0.25f)
+        {
+            bestA = a;
+            bestB = b;
+        }
+    }
+    if (bestA > 0)
+    {
+        *w = bestA;
+        *h = bestB;
+    }
+}
+
+static bool CopyTexture(IDirect3DTexture9* tex, BYTE* dst, unsigned* outW, unsigned* outH)
+{
+    D3DSURFACE_DESC desc;
+    if (!tex || FAILED(tex->GetLevelDesc(0, &desc)))
+        return false;
+    IDirect3DDevice9* dev = nullptr;
+    if (FAILED(tex->GetDevice(&dev)) || !dev)
+        return false;
+    IDirect3DSurface9* src = nullptr;
+    IDirect3DSurface9* sys = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(tex->GetSurfaceLevel(0, &src)) && src &&
+        SUCCEEDED(dev->CreateOffscreenPlainSurface(desc.Width, desc.Height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &sys, nullptr)) && sys)
+    {
+        if (desc.Usage & D3DUSAGE_RENDERTARGET)
+            ok = SUCCEEDED(dev->GetRenderTargetData(src, sys));
+        else
+        {
+            IDirect3DSurface9* rt = nullptr;
+            if (SUCCEEDED(dev->CreateRenderTarget(desc.Width, desc.Height, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &rt, nullptr)) && rt)
+            {
+                if (SUCCEEDED(dev->StretchRect(src, nullptr, rt, nullptr, D3DTEXF_LINEAR)))
+                    ok = SUCCEEDED(dev->GetRenderTargetData(rt, sys));
+                rt->Release();
+            }
+        }
+        if (!ok)
+        {
+            D3DLOCKED_RECT lr = {};
+            if (SUCCEEDED(tex->LockRect(0, &lr, nullptr, D3DLOCK_READONLY)))
+            {
+                sys->Release();
+                sys = nullptr;
+                const unsigned w = desc.Width > kAtlasMax ? kAtlasMax : desc.Width;
+                const unsigned h = desc.Height > kAtlasMax ? kAtlasMax : desc.Height;
+                BYTE* s = (BYTE*)lr.pBits;
+                for (unsigned y = 0; y < h; ++y)
+                {
+                    const unsigned sy = h == desc.Height ? y : y * desc.Height / h;
+                    memcpy(dst + y * w * 4, s + sy * lr.Pitch, w * 4);
+                }
+                tex->UnlockRect(0);
+                *outW = w;
+                *outH = h;
+                src->Release();
+                dev->Release();
+                return true;
+            }
+        }
+        if (ok)
+        {
+            D3DLOCKED_RECT lr = {};
+            if (SUCCEEDED(sys->LockRect(&lr, nullptr, D3DLOCK_READONLY)))
+            {
+                const unsigned w = desc.Width > kAtlasMax ? kAtlasMax : desc.Width;
+                const unsigned h = desc.Height > kAtlasMax ? kAtlasMax : desc.Height;
+                BYTE* s = (BYTE*)lr.pBits;
+                for (unsigned y = 0; y < h; ++y)
+                {
+                    const unsigned sy = h == desc.Height ? y : y * desc.Height / h;
+                    BYTE* row = s + sy * lr.Pitch;
+                    BYTE* drow = dst + y * w * 4;
+                    for (unsigned x = 0; x < w; ++x)
+                    {
+                        const unsigned sx = w == desc.Width ? x : x * desc.Width / w;
+                        memcpy(drow + x * 4, row + sx * 4, 4);
+                    }
+                }
+                sys->UnlockRect();
+                *outW = w;
+                *outH = h;
+            }
+            else
+                ok = false;
+        }
+    }
+    if (sys)
+        sys->Release();
+    if (src)
+        src->Release();
+    dev->Release();
+    return ok;
+}
+
+static bool WriteAtlasFile(const BYTE* pixels, unsigned width, unsigned height)
+{
+    char path[MAX_PATH];
+    if (!GetTempPathA(MAX_PATH, path))
+        return false;
+    strcat_s(path, "FarmBotAtlas.bin");
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "wb") != 0 || !f)
+        return false;
+    unsigned hdr[8] = {};
+    hdr[0] = kAtlasMagic;
+    hdr[1] = g_atlasSeq;
+    hdr[2] = width;
+    hdr[3] = height;
+    memcpy(hdr + 4, &g_atlasWorldW, 4);
+    memcpy(hdr + 5, &g_atlasWorldH, 4);
+    hdr[6] = 1;
+    const bool ok = fwrite(hdr, 1, 32, f) == 32 &&
+        fwrite(pixels, 1, width * height * 4, f) == width * height * 4;
+    fclose(f);
+    return ok;
+}
+
+static void ReadWorldSize(void* mini)
+{
+    g_atlasWorldW = *(float*)((char*)mini + kAtlasWorldXDisp);
+    g_atlasWorldH = *(float*)((char*)mini + kAtlasWorldYDisp);
+    if (g_atlasWorldW >= 10000.f && g_atlasWorldH >= 10000.f && g_atlasWorldW <= 500000.f && g_atlasWorldH <= 500000.f)
+        return;
+    const unsigned dwx = *(unsigned*)((char*)mini + kAtlasWorldXDisp);
+    const unsigned dwy = *(unsigned*)((char*)mini + kAtlasWorldYDisp);
+    if (dwx >= 10000 && dwy >= 10000 && dwx <= 500000 && dwy <= 500000)
+    {
+        g_atlasWorldW = (float)dwx;
+        g_atlasWorldH = (float)dwy;
+        return;
+    }
+    GuessWorldSize(mini, &g_atlasWorldW, &g_atlasWorldH);
+}
+
+static void CaptureAtlasInner()
+{
+    if (!g_hudOk || !Player())
+    {
+        g_lastReason = "atlas wait for world";
+        return;
+    }
+    void* mini = MiniMap();
+    if (!mini || ReadableBytes(mini, kAtlasWorldYDisp + 8) < (int)(kAtlasWorldYDisp + 8))
+    {
+        g_lastReason = "minimap singleton is null";
+        return;
+    }
+    const float prevW = g_atlasWorldW;
+    const float prevH = g_atlasWorldH;
+    ReadWorldSize(mini);
+    if (g_atlasWidth >= 64 && g_atlasScratch &&
+        g_atlasWorldW == prevW && g_atlasWorldH == prevH && prevW >= 10000.f)
+    {
+        g_lastOk = true;
+        g_lastReason = "atlas cached";
+        return;
+    }
+    void* image = *(void**)((char*)mini + kAtlasImageDisp + kAtlasImageRefDisp);
+    if (!UserPtr(image) || ReadableBytes(image, kImageTexDisp + 8) < (int)(kImageTexDisp + 8))
+    {
+        g_lastReason = "atlas image pointer is null";
+        return;
+    }
+    if (!g_atlasScratch)
+        g_atlasScratch = (BYTE*)VirtualAlloc(nullptr, kAtlasPixels, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    BYTE* pixels = g_atlasScratch;
+    void* tex8 = *(void**)((char*)image + kImageTexDisp);
+    bool copied = pixels && CopyTexture8(tex8, pixels, &g_atlasWidth, &g_atlasHeight);
+    if (!copied && pixels)
+        copied = CopyCpuImage(image, pixels, &g_atlasWidth, &g_atlasHeight);
+    if (!copied)
+    {
+        g_atlasWidth = 0;
+        g_atlasHeight = 0;
+        char why[192];
+        _snprintf_s(
+            why,
+            _TRUNCATE,
+            "no atlas pixels tex=0x%p d3d8=%d img=0x%p world=%.0fx%.0f",
+            tex8,
+            IsD3D8Object(tex8),
+            image,
+            g_atlasWorldW,
+            g_atlasWorldH);
+        g_lastReason = why;
+        return;
+    }
+    g_atlasSeq++;
+    if (g_atlasView)
+    {
+        unsigned* hdr = (unsigned*)g_atlasView;
+        hdr[0] = kAtlasMagic;
+        hdr[1] = g_atlasSeq;
+        hdr[2] = g_atlasWidth;
+        hdr[3] = g_atlasHeight;
+        memcpy(hdr + 4, &g_atlasWorldW, 4);
+        memcpy(hdr + 5, &g_atlasWorldH, 4);
+        hdr[6] = 1;
+    }
+    if (!WriteAtlasFile(pixels, g_atlasWidth, g_atlasHeight))
+    {
+        g_lastReason = "atlas file write failed";
+        return;
+    }
+    g_lastOk = true;
+    char ok[96];
+    _snprintf_s(ok, _TRUNCATE, "atlas %ux%u world=%.0fx%.0f", g_atlasWidth, g_atlasHeight, g_atlasWorldW, g_atlasWorldH);
+    g_lastReason = ok;
+}
+
+static void CaptureAtlas()
+{
+    g_lastOk = false;
+    g_lastReason = "atlas from client files";
+}
+
+static void InitAtlasMap()
+{
+    g_atlasMap = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, kAtlasBytes, "Local\\FarmBotAtlas");
+    if (g_atlasMap)
+        g_atlasView = (BYTE*)MapViewOfFile(g_atlasMap, FILE_MAP_ALL_ACCESS, 0, 0, kAtlasBytes);
+}
+
 static bool CallNewAttack(void* player)
 {
     FnNewAttack fn = (FnNewAttack)(g_base + kNewAttackRva);
@@ -273,6 +862,12 @@ static void Execute(const Command& cmd)
             g_lastLootMs = 0;
         g_lastOk = true;
         g_lastReason = g_lootOn ? "loot loop on" : "loot loop off";
+        return;
+    }
+
+    if (cmd.type == "get_atlas")
+    {
+        CaptureAtlas();
         return;
     }
 
@@ -730,7 +1325,7 @@ static void Serve()
         _snprintf_s(
             reply,
             _TRUNCATE,
-            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d}",
+            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d,\"atlasWidth\":%u,\"atlasHeight\":%u,\"worldW\":%.1f,\"worldH\":%.1f}",
             g_lastOk ? "true" : "false",
             cmd.type.c_str(),
             g_lastReason.c_str(),
@@ -741,7 +1336,11 @@ static void Serve()
             g_hudHp,
             g_hudMaxHp,
             g_hudMp,
-            g_hudMaxMp);
+            g_hudMaxMp,
+            g_atlasWidth,
+            g_atlasHeight,
+            g_atlasWorldW,
+            g_atlasWorldH);
         if (!WriteFrame(reply))
             break;
     }
@@ -752,6 +1351,7 @@ static DWORD WINAPI InitThread(void*)
     LoadConfig();
     HMODULE client = FindClient();
     g_base = (BYTE*)client;
+    InitAtlasMap();
     InstallLoopHooks(client);
     Serve();
     return 0;

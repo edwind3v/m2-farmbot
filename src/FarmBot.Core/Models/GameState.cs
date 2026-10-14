@@ -17,6 +17,8 @@ public sealed record PlayerState
     public int NextExp { get; init; }
     public uint TargetVid { get; init; }
     public string MapName { get; init; } = "";
+    public float MapWorldW { get; init; }
+    public float MapWorldH { get; init; }
     public float FacingDeg { get; init; }
 
     public double HpPercent => MaxHp > 0 ? 100.0 * Hp / MaxHp : 0;

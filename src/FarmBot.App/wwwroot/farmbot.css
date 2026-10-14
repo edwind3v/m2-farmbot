@@ -75,12 +75,31 @@
     gap: 10px;
 }
 
-.minimap {
+.minimap-stage {
+    position: relative;
     width: min(100%, 280px);
     aspect-ratio: 1;
-    background: #0e1016;
     border-radius: 50%;
+    overflow: hidden;
     border: 1px solid var(--line);
+    background: #0e1016;
+}
+
+.minimap-atlas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+}
+
+.minimap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    border: none;
     display: block;
 }
 

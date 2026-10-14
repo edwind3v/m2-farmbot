@@ -10,6 +10,7 @@ public sealed record Entity
     public float X { get; init; }
     public float Y { get; init; }
     public float Z { get; init; }
+    public float Rotation { get; init; }
     public float Distance { get; init; }
     public string Name { get; init; } = "";
     public int Hp { get; init; } = 1;

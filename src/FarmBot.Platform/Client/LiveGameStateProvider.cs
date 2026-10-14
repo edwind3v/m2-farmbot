@@ -260,6 +260,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             return false;
         if (layout.NegatePixelY)
             y = -y;
+        memory.TryReadF32(instance + layout.GraphicDisplacement + 0x4A4, out var rotation);
 
         var vid = mapVid;
         if (vid == 0 && layout.SelfVidDisplacement != 0 &&
@@ -288,6 +289,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             X = x,
             Y = y,
             Z = z,
+            Rotation = rotation,
             Distance = distance,
             Name = name
         };
@@ -348,9 +350,9 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
     {
         var layout = _playerLayout;
         if (layout == null || layout.PlayerSingletonRva == 0)
-            return WithFacing(PlayerFromMain(main), main);
+            return WithMap(WithFacing(PlayerFromMain(main), main), process);
         if (!process.TryReadU32(process.ImageBase + layout.PlayerSingletonRva, out var player) || !IsUserPointer(player))
-            return WithFacing(PlayerFromMain(main), main);
+            return WithMap(WithFacing(PlayerFromMain(main), main), process);
 
         var name = main?.Name ?? "";
         if (layout.PlayerNameDisplacement != 0)
@@ -370,6 +372,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             Log($"player HUD RPM: '{name}' lv {level} hp {hp}/{maxHp} mp {mp}/{maxMp} exp {exp}/{nextExp} (points +0x{_resolvedPointsDisp:X} xor 0x{_resolvedPointsXor:X8})");
         }
 
+        TryReadMap(process, out var mapName, out var mapWorldW, out var mapWorldH);
         return new PlayerState
         {
             Name = name,
@@ -383,12 +386,76 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             Level = level,
             Exp = exp,
             NextExp = nextExp,
-            FacingDeg = UpdateFacing(main)
+            MapName = mapName,
+            MapWorldW = mapWorldW,
+            MapWorldH = mapWorldH,
+            FacingDeg = MinimapFacing(main)
         };
     }
 
+    private static void TryReadMap(ProcessMemory process, out string mapName, out float worldW, out float worldH)
+    {
+        mapName = "";
+        worldW = 0;
+        worldH = 0;
+        const uint backgroundRva = 0x48238C;
+        const uint miniMapRva = 0x482BA8;
+        if (process.TryReadU32(process.ImageBase + backgroundRva, out var background) && IsUserPointer(background))
+        {
+            if (process.TryReadU32(background + 0x1448, out var map) && IsUserPointer(map))
+            {
+                TryReadStdString(process, map + 8, out mapName);
+                if (process.TryRead(map + 0x70, 4, out var cells) && cells.Length >= 4)
+                {
+                    var cx = BitConverter.ToUInt16(cells, 0);
+                    var cy = BitConverter.ToUInt16(cells, 2);
+                    if (cx is > 0 and < 64 && cy is > 0 and < 64)
+                    {
+                        worldW = cx * 25600f;
+                        worldH = cy * 25600f;
+                    }
+                }
+            }
+        }
+
+        if (process.TryReadU32(process.ImageBase + miniMapRva, out var mini) && IsUserPointer(mini) &&
+            process.TryReadF32(mini + 0x328, out var mw) && process.TryReadF32(mini + 0x32C, out var mh) &&
+            mw is >= 10000f and <= 500000f && mh is >= 10000f and <= 500000f)
+        {
+            worldW = mw;
+            worldH = mh;
+        }
+    }
+
     private PlayerState? WithFacing(PlayerState? player, Entity? main) =>
-        player == null ? null : player with { FacingDeg = UpdateFacing(main) };
+        player == null ? null : player with { FacingDeg = MinimapFacing(main) };
+
+    private float MinimapFacing(Entity? main)
+    {
+        if (main != null && !float.IsNaN(main.Rotation))
+        {
+            var deg = 540f - main.Rotation;
+            while (deg >= 360f)
+                deg -= 360f;
+            while (deg < 0f)
+                deg += 360f;
+            _facingDeg = deg;
+            _lastX = main.X;
+            _lastY = main.Y;
+            _hasLastPos = true;
+            return deg;
+        }
+
+        return UpdateFacing(main);
+    }
+
+    private static PlayerState? WithMap(PlayerState? player, ProcessMemory process)
+    {
+        if (player == null)
+            return null;
+        TryReadMap(process, out var mapName, out var worldW, out var worldH);
+        return player with { MapName = mapName, MapWorldW = worldW, MapWorldH = worldH };
+    }
 
     private float UpdateFacing(Entity? main)
     {

@@ -28,6 +28,10 @@ public sealed class ActionResponse
     public int MaxHp { get; set; }
     public int Mp { get; set; }
     public int MaxMp { get; set; }
+    public int AtlasWidth { get; set; }
+    public int AtlasHeight { get; set; }
+    public float WorldW { get; set; }
+    public float WorldH { get; set; }
 }
 
 public static class ActionProtocol
@@ -43,6 +47,7 @@ public static class ActionProtocol
     public const string GetHud = "get_hud";
     public const string Pickup = "pickup";
     public const string LootLoop = "loot_loop";
+    public const string GetAtlas = "get_atlas";
     public const int Version = 1;
 
     public static byte[] Encode(object value) => FrameEncode(JsonSerializer.SerializeToUtf8Bytes(value, JsonDefaults.Instance));

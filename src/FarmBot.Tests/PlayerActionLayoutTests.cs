@@ -35,4 +35,19 @@ public class PlayerActionLayoutTests
         Assert.Equal(8, layout.PointMaxSp);
         Assert.Equal(0xD1280u, layout.PickCloseItemRva);
     }
+
+    [Fact]
+    public void RecoversMiniMapAtlasBindings()
+    {
+        Assert.True(File.Exists(ReleaseClient), ReleaseClient);
+        var mini = PlayerActionLayoutRecoverer.RecoverMiniMap(ReleaseClient);
+        var dump = $"singleton=0x{mini.SingletonRva:X} show=0x{mini.ShowAtlasRva:X} hide=0x{mini.HideAtlasRva:X} load=0x{mini.LoadAtlasRva:X} update=0x{mini.UpdateAtlasRva:X} render=0x{mini.RenderAtlasRva:X} isShow=0x{mini.IsShowAtlasRva:X}\n" +
+                   string.Join("\n", mini.Evidence);
+        Directory.CreateDirectory(@"C:\Temp");
+        File.WriteAllText(@"C:\Temp\minimap-layout.txt", dump);
+        Assert.Equal(0x482BA8u, mini.SingletonRva);
+        Assert.Equal(0xF9980u, mini.LoadAtlasRva);
+        Assert.Equal(0xFB7B0u, mini.ShowAtlasRva);
+        Assert.Equal(0xF9960u, mini.HideAtlasRva);
+    }
 }

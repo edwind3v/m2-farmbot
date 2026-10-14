@@ -36,4 +36,22 @@ public class PlayerHudDecoderTests
         var empty = PlayerHudDecoder.XorOfZero;
         Assert.False(PlayerHudDecoder.LooksLikeHud(empty, empty, empty, empty, empty, empty, empty));
     }
+
+    [Fact]
+    public void AtlasBmpHasBitmapHeader()
+    {
+        var bgra = new byte[4 * 4 * 4];
+        for (var i = 0; i < bgra.Length; i += 4)
+        {
+            bgra[i] = 40;
+            bgra[i + 1] = 80;
+            bgra[i + 2] = 120;
+            bgra[i + 3] = 255;
+        }
+
+        var bmp = AtlasPixels.ToBmp(bgra, 4, 4);
+        Assert.Equal((byte)'B', bmp[0]);
+        Assert.Equal((byte)'M', bmp[1]);
+        Assert.True(bmp.Length > 54);
+    }
 }

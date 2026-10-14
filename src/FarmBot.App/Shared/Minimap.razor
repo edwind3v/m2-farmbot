@@ -3,8 +3,13 @@
 @inject FarmBotShell Shell
 
 <div class="minimap-wrap">
-    <svg class="minimap" viewBox="0 0 200 200" aria-label="Farm map">
-        <circle cx="100" cy="100" r="99" fill="#0e1016" stroke="rgba(232,228,218,0.12)" />
+    <div class="minimap-stage">
+        @if (!string.IsNullOrEmpty(Shell.AtlasUrl))
+        {
+            <img class="minimap-atlas" src="@Shell.AtlasUrl" alt="" />
+        }
+        <svg class="minimap" viewBox="0 0 200 200" aria-label="Farm map">
+        <circle cx="100" cy="100" r="99" fill="@(string.IsNullOrEmpty(Shell.AtlasUrl) ? "#0e1016" : "transparent")" stroke="rgba(232,228,218,0.12)" />
         <circle cx="100" cy="100" r="@N(FarmCircle)" fill="none" stroke="rgba(196,120,58,0.55)" stroke-width="1.2" />
         @foreach (var mark in Marks)
         {
@@ -19,7 +24,8 @@
         <g transform="rotate(@N(Facing), 100, 100)">
             <polygon points="100,93 106,107 100,103 94,107" fill="#c4783a" />
         </g>
-    </svg>
+        </svg>
+    </div>
     <div class="minimap-legend">
         <span><i class="dot-mob"></i>mobs</span>
         <span><i class="dot-stone"></i>stones</span>
@@ -38,12 +44,11 @@
 </div>
 
 @code {
-    private const float FullView = 8000f;
     private sealed record Mark(double X, double Y, string Fill, string Label, bool Target);
 
     private IReadOnlyList<Mark> Marks => BuildMarks();
 
-    private double ViewRadius => FullView * Math.Clamp(Shell.Config.MapZoom, 20, 100) / 100.0;
+    private double ViewRadius => Shell.MapViewRadius;
 
     private double FarmCircle => Math.Clamp(92.0 * Shell.Config.FarmRadius / ViewRadius, 4, 96);
 

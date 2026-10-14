@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Runtime.Versioning;
 
 namespace FarmBot.Core.Combat;
 
@@ -172,6 +173,34 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         if (!response.Ok || response.MaxHp <= 0 || response.Level is < 1 or > 250)
             return false;
         hud = new PlayerHudPoints(response.Level, response.Exp, response.NextExp, response.Hp, response.MaxHp, response.Mp, response.MaxMp);
+        return true;
+    }
+
+    public string LastAtlasStatus { get; private set; } = "";
+
+    public bool TryReadAtlas(out AtlasPixels atlas)
+    {
+        atlas = new AtlasPixels();
+        Ensure();
+        if (!_client.Connected)
+        {
+            LastAtlasStatus = "adapter not connected";
+            return false;
+        }
+
+        var response = _client.Submit(ActionProtocol.GetAtlas, 0, true, updateStatus: false);
+        LastAtlasStatus = string.IsNullOrWhiteSpace(response.Reason) ? "no atlas reason" : response.Reason;
+        if (!AtlasPixels.TryOpen(out atlas) || !atlas.HasImage)
+            return false;
+        if (atlas.WorldW <= 0 && response.WorldW > 0)
+            atlas = new AtlasPixels
+            {
+                Width = atlas.Width,
+                Height = atlas.Height,
+                WorldW = response.WorldW,
+                WorldH = response.WorldH,
+                Bgra = atlas.Bgra
+            };
         return true;
     }
 

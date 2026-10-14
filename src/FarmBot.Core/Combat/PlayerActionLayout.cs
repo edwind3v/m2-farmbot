@@ -34,6 +34,16 @@ public sealed record PlayerActionLayout(
     public int PointMaxSp { get; init; } = 8;
 }
 
+public sealed record MiniMapLayout(
+    uint SingletonRva,
+    uint ShowAtlasRva,
+    uint HideAtlasRva,
+    uint LoadAtlasRva,
+    uint UpdateAtlasRva,
+    uint RenderAtlasRva,
+    uint IsShowAtlasRva,
+    IReadOnlyList<string> Evidence);
+
 public static class PlayerActionLayoutRecoverer
 {
     public static PlayerActionLayout Recover(string path)
@@ -80,6 +90,9 @@ public static class PlayerActionLayoutRecoverer
         else
             evidence.Add("PickCloseItem Python wrapper was not recovered.");
 
+        var mini = RecoverMiniMap(pe, evidence);
+        evidence.Add($"MiniMap singleton=0x{mini.singleton:X} load=0x{mini.load:X} update=0x{mini.update:X} render=0x{mini.render:X}.");
+
         return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKey.native, combo.native, pickClose.native, targetDisp, virt.thisAdj, virt.slot, prologue, hud.points, hud.name, hud.xor, evidence)
         {
             PointLevel = points.level,
@@ -90,6 +103,177 @@ public static class PlayerActionLayoutRecoverer
             PointSp = points.sp,
             PointMaxSp = points.maxSp
         };
+    }
+
+    public static MiniMapLayout RecoverMiniMap(string path)
+    {
+        var pe = ActionPe.Load(path);
+        var evidence = new List<string>();
+        var found = RecoverMiniMap(pe, evidence);
+        return new MiniMapLayout(found.singleton, found.show, found.hide, found.load, found.update, found.render, found.isShow, evidence);
+    }
+
+    private static (uint singleton, uint show, uint hide, uint load, uint update, uint render, uint isShow) RecoverMiniMap(ActionPe pe, List<string> evidence)
+    {
+        foreach (var name in new[]
+                 {
+                     "ShowAtlasWindow", "HideAtlasWindow", "ShowAtlas", "HideAtlas", "isShowAtlas",
+                     "LoadAtlas", "UpdateAtlas", "RenderAtlas", "isAtlas", "atlas.sub", "atlas.dds",
+                     "atlas.tga", "miniMap"
+                 })
+        {
+            if (pe.TryFindAscii(name, out var va))
+                evidence.Add($"string '{name}' VA 0x{va:X}");
+            else
+                evidence.Add($"string '{name}' missing");
+        }
+
+        if (pe.TryFindAscii("LoadAtlas", out var cluster))
+        {
+            var cursor = cluster > 0x80 ? cluster - 0x80 : cluster;
+            var end = cluster + 0x180;
+            while (cursor < end)
+            {
+                var text = pe.CString(cursor);
+                if (text.Length >= 3 && text.Length < 40 && text.All(ch => ch is >= (char)0x20 and < (char)0x7F))
+                    evidence.Add($"atlas-cluster '{text}' VA 0x{cursor:X}");
+                cursor += (uint)Math.Max(1, text.Length + 1);
+            }
+        }
+
+        var load = RecoverMiniMapNative(pe, "LoadAtlas", evidence);
+        var update = RecoverMiniMapNative(pe, "UpdateAtlas", evidence);
+        var render = RecoverMiniMapNative(pe, "RenderAtlas", evidence);
+        var isShow = RecoverMiniMapNative(pe, "isShowAtlas", evidence);
+        var show = RecoverMiniMapNative(pe, "ShowAtlas", evidence);
+        if (show.native == 0)
+            show = RecoverMiniMapNative(pe, "ShowAtlasWindow", evidence);
+        var hide = RecoverMiniMapNative(pe, "HideAtlas", evidence);
+        if (hide.native == 0)
+            hide = RecoverMiniMapNative(pe, "HideAtlasWindow", evidence);
+        var size = RecoverMiniMapNative(pe, "GetAtlasSize", evidence);
+        RecoverMiniMapNative(pe, "GetAtlasInfo", evidence);
+        RecoverMiniMapNative(pe, "IsAtlas", evidence);
+        if (load.native != 0)
+        {
+            evidence.Add($"LoadAtlas native bytes {pe.Hex(pe.ImageBase + load.native, 320)}");
+            evidence.Add("LoadAtlas ecx-disp " + string.Join(", ", EcxDisplacements(pe, load.native).Select(d => $"0x{d:X}")));
+            RecoverAtlasImageStore(pe, load.native, evidence);
+        }
+        if (size.native != 0)
+        {
+            evidence.Add($"GetAtlasSize native bytes {pe.Hex(pe.ImageBase + size.native, 96)}");
+            evidence.Add("GetAtlasSize ecx-disp " + string.Join(", ", EcxDisplacements(pe, size.native).Select(d => $"0x{d:X}")));
+        }
+        foreach (var name in new[] { "atlas", "Atlas", "maps/%s", "minimap", "MiniMap_Atlas" })
+        {
+            if (pe.TryFindAscii(name, out var va))
+                evidence.Add($"path-string '{name}' VA 0x{va:X}");
+        }
+        var singleton = PreferInImage(pe, load.singleton, update.singleton, render.singleton, isShow.singleton, show.singleton, hide.singleton);
+        return (singleton, show.native, hide.native, load.native, update.native, render.native, isShow.native);
+    }
+
+    private static (uint native, uint singleton) RecoverMiniMapNative(ActionPe pe, string name, List<string> evidence)
+    {
+        var found = RecoverNamedNative(pe, name, evidence);
+        if (found.wrapper == 0)
+            return (0, 0);
+        var native = FirstCallAfterSingletonLoad(pe, found.wrapper, out var singleton);
+        if (native == 0)
+            native = found.native;
+        if (singleton == 0)
+            singleton = found.singleton;
+        evidence.Add($"miniMap.{name} wrapper=0x{found.wrapper:X} native=0x{native:X} singleton=0x{singleton:X} bytes={pe.Hex(pe.ImageBase + found.wrapper, 48)}");
+        return (native, singleton);
+    }
+
+    private static void RecoverAtlasImageStore(ActionPe pe, uint loadRva, List<string> evidence)
+    {
+        var off = pe.VaToFile(pe.ImageBase + loadRva);
+        if (off < 0)
+            return;
+        for (var i = off; i < off + 0x200 && i + 11 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0x8D || pe.Byte(i + 1) != 0x8F || pe.ReadU32(i + 2) != 0x26C || pe.Byte(i + 6) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 11) + pe.ReadI32(i + 7));
+            if (!pe.IsCode(target))
+                continue;
+            evidence.Add($"SetImage RVA 0x{target - pe.ImageBase:X} bytes={pe.Hex(target, 80)}");
+            if (i + 16 < pe.Length && pe.Byte(i + 11) == 0x8B && pe.Byte(i + 12) == 0xCE && pe.Byte(i + 13) == 0xE8)
+            {
+                var imgFn = (uint)(pe.FileToVa(i + 18) + pe.ReadI32(i + 14));
+                evidence.Add($"ImageAfterSet RVA 0x{imgFn - pe.ImageBase:X} bytes={pe.Hex(imgFn, 64)}");
+                evidence.Add("ImageAfterSet ecx-disp " + string.Join(", ", EcxDisplacements(pe, imgFn - pe.ImageBase).Select(d => $"0x{d:X}")));
+            }
+            var fn = pe.VaToFile(target);
+            for (var j = fn; j < fn + 0x60 && j + 6 < pe.Length; j++)
+            {
+                if (pe.Byte(j) == 0x89 && pe.Byte(j + 1) is 0x41 or 0x46 or 0x4E or 0x4F)
+                    evidence.Add($"SetImage store [reg+0x{pe.Byte(j + 2):X}]");
+                if (pe.Byte(j) == 0x89 && pe.Byte(j + 1) is 0x81 or 0x86 or 0x87)
+                    evidence.Add($"SetImage store [reg+0x{pe.ReadU32(j + 2):X}]");
+            }
+        }
+    }
+
+    private static List<uint> EcxDisplacements(ActionPe pe, uint rva)
+    {
+        var found = new List<uint>();
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        if (off < 0)
+            return found;
+        for (var i = off; i < off + 0x180 && i + 6 < pe.Length; i++)
+        {
+            var b0 = pe.Byte(i);
+            var b1 = pe.Byte(i + 1);
+            if ((b0 == 0x8B || b0 == 0x89 || b0 == 0x8D || b0 == 0xD9 || b0 == 0xF3) &&
+                (b1 == 0x81 || b1 == 0x89 || b1 == 0x80 || b1 == 0xB1 || b1 == 0x88))
+            {
+                var disp = pe.ReadU32(i + 2);
+                if (disp is > 4 and < 0x20000 && !found.Contains(disp))
+                    found.Add(disp);
+            }
+            if (b0 == 0x8B && b1 is 0x41 or 0x49 or 0x51 or 0x59 or 0x69 or 0x71 or 0x79)
+            {
+                var disp = pe.Byte(i + 2);
+                if (disp > 4 && !found.Contains(disp))
+                    found.Add(disp);
+            }
+        }
+        return found;
+    }
+
+    private static uint FirstCallAfterSingletonLoad(ActionPe pe, uint wrapperRva, out uint singletonRva)
+    {
+        singletonRva = 0;
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+        var start = off;
+        for (var i = off; i < off + 0x40 && i + 6 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0x8B || (pe.Byte(i + 1) != 0x0D && pe.Byte(i + 1) != 0x15))
+                continue;
+            var addr = pe.ReadU32(i + 2);
+            if (!pe.IsVa(addr))
+                continue;
+            singletonRva = addr - pe.ImageBase;
+            start = i + 6;
+            break;
+        }
+
+        for (var i = start; i < start + 0x20 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            if (pe.IsCode(target))
+                return target - pe.ImageBase;
+        }
+
+        return 0;
     }
 
     private static uint PreferInImage(ActionPe pe, params uint[] rvas)
@@ -852,6 +1036,17 @@ public static class PlayerActionLayoutRecoverer
             }
 
             return hits;
+        }
+
+        public string CString(uint va, int max = 64)
+        {
+            var off = VaToFile(va);
+            if (off < 0)
+                return "";
+            var end = off;
+            while (end < Length && end - off < max && _bytes[end] != 0)
+                end++;
+            return end > off ? Encoding.ASCII.GetString(_bytes, off, end - off) : "";
         }
 
         public byte Byte(int file) => file >= 0 && file < _bytes.Length ? _bytes[file] : (byte)0;
