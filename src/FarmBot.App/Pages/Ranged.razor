@@ -10,9 +10,10 @@
     </div>
 </div>
 
-<p class="lede">Start ranged follows you and blasts every selected target the same way as before — stand beside each one, then restore to where you actually are. Start bot still farms a locked circle.</p>
+<p class="lede">Start ranged follows you and blasts every selected target the same way as before — stand beside each one, then restore to where you actually are. Avoid attacks stands 250 units toward you instead of on the mob. Start bot still farms a locked circle.</p>
 
 <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAttackEnabled" /> Ranged attack</label>
+<label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAvoidAttacks" /> Avoid attacks</label>
 <div class="field-grid">
     <div class="field-row"><label>Radius</label><input type="number" min="0" step="25" @bind="Shell.Config.RangedAttackRadius" /></div>
         <div class="field-row"><label>Maximum targets at once</label><input type="number" @bind="Shell.Config.RangedAttackMaxTargets" /></div>

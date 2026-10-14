@@ -34,6 +34,7 @@ public sealed record NativeCombatAction
     public uint Vid { get; init; }
     public float X { get; init; }
     public float Y { get; init; }
+    public bool Avoid { get; init; }
     public string Hits { get; init; } = "";
 
     public string Describe() => Kind switch
@@ -58,7 +59,7 @@ public sealed record NativeCombatAction
         NativeActionKind.PressActor => BotCommand.PressActor(Vid, X, Y),
         NativeActionKind.Face => BotCommand.Face(Vid),
         NativeActionKind.Attack => new BotCommand { Kind = BotCommandKind.Attack, Vid = Vid, X = X, Y = Y },
-        NativeActionKind.Shot => new BotCommand { Kind = BotCommandKind.Shot, Vid = Vid, X = X, Y = Y, Hits = Hits },
+        NativeActionKind.Shot => new BotCommand { Kind = BotCommandKind.Shot, Vid = Vid, X = X, Y = Y, Hits = Hits, Avoid = Avoid },
         NativeActionKind.MoveTo => BotCommand.Move(X, Y),
         NativeActionKind.Stop => BotCommand.Stop(),
         NativeActionKind.Pickup => BotCommand.Pickup(new EntityState(), ""),
@@ -72,7 +73,7 @@ public sealed record NativeCombatAction
     public static NativeCombatAction Attack(uint vid) => new() { Kind = NativeActionKind.Attack, Vid = vid };
     public static NativeCombatAction Shot(uint vid) => new() { Kind = NativeActionKind.Shot, Vid = vid };
 
-    public static NativeCombatAction Shot(IReadOnlyList<EntityState> targets, float restoreX, float restoreY)
+    public static NativeCombatAction Shot(IReadOnlyList<EntityState> targets, float restoreX, float restoreY, bool avoid = false)
     {
         var first = targets[0];
         return new()
@@ -81,6 +82,7 @@ public sealed record NativeCombatAction
             Vid = first.Vid,
             X = restoreX,
             Y = restoreY,
+            Avoid = avoid,
             Hits = BotCommand.EncodeHits(targets)
         };
     }

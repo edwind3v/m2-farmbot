@@ -116,7 +116,7 @@ public sealed class AutoCombatController
         _targetVid = target.Vid;
         _lastAttackMs = nowMs;
         return Enter(CombatState.Attack, nowMs, target,
-            NativeCombatAction.Shot(picked, snapshot.Player.X, snapshot.Player.Y),
+            NativeCombatAction.Shot(picked, snapshot.Player.X, snapshot.Player.Y, config.RangedAvoidAttacks),
             $"ranged blast {picked.Count}");
     }
 

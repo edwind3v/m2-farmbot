@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <d3d9.h>
 #include <psapi.h>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -28,6 +29,7 @@ static const unsigned kMainPtrDisp = 0x0C;
 static const unsigned kGraphicDisp = 0x1EC;
 static const unsigned kPixelXDisp = 0x46C;
 static const unsigned kPixelYDisp = 0x470;
+static const float kAvoidStand = 250.f;
 static const unsigned kAttackKeyRva = 0xD2030;
 static const unsigned kReserveClickRva = 0xD1B90;
 static const unsigned kSetAutoRva = 0xD1DF0;
@@ -95,6 +97,7 @@ struct Command
     std::string type;
     unsigned vid;
     int force;
+    int avoid;
     float x;
     float y;
     std::vector<ShotHit> hits;
@@ -890,6 +893,21 @@ static bool ReadMainPixel(float* x, float* y)
     return ReadPixel(MainInstance(), x, y);
 }
 
+static void StandOff(float mobX, float mobY, float playerX, float playerY, float* x, float* y)
+{
+    float dx = playerX - mobX;
+    float dy = playerY - mobY;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1.f)
+    {
+        dx = 1.f;
+        dy = 0.f;
+        len = 1.f;
+    }
+    *x = mobX + dx / len * kAvoidStand;
+    *y = mobY + dy / len * kAvoidStand;
+}
+
 static void ParseHits(Command* cmd, const std::string& src)
 {
     cmd->hits.clear();
@@ -1024,13 +1042,20 @@ static void Execute(const Command& cmd)
         CallAttackKey(player, false);
         CallRva(kSetAutoRva, player, 0);
         ClearReserved(player);
+        float px = cmd.x;
+        float py = cmd.y;
+        ReadMainPixel(&px, &py);
         unsigned sent = 0;
         for (size_t i = 0; i < hits.size(); ++i)
         {
             const ShotHit& hit = hits[i];
             if (!CallGetInstance(hit.vid))
                 continue;
-            CallSendState(hit.x, hit.y, kFuncAttack);
+            float sx = hit.x;
+            float sy = hit.y;
+            if (cmd.avoid)
+                StandOff(hit.x, hit.y, px, py, &sx, &sy);
+            CallSendState(sx, sy, kFuncAttack);
             if (CallSendAttackPacket(hit.vid))
             {
                 g_lastVid = hit.vid;
@@ -1439,6 +1464,7 @@ static void Serve()
         cmd.type = JsonString(json, "type");
         cmd.vid = JsonU32(json, "vid");
         cmd.force = JsonTrue(json, "force") ? 1 : 0;
+        cmd.avoid = JsonTrue(json, "avoid") ? 1 : 0;
         cmd.x = JsonFloat(json, "x");
         cmd.y = JsonFloat(json, "y");
         ParseHits(&cmd, JsonString(json, "hits"));

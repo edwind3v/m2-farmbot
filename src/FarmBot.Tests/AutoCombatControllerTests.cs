@@ -107,6 +107,7 @@ public class AutoCombatControllerTests
 
         var first = controller.Tick(world, config, true, 10_100);
         Assert.Equal(NativeActionKind.Shot, first.Action!.Kind);
+        Assert.False(first.Action.Avoid);
         Assert.Contains("52,", first.Action.Hits);
         Assert.Contains("51,", first.Action.Hits);
         Assert.Contains("blast", first.Reason, StringComparison.OrdinalIgnoreCase);
@@ -120,6 +121,23 @@ public class AutoCombatControllerTests
         Assert.Equal(NativeActionKind.Shot, second.Action!.Kind);
         Assert.Contains("52,", second.Action.Hits);
         Assert.Contains("51,", second.Action.Hits);
+    }
+
+    [Fact]
+    public void RangedAvoidAttacksMarksTheShot()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.RangedAttackEnabled = true;
+        config.RangedAvoidAttacks = true;
+        config.RangedAttackMaxTargets = 1;
+        var world = Fixtures.World(Fixtures.Mob(61, "Wild Dog", EntityKind.Monster, 800, 0));
+
+        controller.Tick(world, config, true, 20_000);
+        var shot = controller.Tick(world, config, true, 20_100);
+        Assert.Equal(NativeActionKind.Shot, shot.Action!.Kind);
+        Assert.True(shot.Action.Avoid);
     }
 
     [Fact]

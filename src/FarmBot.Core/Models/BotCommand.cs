@@ -40,6 +40,7 @@ public sealed record BotCommand
     public string Key { get; init; } = "";
     public int MpCost { get; init; }
     public string Hits { get; init; } = "";
+    public bool Avoid { get; init; }
 
     public string Describe() => Kind switch
     {
@@ -73,7 +74,7 @@ public sealed record BotCommand
 
     public static BotCommand Shot(EntityState target) => Shot(new[] { target }, target.X, target.Y);
 
-    public static BotCommand Shot(IReadOnlyList<EntityState> targets, float restoreX, float restoreY)
+    public static BotCommand Shot(IReadOnlyList<EntityState> targets, float restoreX, float restoreY, bool avoid = false)
     {
         var first = targets[0];
         return new()
@@ -86,7 +87,8 @@ public sealed record BotCommand
             ScreenX = first.ScreenX,
             ScreenY = first.ScreenY,
             OnScreen = first.OnScreen,
-            Hits = EncodeHits(targets)
+            Hits = EncodeHits(targets),
+            Avoid = avoid
         };
     }
 

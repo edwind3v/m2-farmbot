@@ -160,6 +160,7 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
                 Force = true,
                 X = action.X,
                 Y = action.Y,
+                Avoid = action.Avoid,
                 Hits = action.Hits ?? ""
             }).Ok;
         }

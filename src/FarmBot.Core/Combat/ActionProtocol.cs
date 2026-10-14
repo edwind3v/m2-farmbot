@@ -14,6 +14,7 @@ public sealed class ActionRequest
     public bool Force { get; set; } = true;
     public float X { get; set; }
     public float Y { get; set; }
+    public bool Avoid { get; set; }
     public string Hits { get; set; } = "";
 }
 

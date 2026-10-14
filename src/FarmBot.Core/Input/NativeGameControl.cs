@@ -41,7 +41,8 @@ public sealed class NativeGameControl : IGameControl
             Vid = command.Vid,
             X = command.X,
             Y = command.Y,
-            Hits = command.Hits
+            Hits = command.Hits,
+            Avoid = command.Avoid
         },
         BotCommandKind.Move => NativeCombatAction.MoveTo(command.X, command.Y),
         BotCommandKind.Stop => NativeCombatAction.Stop(),

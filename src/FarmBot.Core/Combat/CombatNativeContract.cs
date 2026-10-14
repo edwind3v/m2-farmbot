@@ -9,6 +9,7 @@ public static class CombatNativeContract
     public const float MeleeClickableDistance = 150f;
     public const float GroundClickableDistance = 150f;
     public const float ComboDistance = 250f;
+    public const float AvoidStandOff = 250f;
     public const float ClickDistance = 300f;
     public const float NpcClickableDistance = 500f;
     public const float AttackDelaySeconds = 0.2f;
@@ -24,4 +25,20 @@ public static class CombatNativeContract
         "SetTarget runs only on the window thread that already calls CPythonApplication::Process; do not thiscall it from an adapter worker";
 
     public static bool IsFarmableActor(int actorType) => actorType is 0 or 2;
+
+    public static void StandOff(float mobX, float mobY, float playerX, float playerY, out float x, out float y)
+    {
+        var dx = playerX - mobX;
+        var dy = playerY - mobY;
+        var len = MathF.Sqrt(dx * dx + dy * dy);
+        if (len < 1f)
+        {
+            dx = 1f;
+            dy = 0f;
+            len = 1f;
+        }
+
+        x = mobX + dx / len * AvoidStandOff;
+        y = mobY + dy / len * AvoidStandOff;
+    }
 }

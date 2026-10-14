@@ -49,6 +49,21 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void EncodesShotAvoidFlag()
+    {
+        var packet = ActionProtocol.Encode(new ActionRequest
+        {
+            Type = ActionProtocol.Shot,
+            Token = "tok",
+            Vid = 11,
+            Avoid = true,
+            Hits = "11,64000,73000"
+        });
+        var json = Encoding.UTF8.GetString(packet, 4, packet.Length - 4);
+        Assert.Contains("\"avoid\": true", json);
+    }
+
+    [Fact]
     public void SanitizeKeepsOneMsDelayAndMoreThanTwentyTargets()
     {
         var config = Fixtures.Config();

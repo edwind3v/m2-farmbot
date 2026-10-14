@@ -196,7 +196,7 @@ public sealed class BotBrain
         return new BrainDecision(
             BotPhase.Attacking,
             target,
-            BotCommand.Shot(picked, snapshot.Player.X, snapshot.Player.Y),
+            BotCommand.Shot(picked, snapshot.Player.X, snapshot.Player.Y, config.RangedAvoidAttacks),
             $"ranged blast {picked.Count}");
     }
 }

@@ -64,6 +64,7 @@ public class BotBrainTests
         var second = brain.Tick(world, config, Running, 5_400);
 
         Assert.Equal(BotCommandKind.Shot, first.Command!.Kind);
+        Assert.False(first.Command.Avoid);
         Assert.Contains("2,", first.Command.Hits);
         Assert.Contains("1,", first.Command.Hits);
         Assert.Null(wait.Command);

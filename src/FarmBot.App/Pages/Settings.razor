@@ -42,8 +42,9 @@ else if (_page == 1)
 }
 else if (_page == 2)
 {
-    <p class="lede">Blasts every selected farm target in one burst. The client reports itself beside each mob, sends the attack packet, then returns to your position. Delay is between bursts. 1 ms and more than 20 targets are allowed.</p>
+    <p class="lede">Blasts every selected farm target in one burst. The client reports itself beside each mob, sends the attack packet, then returns to your position. Avoid attacks stands 250 units toward you so mobs cannot melee back. Delay is between bursts. 1 ms and more than 20 targets are allowed.</p>
     <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAttackEnabled" /> Ranged attack</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAvoidAttacks" /> Avoid attacks</label>
     <div class="field-grid">
         <div class="field-row"><label>Radius</label><input type="number" min="0" step="25" @bind="Shell.Config.RangedAttackRadius" /></div>
         <div class="field-row"><label>Maximum targets at once</label><input type="number" @bind="Shell.Config.RangedAttackMaxTargets" /></div>
