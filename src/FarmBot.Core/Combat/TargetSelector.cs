@@ -26,6 +26,39 @@ public static class TargetSelector
         return snapshot.Entities.FirstOrDefault(item => item.Vid == picked.Vid);
     }
 
+    public static IReadOnlyList<EntityState> SelectMany(
+        WorldSnapshot snapshot,
+        BotConfig config,
+        int maxCount,
+        float maxPlayerDistance = 0)
+    {
+        var filter = FarmFilter.FromConfig(config);
+        var main = EntityMapping.FromPlayer(snapshot.Player);
+        var entities = new List<Entity>();
+        foreach (var state in snapshot.Entities)
+        {
+            if (IsBlacklisted(state, config))
+                continue;
+            if (state.Kind == EntityKind.Player && config.IgnorePlayers)
+                continue;
+            entities.Add(EntityMapping.FromState(state));
+        }
+
+        var picked = EntityManager.SelectTargets(entities, main, filter, maxCount, maxPlayerDistance);
+        if (picked.Count == 0)
+            return Array.Empty<EntityState>();
+
+        var byVid = snapshot.Entities.ToDictionary(item => item.Vid);
+        var result = new List<EntityState>(picked.Count);
+        foreach (var entity in picked)
+        {
+            if (byVid.TryGetValue(entity.Vid, out var state))
+                result.Add(state);
+        }
+
+        return result;
+    }
+
     public static int? MatchPriority(EntityState entity, IReadOnlyList<TargetRule> rules)
     {
         int? best = null;

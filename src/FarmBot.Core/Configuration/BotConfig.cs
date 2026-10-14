@@ -40,6 +40,10 @@ public sealed class BotConfig
     public int TickMs { get; set; } = 100;
     public float AttackRange { get; set; } = 300;
     public int AttackIntervalMs { get; set; } = 450;
+    public bool RangedAttackEnabled { get; set; }
+    public float RangedAttackRadius { get; set; } = 2000;
+    public int RangedAttackMaxTargets { get; set; } = 3;
+    public int RangedAttackDelayMs { get; set; } = 400;
     public int TargetTimeoutMs { get; set; } = 20_000;
     public int StuckTimeoutMs { get; set; } = 4_000;
     public bool AttackAlsoPaths { get; set; } = true;
@@ -123,6 +127,11 @@ public sealed class BotConfig
         TickMs = Math.Clamp(TickMs, 20, 2000);
         AttackRange = Math.Max(1, AttackRange);
         AttackIntervalMs = Math.Clamp(AttackIntervalMs, 50, 60_000);
+        RangedAttackRadius = Math.Max(0, RangedAttackRadius);
+        if (RangedAttackMaxTargets < 1)
+            RangedAttackMaxTargets = 1;
+        if (RangedAttackDelayMs < 1)
+            RangedAttackDelayMs = 1;
         TargetTimeoutMs = Math.Clamp(TargetTimeoutMs, 500, 300_000);
         StuckTimeoutMs = Math.Clamp(StuckTimeoutMs, 200, 60_000);
         PickupIntervalMs = Math.Clamp(PickupIntervalMs, 50, 60_000);

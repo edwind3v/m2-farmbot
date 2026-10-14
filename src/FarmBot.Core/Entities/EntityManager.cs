@@ -75,6 +75,39 @@ public static class EntityManager
         return best.Entity;
     }
 
+    public static IReadOnlyList<Entity> SelectTargets(
+        IEnumerable<Entity> entities,
+        Entity? main,
+        FarmFilter filter,
+        int maxCount,
+        float maxPlayerDistance = 0)
+    {
+        if (maxCount <= 0)
+            return Array.Empty<Entity>();
+
+        var eligible = new List<(Entity Entity, int Priority)>();
+        foreach (var raw in entities)
+        {
+            var entity = WithDistance(raw, main);
+            if (!IsEligible(entity, filter, requiredType: null))
+                continue;
+            if (maxPlayerDistance > 0 && entity.Distance > maxPlayerDistance)
+                continue;
+            var priority = PriorityOf(entity, filter);
+            if (priority == null)
+                continue;
+            eligible.Add((entity, priority.Value));
+        }
+
+        return eligible
+            .OrderByDescending(item => item.Priority)
+            .ThenBy(item => item.Entity.Distance)
+            .ThenBy(item => item.Entity.Vid)
+            .Take(maxCount)
+            .Select(item => item.Entity)
+            .ToList();
+    }
+
     public static int? PriorityOf(Entity entity, FarmFilter filter)
     {
         int? best = null;

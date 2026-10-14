@@ -63,13 +63,17 @@ public sealed class ActionAdapterClient : IDisposable
     public ActionResponse Submit(string type, uint vid = 0, bool force = true) =>
         Submit(type, vid, force, updateStatus: true);
 
-    public ActionResponse Submit(string type, uint vid, bool force, bool updateStatus)
+    public ActionResponse Submit(string type, uint vid, bool force, bool updateStatus) =>
+        Submit(new ActionRequest { Type = type, Vid = vid, Force = force }, updateStatus);
+
+    public ActionResponse Submit(ActionRequest request, bool updateStatus = true)
     {
         lock (_gate)
         {
             if (_pipe == null || !Connected)
                 return new ActionResponse { Reason = Status };
-            if (!Write(_pipe, new ActionRequest { Type = type, Token = Token, Vid = vid, Force = force }) ||
+            request.Token = Token;
+            if (!Write(_pipe, request) ||
                 !ActionProtocol.TryReadFrame(_pipe, out var payload))
             {
                 Connected = false;
@@ -81,8 +85,8 @@ public sealed class ActionAdapterClient : IDisposable
             if (updateStatus)
             {
                 Status = response.Ok
-                    ? $"{type} ok vid={response.TargetVid}"
-                    : type + " rejected: " + response.Reason;
+                    ? $"{request.Type} ok vid={response.TargetVid}"
+                    : request.Type + " rejected: " + response.Reason;
             }
 
             return response;
@@ -147,6 +151,19 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         Ensure();
         if (!_client.Connected)
             return false;
+        if (action.Kind == NativeActionKind.Shot)
+        {
+            return _client.Submit(new ActionRequest
+            {
+                Type = ActionProtocol.Shot,
+                Vid = action.Vid,
+                Force = true,
+                X = action.X,
+                Y = action.Y,
+                Hits = action.Hits ?? ""
+            }).Ok;
+        }
+
         var type = action.Kind switch
         {
             NativeActionKind.SetTarget => ActionProtocol.SetTarget,

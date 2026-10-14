@@ -89,6 +89,40 @@ public class AutoCombatControllerTests
     }
 
     [Fact]
+    public void RangedModeShotsPriorityTargetsWithoutApproaching()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.RangedAttackEnabled = true;
+        config.RangedAttackRadius = 2000;
+        config.RangedAttackMaxTargets = 2;
+        config.RangedAttackDelayMs = 400;
+        var world = Fixtures.World(
+            Fixtures.Mob(51, "Wild Dog", EntityKind.Monster, 800, 0),
+            Fixtures.Mob(52, "Metin of Combat", EntityKind.Metin, 900, 0));
+
+        var arm = controller.Tick(world, config, true, 10_000);
+        Assert.Equal(NativeActionKind.Stop, arm.Action!.Kind);
+
+        var first = controller.Tick(world, config, true, 10_100);
+        Assert.Equal(NativeActionKind.Shot, first.Action!.Kind);
+        Assert.Contains("52,", first.Action.Hits);
+        Assert.Contains("51,", first.Action.Hits);
+        Assert.Contains("blast", first.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("approach", first.Reason, StringComparison.OrdinalIgnoreCase);
+
+        var wait = controller.Tick(world, config, true, 10_200);
+        Assert.Null(wait.Action);
+        Assert.Contains("delay", wait.Reason, StringComparison.OrdinalIgnoreCase);
+
+        var second = controller.Tick(world, config, true, 10_550);
+        Assert.Equal(NativeActionKind.Shot, second.Action!.Kind);
+        Assert.Contains("52,", second.Action.Hits);
+        Assert.Contains("51,", second.Action.Hits);
+    }
+
+    [Fact]
     public void NeverSelectsPlayersOrNpcs()
     {
         var controller = new AutoCombatController();

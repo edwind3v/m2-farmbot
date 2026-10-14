@@ -279,6 +279,11 @@ public sealed class BotRuntime : IDisposable
             }
 
             var wait = Math.Max(1, config.TickMs);
+            bool enabled;
+            lock (_gate)
+                enabled = _enabled;
+            if (enabled && config.RangedAttackEnabled)
+                wait = Math.Max(1, Math.Min(wait, config.RangedAttackDelayMs));
             if (token.WaitHandle.WaitOne(wait))
                 break;
         }

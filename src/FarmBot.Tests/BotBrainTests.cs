@@ -46,6 +46,33 @@ public class BotBrainTests
     }
 
     [Fact]
+    public void RangedAttackCyclesShotsInsteadOfWalkingIn()
+    {
+        var brain = new BotBrain();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.RangedAttackEnabled = true;
+        config.RangedAttackRadius = 2000;
+        config.RangedAttackMaxTargets = 2;
+        config.RangedAttackDelayMs = 300;
+        var world = Fixtures.World(
+            Fixtures.Mob(1, "Wild Dog", EntityKind.Monster, 800, 0),
+            Fixtures.Mob(2, "Metin of Combat", EntityKind.Metin, 900, 0)) with { ReceivedAtMs = 5_000 };
+
+        var first = brain.Tick(world, config, Running, 5_000);
+        var wait = brain.Tick(world, config, Running, 5_100);
+        var second = brain.Tick(world, config, Running, 5_400);
+
+        Assert.Equal(BotCommandKind.Shot, first.Command!.Kind);
+        Assert.Contains("2,", first.Command.Hits);
+        Assert.Contains("1,", first.Command.Hits);
+        Assert.Null(wait.Command);
+        Assert.Equal(BotCommandKind.Shot, second.Command!.Kind);
+        Assert.Contains("2,", second.Command.Hits);
+        Assert.Contains("1,", second.Command.Hits);
+    }
+
+    [Fact]
     public void LootsADropBeforeChoosingTheNextMonster()
     {
         var brain = new BotBrain();

@@ -182,6 +182,22 @@ public class EntityManagerTests
     }
 
     [Fact]
+    public void SelectTargetsCapsByPriorityThenDistance()
+    {
+        var entities = new[]
+        {
+            Mob(1, ActorType.Enemy, 101, 40, 0, name: "Wild Dog"),
+            Mob(2, ActorType.Stone, 8001, 250, 0, name: "Metin"),
+            Mob(3, ActorType.Enemy, 102, 80, 0, name: "Wolf"),
+            Mob(4, ActorType.Enemy, 104, 900, 0, name: "Far Bear")
+        };
+
+        var picked = EntityManager.SelectTargets(entities, Main, Filter(), maxCount: 2, maxPlayerDistance: 400);
+
+        Assert.Equal(new uint[] { 2, 1 }, picked.Select(item => item.Vid).ToArray());
+    }
+
+    [Fact]
     public void DoesNotSelectDeadOrNonFarmableEntities()
     {
         var entities = new[]

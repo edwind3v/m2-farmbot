@@ -43,6 +43,7 @@ public sealed class SendInputGameControl : IGameControl
                     Tap(VirtualKeys.FromName(command.Key));
                 return;
             case BotCommandKind.Attack:
+            case BotCommandKind.Shot:
             case BotCommandKind.Skill:
                 if (!command.OnScreen)
                 {

@@ -114,6 +114,7 @@ public sealed class SimulatedWorld : IGameStateSource, IGameStateProvider, IGame
             switch (command.Kind)
             {
                 case BotCommandKind.Attack:
+                case BotCommandKind.Shot:
                     Damage(command.Vid, 40);
                     _targetVid = command.Vid;
                     break;

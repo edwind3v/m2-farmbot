@@ -7,6 +7,7 @@
 #include <cstring>
 #include <queue>
 #include <string>
+#include <vector>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "d3d9.lib")
@@ -18,6 +19,11 @@
 static const unsigned kSingletonRva = 0x482398;
 static const unsigned kCharMgrRva = 0x48239C;
 static const unsigned kNewAttackRva = 0xD0C70;
+static const unsigned kNetStreamRva = 0x482BA0;
+static const unsigned kSendAttackRva = 0x134BE0;
+static const unsigned kSendStateRva = 0x134DA0;
+static const unsigned kFuncWait = 0;
+static const unsigned kFuncAttack = 2;
 static const unsigned kAttackKeyRva = 0xD2030;
 static const unsigned kReserveClickRva = 0xD1B90;
 static const unsigned kSetAutoRva = 0xD1DF0;
@@ -62,6 +68,8 @@ typedef int (__thiscall* FnGetStatus)(void* self, int type);
 typedef void* (__thiscall* FnGetInst)(void* self, unsigned vid);
 typedef void (__thiscall* FnVoid)(void* self);
 typedef void (__thiscall* FnNewAttack)(void* self);
+typedef int (__thiscall* FnSendAttack)(void* self, unsigned mot, unsigned vid);
+typedef int (__thiscall* FnSendState)(void* self, const float* pos, float rot, unsigned func, unsigned arg);
 typedef void (__thiscall* FnAttackKey)(void* self, bool press);
 typedef void (__thiscall* FnVid)(void* self, unsigned vid);
 typedef int (__thiscall* FnLoadAtlas)(void* self);
@@ -71,11 +79,21 @@ typedef BOOL (WINAPI* FnPeek)(LPMSG, HWND, UINT, UINT, UINT);
 typedef BOOL (WINAPI* FnGetMsg)(LPMSG, HWND, UINT, UINT);
 typedef void (__thiscall* FnUpdate)(void* self);
 
+struct ShotHit
+{
+    unsigned vid;
+    float x;
+    float y;
+};
+
 struct Command
 {
     std::string type;
     unsigned vid;
     int force;
+    float x;
+    float y;
+    std::vector<ShotHit> hits;
 };
 
 static BYTE* g_base;
@@ -816,6 +834,59 @@ static bool CallNewAttack(void* player)
     return true;
 }
 
+static void* NetStream()
+{
+    if (!g_base)
+        return nullptr;
+    void* p = *(void**)(g_base + kNetStreamRva);
+    return UserPtr(p) ? p : nullptr;
+}
+
+static bool CallSendAttackPacket(unsigned vid)
+{
+    void* net = NetStream();
+    FnSendAttack fn = (FnSendAttack)(g_base + kSendAttackRva);
+    if (!net || IsBadCodePtr((FARPROC)fn))
+        return false;
+    fn(net, 0, vid);
+    return true;
+}
+
+static bool CallSendState(float x, float y, unsigned func)
+{
+    void* net = NetStream();
+    FnSendState fn = (FnSendState)(g_base + kSendStateRva);
+    if (!net || IsBadCodePtr((FARPROC)fn))
+        return false;
+    float pos[3] = { x, y, 0 };
+    fn(net, pos, 0.f, func, 0);
+    return true;
+}
+
+static void ParseHits(Command* cmd, const std::string& src)
+{
+    cmd->hits.clear();
+    size_t i = 0;
+    while (i < src.size() && cmd->hits.size() < 1024)
+    {
+        const size_t semi = src.find(';', i);
+        const std::string part = src.substr(i, semi == std::string::npos ? std::string::npos : semi - i);
+        unsigned vid = 0;
+        float x = 0;
+        float y = 0;
+        if (sscanf_s(part.c_str(), "%u,%f,%f", &vid, &x, &y) < 3 || vid == 0)
+            break;
+        ShotHit hit;
+        hit.vid = vid;
+        hit.x = x;
+        hit.y = y;
+        cmd->hits.push_back(hit);
+        if (semi == std::string::npos)
+            break;
+        i = semi + 1;
+    }
+}
+
 static bool CallAttackKey(void* player, bool press)
 {
     FnAttackKey fn = (FnAttackKey)(g_base + kAttackKeyRva);
@@ -904,6 +975,46 @@ static void Execute(const Command& cmd)
         StopCombat(player);
         g_lastOk = true;
         g_lastReason = "stopped";
+        return;
+    }
+
+    if (cmd.type == "shot")
+    {
+        std::vector<ShotHit> hits = cmd.hits;
+        if (hits.empty() && cmd.vid != 0)
+        {
+            ShotHit hit;
+            hit.vid = cmd.vid;
+            hit.x = cmd.x;
+            hit.y = cmd.y;
+            hits.push_back(hit);
+        }
+        if (hits.empty())
+        {
+            g_lastReason = "no ranged targets";
+            return;
+        }
+        CallAttackKey(player, false);
+        CallRva(kSetAutoRva, player, 0);
+        ClearReserved(player);
+        unsigned sent = 0;
+        for (size_t i = 0; i < hits.size(); ++i)
+        {
+            const ShotHit& hit = hits[i];
+            if (!CallGetInstance(hit.vid))
+                continue;
+            CallSendState(hit.x, hit.y, kFuncAttack);
+            if (CallSendAttackPacket(hit.vid))
+            {
+                g_lastVid = hit.vid;
+                ++sent;
+            }
+        }
+        CallSendState(cmd.x, cmd.y, kFuncWait);
+        g_lastOk = sent != 0;
+        char reason[80];
+        _snprintf_s(reason, _TRUNCATE, "ranged blast %u/%u", sent, (unsigned)hits.size());
+        g_lastReason = reason;
         return;
     }
 
@@ -1174,6 +1285,11 @@ static unsigned JsonU32(const std::string& src, const char* key)
     return (unsigned)strtoul(JsonString(src, key).c_str(), nullptr, 10);
 }
 
+static float JsonFloat(const std::string& src, const char* key)
+{
+    return (float)strtod(JsonString(src, key).c_str(), nullptr);
+}
+
 static bool JsonTrue(const std::string& src, const char* key)
 {
     const std::string value = JsonString(src, key);
@@ -1293,6 +1409,9 @@ static void Serve()
         cmd.type = JsonString(json, "type");
         cmd.vid = JsonU32(json, "vid");
         cmd.force = JsonTrue(json, "force") ? 1 : 0;
+        cmd.x = JsonFloat(json, "x");
+        cmd.y = JsonFloat(json, "y");
+        ParseHits(&cmd, JsonString(json, "hits"));
         if (!TokensEqual(JsonString(json, "token"), g_token))
         {
             WriteFrame("{\"ok\":false,\"type\":\"error\",\"reason\":\"unauthorized\",\"targetVid\":0,\"convention\":\"loop-iat\"}");

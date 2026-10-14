@@ -11,6 +11,10 @@
         <svg class="minimap" viewBox="0 0 200 200" aria-label="Farm map">
         <circle cx="100" cy="100" r="99" fill="@(string.IsNullOrEmpty(Shell.AtlasUrl) ? "#0e1016" : "transparent")" stroke="rgba(232,228,218,0.12)" />
         <circle cx="100" cy="100" r="@N(FarmCircle)" fill="none" stroke="rgba(196,120,58,0.55)" stroke-width="1.2" />
+        @if (Shell.Config.RangedAttackEnabled)
+        {
+            <circle cx="100" cy="100" r="@N(RangedCircle)" fill="none" stroke="rgba(74,126,196,0.7)" stroke-width="1.2" stroke-dasharray="4 3" />
+        }
         @foreach (var mark in Marks)
         {
             <circle cx="@N(mark.X)" cy="@N(mark.Y)" r="@(mark.Target ? 4 : 2.8)" fill="@mark.Fill">
@@ -51,6 +55,8 @@
     private double ViewRadius => Shell.MapViewRadius;
 
     private double FarmCircle => Math.Clamp(92.0 * Shell.Config.FarmRadius / ViewRadius, 4, 96);
+
+    private double RangedCircle => Math.Clamp(92.0 * Shell.Config.RangedAttackRadius / ViewRadius, 4, 96);
 
     private float Facing => Shell.View.Snapshot?.Player.FacingDeg ?? 0;
 

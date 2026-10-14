@@ -69,6 +69,7 @@ public sealed class CommandMessage
             Name = command.Kind switch
             {
                 BotCommandKind.Attack => "attack",
+                BotCommandKind.Shot => "shot",
                 BotCommandKind.Move => "move",
                 BotCommandKind.Skill => "skill",
                 BotCommandKind.Pickup => "pickup",

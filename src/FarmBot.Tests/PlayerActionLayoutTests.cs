@@ -1,3 +1,4 @@
+using System.Text;
 using FarmBot.Core.Combat;
 
 namespace FarmBot.Tests;
@@ -34,6 +35,37 @@ public class PlayerActionLayoutTests
         Assert.Equal(7, layout.PointSp);
         Assert.Equal(8, layout.PointMaxSp);
         Assert.Equal(0xD1280u, layout.PickCloseItemRva);
+    }
+
+    [Fact]
+    public void ReleaseImageHasSendAttackPacketUsedByRangedShots()
+    {
+        Assert.True(File.Exists(ReleaseClient), ReleaseClient);
+        var bytes = File.ReadAllBytes(ReleaseClient);
+        Assert.Contains("Send Battle Attack Packet Error", Encoding.ASCII.GetString(bytes));
+        var eLfanew = BitConverter.ToInt32(bytes, 0x3C);
+        var imageBase = BitConverter.ToUInt32(bytes, eLfanew + 24 + 28);
+        var sections = BitConverter.ToUInt16(bytes, eLfanew + 6);
+        var optional = BitConverter.ToUInt16(bytes, eLfanew + 20);
+        var off = eLfanew + 24 + optional;
+        int file = -1;
+        for (var i = 0; i < sections; i++)
+        {
+            var at = off + i * 40;
+            var va = BitConverter.ToUInt32(bytes, at + 12);
+            var raw = BitConverter.ToUInt32(bytes, at + 20);
+            var rawSize = BitConverter.ToUInt32(bytes, at + 16);
+            if (0x134BE0u >= va && 0x134BE0u < va + rawSize)
+            {
+                file = (int)(raw + (0x134BE0u - va));
+                break;
+            }
+        }
+
+        Assert.True(file >= 0 && file + 8 <= bytes.Length);
+        Assert.Equal(new byte[] { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08, 0x56, 0x8B }, bytes[file..(file + 8)]);
+        Assert.Contains("CPythonNetworkStream::SendCharacterStatePacket", Encoding.ASCII.GetString(bytes));
+        Assert.Equal(0x400000u, imageBase);
     }
 
     [Fact]

@@ -173,6 +173,13 @@
 .dot-stone { background: #ece8df; }
 .dot-boss { background: #d4a017; }
 
+.lede {
+    color: var(--muted);
+    margin: 0 0 14px;
+    max-width: 52rem;
+    line-height: 1.5;
+}
+
 .check-row {
     display: flex;
     align-items: center;

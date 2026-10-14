@@ -17,6 +17,7 @@ public sealed class AutoCombatController
     private long _lastMoveSeenMs;
     private int _recoveries;
     private bool _stopEmitted;
+    private bool _rangedArmed;
 
     public CombatState State => _state;
     public uint TargetVid => _targetVid;
@@ -34,6 +35,7 @@ public sealed class AutoCombatController
         _lastMoveSeenMs = 0;
         _recoveries = 0;
         _stopEmitted = false;
+        _rangedArmed = false;
     }
 
     public CombatTick Tick(WorldSnapshot? snapshot, BotConfig config, bool enabled, long nowMs)
@@ -51,6 +53,10 @@ public sealed class AutoCombatController
         if (snapshot == null)
             return Enter(CombatState.Idle, nowMs, null, null, "waiting for live entities");
 
+        if (config.RangedAttackEnabled)
+            return TickRanged(snapshot, config, nowMs);
+
+        _rangedArmed = false;
         WatchMovement(snapshot.Player, nowMs);
 
         var target = CurrentTarget(snapshot, config);
@@ -69,6 +75,44 @@ public sealed class AutoCombatController
             CombatState.Recover => OnRecover(snapshot, config, nowMs),
             _ => Enter(CombatState.Idle, nowMs, null, null, "unknown state")
         };
+    }
+
+    private CombatTick TickRanged(WorldSnapshot snapshot, BotConfig config, long nowMs)
+    {
+        if (!_rangedArmed)
+        {
+            _rangedArmed = true;
+            _targetVid = 0;
+            _lastAttackMs = 0;
+            _recoveries = 0;
+            return Enter(CombatState.Idle, nowMs, null, NativeCombatAction.Stop(), "ranged attack on");
+        }
+
+        var picked = TargetSelector.SelectMany(snapshot, config, config.RangedAttackMaxTargets, config.RangedAttackRadius);
+        if (picked.Count == 0)
+        {
+            _targetVid = 0;
+            return Enter(CombatState.AcquireTarget, nowMs, null, null, "no farmable targets in ranged radius");
+        }
+
+        EntityState? current = null;
+        for (var i = 0; i < picked.Count; i++)
+        {
+            if (picked[i].Vid != _targetVid)
+                continue;
+            current = picked[i];
+            break;
+        }
+
+        if (_lastAttackMs != 0 && nowMs - _lastAttackMs < config.RangedAttackDelayMs)
+            return Stay(current ?? picked[0], null, "waiting for ranged delay");
+
+        var target = current ?? picked[0];
+        _targetVid = target.Vid;
+        _lastAttackMs = nowMs;
+        return Enter(CombatState.Attack, nowMs, target,
+            NativeCombatAction.Shot(picked, snapshot.Player.X, snapshot.Player.Y),
+            $"ranged blast {picked.Count}");
     }
 
     private CombatTick OnIdle(WorldSnapshot snapshot, BotConfig config, long nowMs) =>

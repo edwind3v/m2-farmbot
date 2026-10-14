@@ -12,6 +12,9 @@ public sealed class ActionRequest
     public string Token { get; set; } = "";
     public uint Vid { get; set; }
     public bool Force { get; set; } = true;
+    public float X { get; set; }
+    public float Y { get; set; }
+    public string Hits { get; set; } = "";
 }
 
 public sealed class ActionResponse
@@ -41,6 +44,7 @@ public static class ActionProtocol
     public const string SetTarget = "set_target";
     public const string PressActor = "press_actor";
     public const string Attack = "attack";
+    public const string Shot = "shot";
     public const string AttackKey = "attack_key";
     public const string Face = "face";
     public const string Stop = "stop";

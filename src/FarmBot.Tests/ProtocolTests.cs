@@ -16,6 +16,50 @@ namespace FarmBot.Tests;
 public class ProtocolTests
 {
     [Fact]
+    public void EncodesShotWithVid()
+    {
+        var packet = ActionProtocol.Encode(new ActionRequest
+        {
+            Type = ActionProtocol.Shot,
+            Token = "tok",
+            Vid = 42,
+            Force = true
+        });
+        var json = Encoding.UTF8.GetString(packet, 4, packet.Length - 4);
+        Assert.Contains("\"type\": \"shot\"", json);
+        Assert.Contains("\"vid\": 42", json);
+    }
+
+    [Fact]
+    public void EncodesShotHitsAndRestorePosition()
+    {
+        var packet = ActionProtocol.Encode(new ActionRequest
+        {
+            Type = ActionProtocol.Shot,
+            Token = "tok",
+            Vid = 11,
+            X = 100,
+            Y = 200,
+            Hits = "11,64000,73000;22,64100,73100"
+        });
+        var json = Encoding.UTF8.GetString(packet, 4, packet.Length - 4);
+        Assert.Contains("\"hits\": \"11,64000,73000;22,64100,73100\"", json);
+        Assert.Contains("\"x\": 100", json);
+        Assert.Contains("\"y\": 200", json);
+    }
+
+    [Fact]
+    public void SanitizeKeepsOneMsDelayAndMoreThanTwentyTargets()
+    {
+        var config = Fixtures.Config();
+        config.RangedAttackDelayMs = 1;
+        config.RangedAttackMaxTargets = 50;
+        config.Sanitize();
+        Assert.Equal(1, config.RangedAttackDelayMs);
+        Assert.Equal(50, config.RangedAttackMaxTargets);
+    }
+
+    [Fact]
     public void EncodesLootLoopWithVidAndForce()
     {
         var packet = ActionProtocol.Encode(new ActionRequest

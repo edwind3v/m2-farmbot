@@ -12,8 +12,9 @@
 <div class="tabs">
     <button type="button" class="tab @(_page == 0 ? "active" : null)" @onclick="() => _page = 0">Farm</button>
     <button type="button" class="tab @(_page == 1 ? "active" : null)" @onclick="() => _page = 1">Combat</button>
-    <button type="button" class="tab @(_page == 2 ? "active" : null)" @onclick="() => _page = 2">Safety</button>
-    <button type="button" class="tab @(_page == 3 ? "active" : null)" @onclick="() => _page = 3">Advanced</button>
+    <button type="button" class="tab @(_page == 2 ? "active" : null)" @onclick="() => _page = 2">Ranged Attack</button>
+    <button type="button" class="tab @(_page == 3 ? "active" : null)" @onclick="() => _page = 3">Safety</button>
+    <button type="button" class="tab @(_page == 4 ? "active" : null)" @onclick="() => _page = 4">Advanced</button>
 </div>
 
 @if (_page == 0)
@@ -40,6 +41,17 @@ else if (_page == 1)
     </div>
 }
 else if (_page == 2)
+{
+    <p class="lede">Blasts every selected farm target in one burst. The client reports itself beside each mob, sends the attack packet, then returns to your position. Delay is between bursts. 1 ms and more than 20 targets are allowed.</p>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAttackEnabled" /> Ranged attack</label>
+    <div class="field-grid">
+        <div class="field-row"><label>Radius</label><input type="number" min="0" step="25" @bind="Shell.Config.RangedAttackRadius" /></div>
+        <div class="field-row"><label>Maximum targets at once</label><input type="number" @bind="Shell.Config.RangedAttackMaxTargets" /></div>
+        <div class="field-row"><label>Attack delay ms</label><input type="number" @bind="Shell.Config.RangedAttackDelayMs" /></div>
+        <div class="field-row"><label>Farm radius</label><input type="number" disabled value="@Shell.Config.FarmRadius.ToString("0")" /></div>
+    </div>
+}
+else if (_page == 3)
 {
     <label class="check-row"><input type="checkbox" @bind="Shell.Config.StopOnCorner" /> Stop if cursor is in the corner</label>
     <label class="check-row"><input type="checkbox" @bind="Shell.Config.HealEnabled" /> Heal when HP is low</label>

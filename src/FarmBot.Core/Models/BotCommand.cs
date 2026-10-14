@@ -3,6 +3,7 @@ namespace FarmBot.Core.Models;
 public enum BotCommandKind
 {
     Attack,
+    Shot,
     Move,
     Skill,
     Pickup,
@@ -38,10 +39,14 @@ public sealed record BotCommand
     public int SkillSlot { get; init; }
     public string Key { get; init; } = "";
     public int MpCost { get; init; }
+    public string Hits { get; init; } = "";
 
     public string Describe() => Kind switch
     {
         BotCommandKind.Attack => $"attack {TargetName} vid={Vid}",
+        BotCommandKind.Shot => string.IsNullOrEmpty(Hits)
+            ? $"shot {TargetName} vid={Vid}"
+            : $"shot {Hits.Split(';').Length} targets",
         BotCommandKind.Move => $"move ({X:0},{Y:0})",
         BotCommandKind.Skill => $"skill slot={SkillSlot} key={Key} on {TargetName} vid={Vid}",
         BotCommandKind.Pickup => $"pickup {TargetName} vid={Vid}",
@@ -65,6 +70,42 @@ public sealed record BotCommand
         OnScreen = target.OnScreen,
         Key = key
     };
+
+    public static BotCommand Shot(EntityState target) => Shot(new[] { target }, target.X, target.Y);
+
+    public static BotCommand Shot(IReadOnlyList<EntityState> targets, float restoreX, float restoreY)
+    {
+        var first = targets[0];
+        return new()
+        {
+            Kind = BotCommandKind.Shot,
+            Vid = first.Vid,
+            TargetName = targets.Count == 1 ? first.Name : $"{targets.Count} targets",
+            X = restoreX,
+            Y = restoreY,
+            ScreenX = first.ScreenX,
+            ScreenY = first.ScreenY,
+            OnScreen = first.OnScreen,
+            Hits = EncodeHits(targets)
+        };
+    }
+
+    public static string EncodeHits(IReadOnlyList<EntityState> targets)
+    {
+        var parts = new string[targets.Count];
+        for (var i = 0; i < targets.Count; i++)
+        {
+            var item = targets[i];
+            parts[i] = string.Format(
+                System.Globalization.CultureInfo.InvariantCulture,
+                "{0},{1},{2}",
+                item.Vid,
+                item.X,
+                item.Y);
+        }
+
+        return string.Join(";", parts);
+    }
 
     public static BotCommand Move(float x, float y) => new()
     {

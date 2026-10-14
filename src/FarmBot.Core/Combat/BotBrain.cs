@@ -19,6 +19,8 @@ public sealed class BotBrain
     private bool _hasHealed;
     private bool _hasPicked;
     private bool _failsafeLatched;
+    private uint _rangedVid;
+    private long _lastRangedMs;
 
     public void Reset()
     {
@@ -33,6 +35,8 @@ public sealed class BotBrain
         _hasHealed = false;
         _hasPicked = false;
         _failsafeLatched = false;
+        _rangedVid = 0;
+        _lastRangedMs = 0;
     }
 
     public BrainDecision Tick(WorldSnapshot? snapshot, BotConfig config, TickContext context, long nowMs)
@@ -84,6 +88,9 @@ public sealed class BotBrain
                 return new BrainDecision(BotPhase.Looting, drop, null, "loot cooldown");
             }
         }
+
+        if (config.RangedAttackEnabled)
+            return TickRanged(snapshot, config, nowMs);
 
         var target = TargetSelector.Select(snapshot, config, _sticky);
         if (target != null)
@@ -139,5 +146,52 @@ public sealed class BotBrain
         }
 
         return new BrainDecision(BotPhase.Idle, null, null, "no targets in farm area");
+    }
+
+    private BrainDecision TickRanged(WorldSnapshot snapshot, BotConfig config, long nowMs)
+    {
+        var picked = TargetSelector.SelectMany(snapshot, config, config.RangedAttackMaxTargets, config.RangedAttackRadius);
+        if (picked.Count == 0)
+        {
+            _rangedVid = 0;
+            if (Navigator.OutsideLeash(snapshot.Player, config))
+            {
+                if (!_hasMoved || nowMs - _lastMoveMs >= config.MoveIntervalMs)
+                {
+                    _hasMoved = true;
+                    _lastMoveMs = nowMs;
+                    return new BrainDecision(
+                        BotPhase.Returning,
+                        null,
+                        BotCommand.Move(config.FarmCenterX, config.FarmCenterY),
+                        "return to farm center");
+                }
+
+                return new BrainDecision(BotPhase.Returning, null, null, "return cooldown");
+            }
+
+            return new BrainDecision(BotPhase.Idle, null, null, "no farmable targets in ranged radius");
+        }
+
+        EntityState? current = null;
+        for (var i = 0; i < picked.Count; i++)
+        {
+            if (picked[i].Vid != _rangedVid)
+                continue;
+            current = picked[i];
+            break;
+        }
+
+        if (_lastRangedMs != 0 && nowMs - _lastRangedMs < config.RangedAttackDelayMs)
+            return new BrainDecision(BotPhase.Attacking, current ?? picked[0], null, "ranged delay");
+
+        var target = current ?? picked[0];
+        _rangedVid = target.Vid;
+        _lastRangedMs = nowMs;
+        return new BrainDecision(
+            BotPhase.Attacking,
+            target,
+            BotCommand.Shot(picked, snapshot.Player.X, snapshot.Player.Y),
+            $"ranged blast {picked.Count}");
     }
 }

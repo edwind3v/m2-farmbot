@@ -1,0 +1,99 @@
+@page "/ranged"
+@implements IDisposable
+@inject FarmBotShell Shell
+
+<div class="eyebrow">Operations</div>
+<div class="page-head">
+    <h1>Ranged Attack</h1>
+    <div class="toolbar">
+        <button class="btn btn-save" @onclick="Shell.SaveSettings">Save</button>
+    </div>
+</div>
+
+<p class="lede">Takes the farm circle, ranks by priority, and blasts every selected target in one burst. For each VID the client reports itself beside that mob, sends the attack packet, then returns to your real position. No attack animation. Delay is the gap between full bursts — 1 ms is allowed.</p>
+
+<label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAttackEnabled" /> Ranged attack</label>
+<div class="field-grid">
+    <div class="field-row"><label>Radius</label><input type="number" min="0" step="25" @bind="Shell.Config.RangedAttackRadius" /></div>
+        <div class="field-row"><label>Maximum targets at once</label><input type="number" @bind="Shell.Config.RangedAttackMaxTargets" /></div>
+        <div class="field-row"><label>Attack delay ms</label><input type="number" @bind="Shell.Config.RangedAttackDelayMs" /></div>
+    <div class="field-row"><label>Farm radius</label><input type="number" disabled value="@Shell.Config.FarmRadius.ToString("0")" /></div>
+</div>
+
+<div class="quick" style="margin-top:14px">
+    <button class="btn btn-ok" disabled="@(Shell.View.Enabled)" @onclick="Shell.StartBot">Start bot</button>
+    <button class="btn btn-danger" disabled="@(!Shell.View.Enabled)" @onclick="Shell.StopBot">Stop</button>
+    <button class="btn btn-save" @onclick="Shell.SaveSettings">Save settings</button>
+</div>
+
+<div class="tile" style="margin-top:18px">
+    <div class="eyebrow">Queue</div>
+    <h2>@(Shell.Config.RangedAttackEnabled ? "Ranged targets" : "Ranged is off")</h2>
+    <p>@Status</p>
+    <div class="table-shell" style="margin-top:12px">
+        <div class="table-wrap short">
+            <table class="grid">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>VID</th>
+                        <th>Type</th>
+                        <th>Name</th>
+                        <th>Dist</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ var n = 0; }
+                    @foreach (var entity in Queue)
+                    {
+                        n++;
+                        <tr class="@(Shell.View.Target?.Vid == entity.Vid ? "tgt" : null)">
+                            <td>@n</td>
+                            <td>@entity.Vid</td>
+                            <td>@EntityMapping.TypeName(entity.ResolvedType)</td>
+                            <td>@(string.IsNullOrWhiteSpace(entity.Name) ? "—" : entity.Name)</td>
+                            <td>@entity.Distance.ToString("0")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string Status
+    {
+        get
+        {
+            if (!Shell.Config.RangedAttackEnabled)
+                return "Turn ranged attack on, then Start. Farm radius still decides who is eligible.";
+            var count = Queue.Count;
+            var cap = Shell.Config.RangedAttackMaxTargets;
+            return count == 0
+                ? Shell.View.Reason
+                : $"{count} of {cap} · {Shell.View.Reason}";
+        }
+    }
+
+    private IReadOnlyList<EntityState> Queue
+    {
+        get
+        {
+            var snapshot = Shell.View.Snapshot;
+            if (snapshot == null)
+                return Array.Empty<EntityState>();
+            return TargetSelector.SelectMany(
+                snapshot,
+                Shell.Config,
+                Shell.Config.RangedAttackMaxTargets,
+                Shell.Config.RangedAttackRadius);
+        }
+    }
+
+    protected override void OnInitialized() => Shell.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Shell.Changed -= OnChanged;
+}

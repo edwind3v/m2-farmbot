@@ -64,6 +64,24 @@ public class TargetSelectorTests
     }
 
     [Fact]
+    public void SelectManyKeepsFarmPriorityAndCapsCountInsideRangedRadius()
+    {
+        var config = Fixtures.Config();
+        config.RangedAttackEnabled = true;
+        config.RangedAttackRadius = 400;
+        config.RangedAttackMaxTargets = 2;
+        var snapshot = Fixtures.World(
+            Fixtures.Mob(1, "Wild Dog", EntityKind.Monster, 40, 0),
+            Fixtures.Mob(2, "Metin of Combat", EntityKind.Metin, 250, 0),
+            Fixtures.Mob(3, "Hungry Wolf", EntityKind.Monster, 180, 0),
+            Fixtures.Mob(4, "Far Bear", EntityKind.Monster, 900, 0));
+
+        var picked = TargetSelector.SelectMany(snapshot, config, config.RangedAttackMaxTargets, config.RangedAttackRadius);
+
+        Assert.Equal(new uint[] { 2, 1 }, picked.Select(item => item.Vid).ToArray());
+    }
+
+    [Fact]
     public void NameRuleOutranksTheGenericMonsterRule()
     {
         var config = Fixtures.Config();
