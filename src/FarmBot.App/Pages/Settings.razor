@@ -32,25 +32,40 @@ else if (_page == 1)
 {
     <label class="check-row"><input type="checkbox" @bind="Shell.Config.AttackAlsoPaths" /> Attack also paths</label>
     <label class="check-row"><input type="checkbox" @bind="Shell.Config.LootEnabled" /> Pick up nearby items</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedPickupEnabled" /> Ranged pickup</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.FastPickupEnabled" /> Fast pickup</label>
     <div class="field-grid">
         <div class="field-row"><label>Attack range</label><input type="number" @bind="Shell.Config.AttackRange" /></div>
         <div class="field-row"><label>Attack interval ms</label><input type="number" @bind="Shell.Config.AttackIntervalMs" /></div>
         <div class="field-row"><label>Loot range</label><input type="number" @bind="Shell.Config.LootRange" /></div>
+        <div class="field-row"><label>Fast pickup delay ms</label><input type="number" @bind="Shell.Config.FastPickupDelayMs" /></div>
         <div class="field-row"><label>Attack key</label><input @bind="Shell.Config.AttackKey" /></div>
         <div class="field-row"><label>Pickup key</label><input @bind="Shell.Config.PickupKey" /></div>
     </div>
+    <label class="slider" style="margin-top:12px">
+        <span>Fast pickup delay <b>@Shell.Config.FastPickupDelayMs ms</b></span>
+        <input type="range" min="1" max="500" step="1" value="@Shell.Config.FastPickupDelayMs" @oninput="OnFastDelay" />
+    </label>
 }
 else if (_page == 2)
 {
-    <p class="lede">Blasts every selected farm target in one burst. The client reports itself beside each mob, sends the attack packet, then returns to your position. Avoid attacks stands 250 units toward you so mobs cannot melee back. Delay is between bursts. 1 ms and more than 20 targets are allowed.</p>
+    <p class="lede">Blasts every selected farm target in one burst, then returns to your position. Fast pickup and ranged pickup are separate and start as soon as they are ticked. The character does not walk. Attack delay is between bursts.</p>
     <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAttackEnabled" /> Ranged attack</label>
     <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAvoidAttacks" /> Avoid attacks</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedPickupEnabled" /> Ranged pickup</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.FastPickupEnabled" /> Fast pickup</label>
     <div class="field-grid">
         <div class="field-row"><label>Radius</label><input type="number" min="0" step="25" @bind="Shell.Config.RangedAttackRadius" /></div>
         <div class="field-row"><label>Maximum targets at once</label><input type="number" @bind="Shell.Config.RangedAttackMaxTargets" /></div>
         <div class="field-row"><label>Attack delay ms</label><input type="number" @bind="Shell.Config.RangedAttackDelayMs" /></div>
+        <div class="field-row"><label>Loot range</label><input type="number" min="0" step="25" @bind="Shell.Config.LootRange" /></div>
+        <div class="field-row"><label>Fast pickup delay ms</label><input type="number" @bind="Shell.Config.FastPickupDelayMs" /></div>
         <div class="field-row"><label>Farm radius</label><input type="number" disabled value="@Shell.Config.FarmRadius.ToString("0")" /></div>
     </div>
+    <label class="slider" style="margin-top:12px">
+        <span>Fast pickup delay <b>@Shell.Config.FastPickupDelayMs ms</b></span>
+        <input type="range" min="1" max="500" step="1" value="@Shell.Config.FastPickupDelayMs" @oninput="OnFastDelay" />
+    </label>
     <div class="quick" style="margin-top:14px">
         <button class="btn btn-ok" disabled="@(Shell.RangedOnly)" @onclick="Shell.StartRanged">Start ranged</button>
         <button class="btn btn-danger" disabled="@(!Shell.RangedOnly)" @onclick="Shell.StopBot">Stop ranged</button>
@@ -152,4 +167,10 @@ else
 
 @code {
     private int _page;
+
+    private void OnFastDelay(ChangeEventArgs e)
+    {
+        if (int.TryParse(Convert.ToString(e.Value), out var ms) && ms >= 1)
+            Shell.Config.FastPickupDelayMs = ms;
+    }
 }

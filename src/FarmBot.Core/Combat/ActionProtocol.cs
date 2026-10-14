@@ -52,6 +52,7 @@ public static class ActionProtocol
     public const string GetHud = "get_hud";
     public const string Pickup = "pickup";
     public const string LootLoop = "loot_loop";
+    public const string Move = "move";
     public const string GetAtlas = "get_atlas";
     public const int Version = 1;
 

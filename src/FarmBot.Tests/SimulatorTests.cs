@@ -1,5 +1,7 @@
 using FarmBot.Core.Bot;
+using FarmBot.Core.Combat;
 using FarmBot.Core.Logging;
+using FarmBot.Core.Looting;
 using FarmBot.Core.Models;
 using FarmBot.Core.Perception;
 
@@ -32,6 +34,24 @@ public class SimulatorTests
         Assert.Contains(log.Entries, entry => entry.Message.Contains("skill", StringComparison.OrdinalIgnoreCase) && entry.Message.Contains("vid=2"));
         Assert.Contains(log.Entries, entry => entry.Message.StartsWith("pickup ", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(log.Entries, entry => entry.Message.StartsWith("attack ", StringComparison.OrdinalIgnoreCase) && entry.Message.Contains("vid=1"));
+        runtime.Dispose();
+    }
+
+    [Fact]
+    public void PickupLoopsStartWhenTickedWithoutStartingTheBot()
+    {
+        var log = new ListLog();
+        var world = SimulatedWorld.Classic();
+        var config = Fixtures.Config();
+        config.FastPickupEnabled = true;
+        config.RangedPickupEnabled = true;
+        config.FastPickupDelayMs = 10;
+        var sink = new RecordingActionSink();
+        var runtime = new BotRuntime(world, world, log, () => config, nativeCombat: true, sink: sink);
+        runtime.TickOnce(config, 20_000, 100);
+        var loot = Assert.Single(sink.Actions, action => action.Kind == NativeActionKind.LootLoop);
+        Assert.Equal(LootPolicy.FastLoop | LootPolicy.RangedLoop, loot.Vid);
+        Assert.Equal(10f, loot.X);
         runtime.Dispose();
     }
 

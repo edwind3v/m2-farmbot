@@ -58,6 +58,9 @@ public sealed class BotConfig
     public bool LootBeforeNextTarget { get; set; } = true;
     public string PickupKey { get; set; } = "z";
     public int PickupIntervalMs { get; set; } = 200;
+    public bool RangedPickupEnabled { get; set; }
+    public bool FastPickupEnabled { get; set; }
+    public int FastPickupDelayMs { get; set; } = 50;
     public bool ReturnToCenter { get; set; } = true;
     public float LeashSlack { get; set; } = 80;
     public int MoveIntervalMs { get; set; } = 500;
@@ -136,6 +139,8 @@ public sealed class BotConfig
         TargetTimeoutMs = Math.Clamp(TargetTimeoutMs, 500, 300_000);
         StuckTimeoutMs = Math.Clamp(StuckTimeoutMs, 200, 60_000);
         PickupIntervalMs = Math.Clamp(PickupIntervalMs, 50, 60_000);
+        if (FastPickupDelayMs < 1)
+            FastPickupDelayMs = 1;
         MoveIntervalMs = Math.Clamp(MoveIntervalMs, 50, 60_000);
         HealCooldownMs = Math.Clamp(HealCooldownMs, 50, 60_000);
         StateTimeoutMs = Math.Clamp(StateTimeoutMs, 200, 120_000);

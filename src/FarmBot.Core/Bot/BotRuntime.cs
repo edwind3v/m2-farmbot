@@ -2,6 +2,7 @@ using FarmBot.Core.Combat;
 using FarmBot.Core.Configuration;
 using FarmBot.Core.Input;
 using FarmBot.Core.Logging;
+using FarmBot.Core.Looting;
 using FarmBot.Core.Models;
 using FarmBot.Core.Perception;
 using FarmBot.Core.Safety;
@@ -43,6 +44,10 @@ public sealed class BotRuntime : IDisposable
     private WorldSnapshot? _latest;
     private EntityState? _target;
     private bool _lootLoop;
+    private uint _lootMask;
+    private int _lootDelay;
+    private bool _lootRanged;
+    private float _lootRadius;
 
     public BotRuntime(
         IGameStateSource source,
@@ -95,7 +100,7 @@ public sealed class BotRuntime : IDisposable
                 _target = null;
             }
         }
-        SyncLootLoop(_configProvider(), enabled && !_rangedOnly);
+        SyncLootLoop(_configProvider(), enabled);
     }
 
     public void SetRangedOnly(bool enabled)
@@ -116,7 +121,7 @@ public sealed class BotRuntime : IDisposable
                 _target = null;
             }
         }
-        SyncLootLoop(_configProvider(), false);
+        SyncLootLoop(_configProvider(), enabled);
     }
 
     public void Stop()
@@ -198,6 +203,7 @@ public sealed class BotRuntime : IDisposable
         }
 
         var corner = enabled && config.StopOnCorner && _cornerProbe();
+        SyncLootLoop(config, enabled);
         var context = new TickContext(enabled, corner, _everReceived, _lastStateAtMs);
         var decision = _nativeCombat
             ? TickNative(snapshot, config, context, nowMs)
@@ -211,7 +217,6 @@ public sealed class BotRuntime : IDisposable
                 _rangedOnly = false;
             }
             _log.Warn($"failsafe: {decision.Reason}");
-            SyncLootLoop(config, false);
         }
 
         if (decision.Command != null && (enabled || decision.Phase == BotPhase.Failsafe))
@@ -269,7 +274,6 @@ public sealed class BotRuntime : IDisposable
         bool rangedOnly;
         lock (_gate)
             rangedOnly = _rangedOnly;
-        SyncLootLoop(config, !rangedOnly);
         var tick = _combat.Tick(snapshot, config, context.Enabled, nowMs);
         _combatState = tick.State;
         return new BrainDecision(ToPhase(tick.State), tick.Target, tick.Action?.ToCommand(), tick.Reason);
@@ -277,13 +281,28 @@ public sealed class BotRuntime : IDisposable
 
     private void SyncLootLoop(BotConfig config, bool enabled)
     {
-        var want = enabled && config.LootEnabled && _sink != null;
-        if (want == _lootLoop)
+        bool rangedOnly;
+        lock (_gate)
+            rangedOnly = _rangedOnly;
+        if (_sink == null)
             return;
-        if (!_sink!.TrySubmit(NativeCombatAction.LootLoop(want)))
+        var mask = LootPolicy.LoopMask(config, enabled, rangedOnly);
+        var delay = config.FastPickupEnabled ? Math.Max(1, config.FastPickupDelayMs) : 50;
+        var radius = LootPolicy.PickupRadius(config);
+        var want = mask != 0;
+        var ranged = (mask & LootPolicy.RangedLoop) != 0;
+        if (want == _lootLoop && delay == _lootDelay && ranged == _lootRanged && Math.Abs(radius - _lootRadius) < 0.5f && mask == _lootMask)
+            return;
+        if (!_sink.TrySubmit(NativeCombatAction.LootLoop(mask, delay, radius)))
             return;
         _lootLoop = want;
-        _log.Info(want ? "loot loop: PickCloseItem every 200ms" : "loot loop off");
+        _lootMask = mask;
+        _lootDelay = delay;
+        _lootRanged = ranged;
+        _lootRadius = radius;
+        _log.Info(want
+            ? NativeCombatAction.LootLoop(mask, delay, radius).Describe()
+            : "loot loop off");
     }
 
     private static BotPhase ToPhase(CombatState state) => state switch
@@ -333,6 +352,8 @@ public sealed class BotRuntime : IDisposable
                 enabled = _enabled;
             if (enabled && config.RangedAttackEnabled)
                 wait = Math.Max(1, Math.Min(wait, config.RangedAttackDelayMs));
+            if (config.FastPickupEnabled || config.RangedPickupEnabled)
+                wait = Math.Max(1, Math.Min(wait, config.FastPickupEnabled ? config.FastPickupDelayMs : 50));
             if (token.WaitHandle.WaitOne(wait))
                 break;
         }

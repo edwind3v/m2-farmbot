@@ -8,6 +8,7 @@ using FarmBot.Core.Configuration;
 using FarmBot.Core.Ipc;
 using FarmBot.Core.Json;
 using FarmBot.Core.Logging;
+using FarmBot.Core.Looting;
 using FarmBot.Core.Models;
 using FarmBot.Core.Perception;
 
@@ -75,6 +76,48 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void RangedPickupUsesAttackRadiusLikeRangedShots()
+    {
+        var config = Fixtures.Config();
+        config.RangedPickupEnabled = true;
+        config.RangedAttackRadius = 2000;
+        config.LootRange = 600;
+        Assert.True(LootPolicy.SpoofPickup(config));
+        Assert.Equal(2000f, LootPolicy.PickupRadius(config));
+    }
+
+    [Fact]
+    public void FastAndRangedPickupLoopsAreIndependentAndStartWithoutTheBot()
+    {
+        var config = Fixtures.Config();
+        config.FastPickupEnabled = true;
+        config.RangedPickupEnabled = false;
+        Assert.Equal(LootPolicy.FastLoop, LootPolicy.LoopMask(config, false, false));
+
+        config.FastPickupEnabled = false;
+        config.RangedPickupEnabled = true;
+        Assert.Equal(LootPolicy.RangedLoop, LootPolicy.LoopMask(config, false, false));
+
+        config.FastPickupEnabled = true;
+        Assert.Equal(LootPolicy.FastLoop | LootPolicy.RangedLoop, LootPolicy.LoopMask(config, false, false));
+
+        config.FastPickupEnabled = false;
+        config.RangedPickupEnabled = false;
+        config.LootEnabled = true;
+        Assert.Equal(0u, LootPolicy.LoopMask(config, false, false));
+        Assert.Equal(LootPolicy.FastLoop, LootPolicy.LoopMask(config, true, false));
+    }
+
+    [Fact]
+    public void SanitizeKeepsOneMsFastPickupDelay()
+    {
+        var config = Fixtures.Config();
+        config.FastPickupDelayMs = 1;
+        config.Sanitize();
+        Assert.Equal(1, config.FastPickupDelayMs);
+    }
+
+    [Fact]
     public void EncodesLootLoopWithVidAndForce()
     {
         var packet = ActionProtocol.Encode(new ActionRequest
@@ -88,6 +131,25 @@ public class ProtocolTests
         Assert.Contains("\"type\": \"loot_loop\"", json);
         Assert.Contains("\"vid\": 1", json);
         Assert.Contains("\"force\": true", json);
+    }
+
+    [Fact]
+    public void EncodesLootLoopDelayRadiusAndRangedFlag()
+    {
+        var packet = ActionProtocol.Encode(new ActionRequest
+        {
+            Type = ActionProtocol.LootLoop,
+            Token = "tok",
+            Vid = 1,
+            Force = true,
+            X = 1,
+            Y = 2000,
+            Avoid = true
+        });
+        var json = Encoding.UTF8.GetString(packet, 4, packet.Length - 4);
+        Assert.Contains("\"x\": 1", json);
+        Assert.Contains("\"y\": 2000", json);
+        Assert.Contains("\"avoid\": true", json);
     }
 
     [Fact]

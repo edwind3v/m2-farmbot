@@ -17,6 +17,10 @@ public class CombatNativeContractTests
         Assert.False(CombatNativeContract.IsFarmableActor((int)ActorType.Player));
         Assert.False(CombatNativeContract.IsFarmableActor((int)ActorType.Npc));
         Assert.Equal(250f, CombatNativeContract.AvoidStandOff);
+        Assert.Equal(300f, CombatNativeContract.PickDistance);
+        Assert.Equal(15, CombatNativeContract.PickupPacketHeader);
+        Assert.Equal(-400f, CombatNativeContract.GroundItemPixelY(400f));
+        Assert.Equal(1u, CombatNativeContract.GroundYangFlag);
     }
 
     [Fact]

@@ -11,6 +11,16 @@ public static class CombatNativeContract
     public const float ComboDistance = 250f;
     public const float AvoidStandOff = 250f;
     public const float ClickDistance = 300f;
+    public const float PickDistance = 300f;
+    public const int PickupPacketHeader = 15;
+
+    // CPythonItem::GetCloseItem negates SGroundItemInstance Y before comparing it to GetPixelPosition.
+    public static float GroundItemPixelY(float storedY) => -storedY;
+
+    // GetCloseMoney only accepts ground instances whose dword at +4 is 1 (yang).
+    // SendClickItemPacket looks up proto/owner and skips yang and empty-owner drops;
+    // ranged/fast pickup therefore sends SendItemPickUpPacket after the spoof.
+    public const uint GroundYangFlag = 1;
     public const float NpcClickableDistance = 500f;
     public const float AttackDelaySeconds = 0.2f;
     public const int TargetPacketHeader = 61;

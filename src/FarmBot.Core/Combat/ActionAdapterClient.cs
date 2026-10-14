@@ -164,6 +164,27 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
                 Hits = action.Hits ?? ""
             }).Ok;
         }
+        if (action.Kind == NativeActionKind.MoveTo)
+        {
+            return _client.Submit(new ActionRequest
+            {
+                Type = ActionProtocol.Move,
+                X = action.X,
+                Y = action.Y
+            }).Ok;
+        }
+        if (action.Kind == NativeActionKind.LootLoop)
+        {
+            return _client.Submit(new ActionRequest
+            {
+                Type = ActionProtocol.LootLoop,
+                Vid = action.Vid,
+                Force = action.Vid != 0,
+                X = action.X,
+                Y = action.Y,
+                Avoid = action.Avoid
+            }).Ok;
+        }
 
         var type = action.Kind switch
         {

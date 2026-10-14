@@ -40,6 +40,7 @@ public static class EntityMapping
         {
             Vid = state.Vid,
             Type = type,
+            Kind = state.Kind,
             Vnum = state.Vnum,
             X = state.X,
             Y = state.Y,
@@ -66,7 +67,7 @@ public static class EntityMapping
     {
         Vid = entity.Vid,
         Name = entity.Name,
-        Kind = ToKind(entity.Type),
+        Kind = entity.Kind != EntityKind.Unknown ? entity.Kind : ToKind(entity.Type),
         Type = entity.Type,
         TypeSpecified = true,
         Vnum = entity.Vnum,

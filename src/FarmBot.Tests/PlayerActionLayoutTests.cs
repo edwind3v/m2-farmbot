@@ -69,6 +69,96 @@ public class PlayerActionLayoutTests
     }
 
     [Fact]
+    public void ReleaseImageHasSendItemPickUpPacketUsedByFastPickup()
+    {
+        Assert.True(File.Exists(ReleaseClient), ReleaseClient);
+        var bytes = File.ReadAllBytes(ReleaseClient);
+        Assert.Contains("SendItemPickUpPacket", Encoding.ASCII.GetString(bytes));
+        var eLfanew = BitConverter.ToInt32(bytes, 0x3C);
+        var sections = BitConverter.ToUInt16(bytes, eLfanew + 6);
+        var optional = BitConverter.ToUInt16(bytes, eLfanew + 20);
+        var off = eLfanew + 24 + optional;
+        int file = -1;
+        for (var i = 0; i < sections; i++)
+        {
+            var at = off + i * 40;
+            var va = BitConverter.ToUInt32(bytes, at + 12);
+            var raw = BitConverter.ToUInt32(bytes, at + 20);
+            var rawSize = BitConverter.ToUInt32(bytes, at + 16);
+            if (0x13B690u >= va && 0x13B690u < va + rawSize)
+            {
+                file = (int)(raw + (0x13B690u - va));
+                break;
+            }
+        }
+
+        Assert.True(file >= 0 && file + 8 <= bytes.Length);
+        Assert.Equal(new byte[] { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08, 0x56, 0x8B }, bytes[file..(file + 8)]);
+    }
+
+    [Fact]
+    public void GetCloseItemNegatesGroundItemYBeforeComparingToPlayerPixels()
+    {
+        Assert.True(File.Exists(ReleaseClient), ReleaseClient);
+        var bytes = File.ReadAllBytes(ReleaseClient);
+        var eLfanew = BitConverter.ToInt32(bytes, 0x3C);
+        var sections = BitConverter.ToUInt16(bytes, eLfanew + 6);
+        var optional = BitConverter.ToUInt16(bytes, eLfanew + 20);
+        var off = eLfanew + 24 + optional;
+        int file = -1;
+        for (var i = 0; i < sections; i++)
+        {
+            var at = off + i * 40;
+            var va = BitConverter.ToUInt32(bytes, at + 12);
+            var raw = BitConverter.ToUInt32(bytes, at + 20);
+            var rawSize = BitConverter.ToUInt32(bytes, at + 16);
+            if (0xBB480u >= va && 0xBB480u < va + rawSize)
+            {
+                file = (int)(raw + (0xBB480u - va));
+                break;
+            }
+        }
+
+        Assert.True(file >= 0 && file + 0xC0 <= bytes.Length);
+        var fn = bytes[file..(file + 0xC0)];
+        Assert.True(fn.AsSpan().IndexOf(new byte[] { 0xF3, 0x0F, 0x10, 0x40, 0x0C }) >= 0);
+        Assert.True(fn.AsSpan().IndexOf(new byte[] { 0x0F, 0x57, 0x05 }) >= 0);
+    }
+
+    [Fact]
+    public void GetCloseMoneySelectsYangFlagThenPickCloseMoneyUsesIt()
+    {
+        Assert.True(File.Exists(ReleaseClient), ReleaseClient);
+        var bytes = File.ReadAllBytes(ReleaseClient);
+        var eLfanew = BitConverter.ToInt32(bytes, 0x3C);
+        var sections = BitConverter.ToUInt16(bytes, eLfanew + 6);
+        var optional = BitConverter.ToUInt16(bytes, eLfanew + 20);
+        var off = eLfanew + 24 + optional;
+        int moneyFile = -1;
+        int pickFile = -1;
+        for (var i = 0; i < sections; i++)
+        {
+            var at = off + i * 40;
+            var va = BitConverter.ToUInt32(bytes, at + 12);
+            var raw = BitConverter.ToUInt32(bytes, at + 20);
+            var rawSize = BitConverter.ToUInt32(bytes, at + 16);
+            if (0xBB580u >= va && 0xBB580u < va + rawSize)
+                moneyFile = (int)(raw + (0xBB580u - va));
+            if (0xD12F0u >= va && 0xD12F0u < va + rawSize)
+                pickFile = (int)(raw + (0xD12F0u - va));
+        }
+
+        Assert.True(moneyFile >= 0 && moneyFile + 0x80 <= bytes.Length);
+        Assert.True(pickFile >= 0 && pickFile + 0x50 <= bytes.Length);
+        var money = bytes[moneyFile..(moneyFile + 0x80)];
+        Assert.True(money.AsSpan().IndexOf(new byte[] { 0x83, 0x78, 0x04, 0x01 }) >= 0);
+        var pick = bytes[pickFile..(pickFile + 0x50)];
+        Assert.Equal(new byte[] { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14 }, pick[..6]);
+        var rel = BitConverter.ToInt32(pick, 0xD1337 - 0xD12F0 + 1);
+        Assert.Equal(0xBB580, 0xD1337 + 5 + rel);
+    }
+
+    [Fact]
     public void RecoversMiniMapAtlasBindings()
     {
         Assert.True(File.Exists(ReleaseClient), ReleaseClient);

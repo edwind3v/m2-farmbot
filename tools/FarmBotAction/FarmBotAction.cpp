@@ -23,6 +23,13 @@ static const unsigned kNewAttackRva = 0xD0C70;
 static const unsigned kNetStreamRva = 0x482BA0;
 static const unsigned kSendAttackRva = 0x134BE0;
 static const unsigned kSendStateRva = 0x134DA0;
+static const unsigned kSendPickupRva = 0x13B690;
+static const unsigned kSendClickRva = 0xCE930;
+static const unsigned kItemSingletonRva = 0x482CAC;
+static const unsigned kGetCloseItemRva = 0xBB480;
+static const unsigned kGetCloseMoneyRva = 0xBB580;
+static const unsigned kTreeIncRva = 0xBA810;
+static const unsigned kMoveToDestRva = 0xA6BB0;
 static const unsigned kFuncWait = 0;
 static const unsigned kFuncAttack = 2;
 static const unsigned kMainPtrDisp = 0x0C;
@@ -30,6 +37,7 @@ static const unsigned kGraphicDisp = 0x1EC;
 static const unsigned kPixelXDisp = 0x46C;
 static const unsigned kPixelYDisp = 0x470;
 static const float kAvoidStand = 250.f;
+static const float kPickDistance = 300.f;
 static const unsigned kAttackKeyRva = 0xD2030;
 static const unsigned kReserveClickRva = 0xD1B90;
 static const unsigned kSetAutoRva = 0xD1DF0;
@@ -41,6 +49,7 @@ static const unsigned kReservedModeDisp = 0x54;
 static const unsigned kVidReservedDisp = 0x10770;
 static const unsigned kPlayerUpdateRva = 0xCF2D0;
 static const unsigned kPickCloseRva = 0xD1280;
+static const unsigned kPickCloseMoneyRva = 0xD12F0;
 static const unsigned kGetStatusRva = 0xCDBB0;
 static const unsigned kMiniMapRva = 0x482BA8;
 static const unsigned kBackgroundRva = 0x48238C;
@@ -76,6 +85,11 @@ typedef void (__thiscall* FnVoid)(void* self);
 typedef void (__thiscall* FnNewAttack)(void* self);
 typedef int (__thiscall* FnSendAttack)(void* self, unsigned mot, unsigned vid);
 typedef int (__thiscall* FnSendState)(void* self, const float* pos, float rot, unsigned func, unsigned arg);
+typedef int (__thiscall* FnSendPickup)(void* self, unsigned vid);
+typedef void (__thiscall* FnSendClick)(void* self, unsigned vid);
+typedef void* (__thiscall* FnTreeInc)(void* it);
+typedef int (__thiscall* FnGetCloseItem)(void* self, float* pos, unsigned* vid, unsigned dist);
+typedef int (__thiscall* FnMoveToDest)(void* inst, const float* pos);
 typedef void (__thiscall* FnAttackKey)(void* self, bool press);
 typedef void (__thiscall* FnVid)(void* self, unsigned vid);
 typedef int (__thiscall* FnLoadAtlas)(void* self);
@@ -90,6 +104,7 @@ struct ShotHit
     unsigned vid;
     float x;
     float y;
+    int money;
 };
 
 struct Command
@@ -126,7 +141,13 @@ static int g_hudMp;
 static int g_hudMaxMp;
 static bool g_hudOk;
 static volatile long g_lootOn;
-static DWORD g_lastLootMs;
+static volatile long g_lootFast;
+static volatile long g_lootRanged;
+static DWORD g_lootDelay = 200;
+static float g_lootRadius = 300.f;
+static LONGLONG g_lastLootMs;
+static LONGLONG g_lastFastMs;
+static LONGLONG g_lastRangedMs;
 static HANDLE g_atlasMap;
 static BYTE* g_atlasView;
 static BYTE* g_atlasScratch;
@@ -267,15 +288,87 @@ static bool CallPickClose(void* player)
     return true;
 }
 
+static bool CallPickCloseMoney(void* player)
+{
+    FnVoid fn = (FnVoid)(g_base + kPickCloseMoneyRva);
+    if (!g_base || !player || IsBadCodePtr((FARPROC)fn))
+        return false;
+    fn(player);
+    return true;
+}
+
+static bool CallSendPickup(unsigned vid);
+static bool CallSendClick(void* player, unsigned vid);
+static bool CallSendState(float x, float y, unsigned func);
+static bool ReadMainPixel(float* x, float* y);
+static void* MainInstance();
+static void CollectGroundItems(std::vector<ShotHit>* out);
+static void CollectClosestItem(float x, float y, float radius, std::vector<ShotHit>* out);
+static void CollectClosestMoney(float x, float y, float radius, std::vector<ShotHit>* out);
+static bool CallMoveToDest(float x, float y);
+static unsigned PickupNear(float x, float y, const std::vector<ShotHit>& items);
+static LONGLONG NowMs();
+static bool HasVid(const std::vector<ShotHit>& items, unsigned vid);
+
+static unsigned DrainGroundLoot(float px, float py, float radius)
+{
+    std::vector<ShotHit> items;
+    CollectGroundItems(&items);
+    const float reach = radius > 1.f ? radius : 8000.f;
+    CollectClosestItem(px, py, reach, &items);
+    CollectClosestMoney(px, py, reach, &items);
+    const float maxSq = reach * reach;
+    unsigned sent = 0;
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        const ShotHit& hit = items[i];
+        const float dx = hit.x - px;
+        const float dy = hit.y - py;
+        const float distSq = dx * dx + dy * dy;
+        // Fast stays inside the server pick radius. Ranged sends every VID the
+        // client already has in CPythonItem — do not drop on our own distance.
+        if (radius <= kPickDistance + 0.5f && distSq > maxSq)
+            continue;
+        CallSendState(hit.x, hit.y, kFuncAttack);
+        // SendClickItemPacket looks up proto/owner at instance+0x2FC and skips
+        // yang and empty-owner drops. SendItemPickUpPacket is the real send.
+        if (CallSendPickup(hit.vid))
+            ++sent;
+    }
+    if (sent != 0)
+    {
+        float rx = px;
+        float ry = py;
+        ReadMainPixel(&rx, &ry);
+        CallSendState(rx, ry, kFuncWait);
+    }
+    return sent;
+}
+
 static void MaybeAutoLoot(void* player)
 {
-    if (!g_lootOn || !player)
+    if (!player || (!g_lootFast && !g_lootRanged))
         return;
-    const DWORD now = GetTickCount();
-    if (g_lastLootMs != 0 && now - g_lastLootMs < 200)
-        return;
-    g_lastLootMs = now;
-    CallPickClose(player);
+    const LONGLONG now = NowMs();
+    const DWORD delay = g_lootDelay < 1 ? 1 : g_lootDelay;
+    float px = 0;
+    float py = 0;
+    ReadMainPixel(&px, &py);
+
+    if (g_lootFast && (g_lastFastMs == 0 || now - g_lastFastMs >= delay))
+    {
+        g_lastFastMs = now;
+        CallPickClose(player);
+        CallPickCloseMoney(player);
+        DrainGroundLoot(px, py, kPickDistance);
+    }
+
+    if (g_lootRanged && (g_lastRangedMs == 0 || now - g_lastRangedMs >= 1))
+    {
+        g_lastRangedMs = now;
+        const float radius = g_lootRadius > 1.f ? g_lootRadius : 8000.f;
+        DrainGroundLoot(px, py, radius);
+    }
 }
 
 static void* MiniMap()
@@ -870,6 +963,219 @@ static bool CallSendState(float x, float y, unsigned func)
     return true;
 }
 
+static bool CallSendPickup(unsigned vid)
+{
+    void* net = NetStream();
+    FnSendPickup fn = (FnSendPickup)(g_base + kSendPickupRva);
+    if (!net || IsBadCodePtr((FARPROC)fn))
+        return false;
+    fn(net, vid);
+    return true;
+}
+
+static bool CallSendClick(void* player, unsigned vid)
+{
+    FnSendClick fn = (FnSendClick)(g_base + kSendClickRva);
+    if (!g_base || !player || IsBadCodePtr((FARPROC)fn))
+        return false;
+    fn(player, vid);
+    return true;
+}
+
+static bool HasVid(const std::vector<ShotHit>& items, unsigned vid)
+{
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        if (items[i].vid == vid)
+            return true;
+    }
+    return false;
+}
+
+static void* ItemMgr()
+{
+    if (!g_base)
+        return nullptr;
+    void* p = *(void**)(g_base + kItemSingletonRva);
+    return UserPtr(p) ? p : nullptr;
+}
+
+static LONGLONG NowMs()
+{
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER now;
+    if (freq.QuadPart == 0)
+        QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&now);
+    if (freq.QuadPart == 0)
+        return GetTickCount();
+    return now.QuadPart * 1000 / freq.QuadPart;
+}
+
+static bool ReadGroundHit(void* node, ShotHit* hit)
+{
+    if (!UserPtr(node) || *((unsigned char*)node + 13) != 0)
+        return false;
+    unsigned vid = *(unsigned*)((char*)node + 0x10);
+    void* inst = *(void**)((char*)node + 0x14);
+    if (vid == 0 || !UserPtr(inst) || !hit)
+        return false;
+    const float ix = *(float*)((char*)inst + 8);
+    const float iy = *(float*)((char*)inst + 0xC);
+    if (ix != ix || iy != iy)
+        return false;
+    hit->vid = vid;
+    hit->x = ix;
+    // GetCloseItem xorps Y with -0.0 before comparing to GetPixelPosition.
+    hit->y = -iy;
+    hit->money = *(unsigned*)((char*)inst + 4) == 1 ? 1 : 0;
+    return true;
+}
+
+static void* ItemLeft(void* node) { return *(void**)node; }
+static void* ItemRight(void* node) { return *(void**)((char*)node + 8); }
+static void* ItemParent(void* node) { return *(void**)((char*)node + 4); }
+static bool ItemNil(void* node) { return !UserPtr(node) || *((unsigned char*)node + 13) != 0; }
+
+static void* ItemSuccessor(void* node, void* head)
+{
+    if (!UserPtr(node) || node == head)
+        return head;
+    void* right = ItemRight(node);
+    if (!ItemNil(right))
+    {
+        void* n = right;
+        while (!ItemNil(ItemLeft(n)))
+            n = ItemLeft(n);
+        return n;
+    }
+    void* cur = node;
+    void* parent = ItemParent(cur);
+    for (int i = 0; i < 512 && UserPtr(parent) && parent != head; ++i)
+    {
+        if (cur != ItemRight(parent))
+            return parent;
+        cur = parent;
+        parent = ItemParent(cur);
+    }
+    return head;
+}
+
+static void CollectGroundItems(std::vector<ShotHit>* out)
+{
+    out->clear();
+    void* item = ItemMgr();
+    if (!item || !g_base)
+        return;
+    void* head = *(void**)((char*)item + 4);
+    if (!UserPtr(head))
+        return;
+    FnTreeInc inc = (FnTreeInc)(g_base + kTreeIncRva);
+    void* node = *(void**)head;
+    if (!IsBadCodePtr((FARPROC)inc))
+    {
+        for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
+        {
+            ShotHit hit;
+            if (ReadGroundHit(node, &hit) && !HasVid(*out, hit.vid))
+                out->push_back(hit);
+            inc(&node);
+        }
+    }
+    node = *(void**)head;
+    for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
+    {
+        ShotHit hit;
+        if (ReadGroundHit(node, &hit) && !HasVid(*out, hit.vid))
+            out->push_back(hit);
+        node = ItemSuccessor(node, head);
+    }
+}
+
+static bool CallGetClose(unsigned rva, float x, float y, unsigned radius, unsigned* vid)
+{
+    void* item = ItemMgr();
+    FnGetCloseItem fn = (FnGetCloseItem)(g_base + rva);
+    if (!item || !vid || !g_base || IsBadCodePtr((FARPROC)fn))
+        return false;
+    float pos[3] = { x, y, 0 };
+    unsigned out = 0;
+    const int ok = fn(item, pos, &out, radius);
+    *vid = out;
+    return ok && out != 0;
+}
+
+static void CollectClosest(unsigned rva, float x, float y, float radius, std::vector<ShotHit>* out, int moneyHint)
+{
+    unsigned vid = 0;
+    const unsigned dist = radius > 1.f ? (unsigned)radius : (unsigned)kPickDistance;
+    if (!CallGetClose(rva, x, y, dist, &vid) || HasVid(*out, vid))
+        return;
+    void* item = ItemMgr();
+    FnTreeInc inc = (FnTreeInc)(g_base + kTreeIncRva);
+    if (!item || IsBadCodePtr((FARPROC)inc))
+        return;
+    void* head = *(void**)((char*)item + 4);
+    if (!UserPtr(head))
+        return;
+    void* node = *(void**)head;
+    for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
+    {
+        ShotHit hit;
+        if (ReadGroundHit(node, &hit) && hit.vid == vid)
+        {
+            if (moneyHint)
+                hit.money = 1;
+            out->push_back(hit);
+            return;
+        }
+        inc(&node);
+    }
+    ShotHit hit;
+    hit.vid = vid;
+    hit.x = x;
+    hit.y = y;
+    hit.money = moneyHint;
+    out->push_back(hit);
+}
+
+static void CollectClosestItem(float x, float y, float radius, std::vector<ShotHit>* out)
+{
+    CollectClosest(kGetCloseItemRva, x, y, radius, out, 0);
+}
+
+static void CollectClosestMoney(float x, float y, float radius, std::vector<ShotHit>* out)
+{
+    CollectClosest(kGetCloseMoneyRva, x, y, radius, out, 1);
+}
+
+static bool CallMoveToDest(float x, float y)
+{
+    void* inst = MainInstance();
+    FnMoveToDest fn = (FnMoveToDest)(g_base + kMoveToDestRva);
+    if (!inst || !g_base || IsBadCodePtr((FARPROC)fn))
+        return false;
+    float pos[3] = { x, y, 0 };
+    fn(inst, pos);
+    return true;
+}
+
+static unsigned PickupNear(float x, float y, const std::vector<ShotHit>& items)
+{
+    const float maxSq = kPickDistance * kPickDistance;
+    unsigned sent = 0;
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        const float dx = items[i].x - x;
+        const float dy = items[i].y - y;
+        if (dx * dx + dy * dy > maxSq)
+            continue;
+        if (CallSendPickup(items[i].vid))
+            ++sent;
+    }
+    return sent;
+}
+
 static bool ReadPixel(void* inst, float* x, float* y)
 {
     if (!UserPtr(inst) || !x || !y)
@@ -925,6 +1231,7 @@ static void ParseHits(Command* cmd, const std::string& src)
         hit.vid = vid;
         hit.x = x;
         hit.y = y;
+        hit.money = 0;
         cmd->hits.push_back(hit);
         if (semi == std::string::npos)
             break;
@@ -973,11 +1280,26 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "loot_loop")
     {
-        g_lootOn = cmd.vid != 0 ? 1 : 0;
+        g_lootFast = (cmd.vid & 1) ? 1 : 0;
+        g_lootRanged = (cmd.vid & 2) ? 1 : 0;
+        g_lootOn = (g_lootFast || g_lootRanged) ? 1 : 0;
+        g_lootDelay = cmd.x >= 1.f ? (DWORD)cmd.x : 50;
+        g_lootRadius = cmd.y > 0.f ? cmd.y : 8000.f;
         if (!g_lootOn)
+        {
             g_lastLootMs = 0;
+            g_lastFastMs = 0;
+            g_lastRangedMs = 0;
+        }
         g_lastOk = true;
-        g_lastReason = g_lootOn ? "loot loop on" : "loot loop off";
+        if (!g_lootOn)
+            g_lastReason = "loot loop off";
+        else if (g_lootFast && g_lootRanged)
+            g_lastReason = "fast+ranged pickup on";
+        else if (g_lootRanged)
+            g_lastReason = "ranged pickup on";
+        else
+            g_lastReason = "fast pickup on";
         return;
     }
 
@@ -1015,6 +1337,18 @@ static void Execute(const Command& cmd)
         return;
     }
 
+    if (cmd.type == "move")
+    {
+        if (!CallMoveToDest(cmd.x, cmd.y))
+        {
+            g_lastReason = "MoveToDestPosition missing";
+            return;
+        }
+        g_lastOk = true;
+        g_lastReason = "MoveToDestPosition";
+        return;
+    }
+
     if (cmd.type == "stop" || cmd.vid == 0)
     {
         StopCombat(player);
@@ -1045,7 +1379,11 @@ static void Execute(const Command& cmd)
         float px = cmd.x;
         float py = cmd.y;
         ReadMainPixel(&px, &py);
+        std::vector<ShotHit> loot;
+        if (g_lootOn)
+            CollectGroundItems(&loot);
         unsigned sent = 0;
+        unsigned picked = 0;
         for (size_t i = 0; i < hits.size(); ++i)
         {
             const ShotHit& hit = hits[i];
@@ -1061,6 +1399,8 @@ static void Execute(const Command& cmd)
                 g_lastVid = hit.vid;
                 ++sent;
             }
+            if (g_lootOn)
+                picked += PickupNear(sx, sy, loot);
         }
         float rx = cmd.x;
         float ry = cmd.y;
@@ -1068,7 +1408,7 @@ static void Execute(const Command& cmd)
         CallSendState(rx, ry, kFuncWait);
         g_lastOk = sent != 0;
         char reason[80];
-        _snprintf_s(reason, _TRUNCATE, "ranged blast %u/%u", sent, (unsigned)hits.size());
+        _snprintf_s(reason, _TRUNCATE, "ranged blast %u/%u loot %u", sent, (unsigned)hits.size(), picked);
         g_lastReason = reason;
         return;
     }
@@ -1133,6 +1473,7 @@ static void OnLoopPump(HWND hwnd, UINT min, UINT max)
         return;
     g_loopTid = GetCurrentThreadId();
     Drain();
+    MaybeAutoLoot(Player());
 }
 
 static BOOL WINAPI HookPeekA(LPMSG msg, HWND hwnd, UINT min, UINT max, UINT remove)

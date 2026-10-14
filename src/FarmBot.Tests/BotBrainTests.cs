@@ -74,6 +74,24 @@ public class BotBrainTests
     }
 
     [Fact]
+    public void RangedPickupDoesNotWalkBeforeBlasting()
+    {
+        var brain = new BotBrain();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.RangedAttackEnabled = true;
+        config.RangedPickupEnabled = true;
+        config.RangedAttackRadius = 2000;
+        var world = Fixtures.World(
+            Fixtures.Mob(1, "Wild Dog", EntityKind.Monster, 800, 0),
+            Fixtures.Mob(9, "drop", EntityKind.Drop, 900, 0, hp: 1)) with { ReceivedAtMs = 5_000 };
+
+        var decision = brain.Tick(world, config, Running, 5_000);
+        Assert.Equal(BotCommandKind.Shot, decision.Command!.Kind);
+        Assert.NotEqual(BotCommandKind.Move, decision.Command.Kind);
+    }
+
+    [Fact]
     public void LootsADropBeforeChoosingTheNextMonster()
     {
         var brain = new BotBrain();

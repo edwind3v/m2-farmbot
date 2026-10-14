@@ -12,6 +12,16 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 {
     public static readonly string[] ProcessNames = { "1.metin2client", "1.Debug-metin2client" };
     public const int MaxEntities = 512;
+    private const uint ItemSingletonRva = 0x482CAC;
+    private const uint ItemMapHead = 4;
+    private const uint ItemNodeLeft = 0;
+    private const uint ItemNodeParent = 4;
+    private const uint ItemNodeRight = 8;
+    private const uint ItemNodeIsNil = 13;
+    private const uint ItemNodeVid = 0x10;
+    private const uint ItemNodeInst = 0x14;
+    private const uint ItemPixelX = 8;
+    private const uint ItemPixelY = 0xC;
 
     private readonly IBotLog? _log;
     private readonly object _gate = new();
@@ -172,6 +182,8 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 
         if (main == null && entities.Count > 0)
             main = entities.FirstOrDefault(item => item.Type == ActorType.Player);
+
+        AppendGroundItems(process, main, entities);
 
         var withDistance = main == null
             ? entities
@@ -345,6 +357,91 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
     }
 
     private static bool IsUserPointer(uint address) => address >= 0x10000 && address < 0x7FFF0000 && (address & 3) == 0;
+
+    private void AppendGroundItems(ProcessMemory memory, Entity? main, List<Entity> entities)
+    {
+        if (!memory.TryReadU32(memory.ImageBase + ItemSingletonRva, out var item) || !IsUserPointer(item))
+            return;
+        if (!memory.TryReadU32(item + ItemMapHead, out var head) || !IsUserPointer(head))
+            return;
+        if (!memory.TryRead(head + ItemNodeIsNil, 1, out var headNil) || headNil[0] == 0)
+            return;
+        if (!memory.TryReadU32(head + ItemNodeLeft, out var node) || !IsUserPointer(node))
+            return;
+
+        var visited = new HashSet<uint>();
+        var walked = 0;
+        while (node != 0 && node != head && walked++ < MaxEntities && visited.Add(node))
+        {
+            if (memory.TryRead(node + ItemNodeIsNil, 1, out var isNil) && isNil[0] == 0 &&
+                memory.TryReadU32(node + ItemNodeVid, out var vid) && vid != 0 &&
+                memory.TryReadU32(node + ItemNodeInst, out var inst) && IsUserPointer(inst) &&
+                memory.TryReadF32(inst + ItemPixelX, out var x) &&
+                memory.TryReadF32(inst + ItemPixelY, out var storedY) &&
+                !float.IsNaN(x) && !float.IsNaN(storedY))
+            {
+                var y = CombatNativeContract.GroundItemPixelY(storedY);
+                var dx = x - (main?.X ?? 0);
+                var dy = y - (main?.Y ?? 0);
+                entities.Add(new Entity
+                {
+                    Vid = vid,
+                    Type = ActorType.Object,
+                    Kind = EntityKind.Drop,
+                    Name = "drop",
+                    X = x,
+                    Y = y,
+                    Distance = MathF.Sqrt(dx * dx + dy * dy),
+                    Hp = 1
+                });
+            }
+
+            if (!TryItemSuccessor(memory, node, head, out node))
+                break;
+        }
+    }
+
+    private static bool TryItemSuccessor(ProcessMemory memory, uint node, uint head, out uint next)
+    {
+        next = 0;
+        if (memory.TryReadU32(node + ItemNodeRight, out var right) &&
+            IsUserPointer(right) &&
+            memory.TryRead(right + ItemNodeIsNil, 1, out var rightNil) &&
+            rightNil[0] == 0)
+        {
+            next = right;
+            for (var i = 0; i < 256; i++)
+            {
+                if (!memory.TryReadU32(next + ItemNodeLeft, out var left) || !IsUserPointer(left))
+                    return true;
+                if (!memory.TryRead(left + ItemNodeIsNil, 1, out var isNil) || isNil[0] != 0)
+                    return true;
+                next = left;
+            }
+
+            return true;
+        }
+
+        var current = node;
+        for (var i = 0; i < MaxEntities; i++)
+        {
+            if (!memory.TryReadU32(current + ItemNodeParent, out var parent) || !IsUserPointer(parent))
+                return false;
+            if (parent == head)
+                return false;
+            if (!memory.TryReadU32(parent + ItemNodeRight, out var parentRight))
+                return false;
+            if (current != parentRight)
+            {
+                next = parent;
+                return true;
+            }
+
+            current = parent;
+        }
+
+        return false;
+    }
 
     private PlayerState? ReadPlayerHud(ProcessMemory process, Entity? main)
     {

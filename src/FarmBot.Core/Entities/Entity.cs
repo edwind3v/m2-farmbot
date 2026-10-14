@@ -6,6 +6,7 @@ public sealed record Entity
 {
     public uint Vid { get; init; }
     public ActorType Type { get; init; }
+    public EntityKind Kind { get; init; }
     public uint Vnum { get; init; }
     public float X { get; init; }
     public float Y { get; init; }

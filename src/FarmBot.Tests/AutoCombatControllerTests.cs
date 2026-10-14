@@ -141,6 +141,46 @@ public class AutoCombatControllerTests
     }
 
     [Fact]
+    public void LootLoopCarriesFastPickupDelayAndRangedFlag()
+    {
+        var nearby = NativeCombatAction.LootLoop(true, 1, false, 300);
+        Assert.Equal(NativeActionKind.LootLoop, nearby.Kind);
+        Assert.Equal(1u, nearby.Vid);
+        Assert.Equal(1f, nearby.X);
+        Assert.False(nearby.Avoid);
+
+        var ranged = NativeCombatAction.LootLoop(true, 25, true, 2000);
+        Assert.Equal(2u, ranged.Vid);
+        Assert.True(ranged.Avoid);
+        Assert.Equal(25f, ranged.X);
+        Assert.Equal(2000f, ranged.Y);
+        Assert.Contains("ranged pickup", ranged.Describe(), StringComparison.OrdinalIgnoreCase);
+
+        var both = NativeCombatAction.LootLoop(3, 10, 2000);
+        Assert.Equal(3u, both.Vid);
+        Assert.Contains("fast+ranged pickup", both.Describe(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RangedPickupDoesNotWalkTheCharacter()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.RangedAttackEnabled = true;
+        config.RangedPickupEnabled = true;
+        config.RangedAttackRadius = 2000;
+        var world = Fixtures.World(
+            Fixtures.Mob(51, "Wild Dog", EntityKind.Monster, 800, 0),
+            Fixtures.Mob(90, "drop", EntityKind.Drop, 900, 0, hp: 1));
+
+        controller.Tick(world, config, true, 30_000);
+        var blast = controller.Tick(world, config, true, 30_200);
+        Assert.Equal(NativeActionKind.Shot, blast.Action!.Kind);
+        Assert.NotEqual(NativeActionKind.MoveTo, blast.Action.Kind);
+    }
+
+    [Fact]
     public void NeverSelectsPlayersOrNpcs()
     {
         var controller = new AutoCombatController();

@@ -76,7 +76,7 @@ public sealed class BotBrain
         if (config.LootEnabled && config.LootBeforeNextTarget && _sticky == 0)
         {
             var drop = LootPolicy.NextDrop(snapshot, config);
-            if (drop != null)
+            if (drop != null && LootPolicy.InPickupRange(drop.Distance))
             {
                 if (!_hasPicked || nowMs - _lastPickupMs >= config.PickupIntervalMs)
                 {
