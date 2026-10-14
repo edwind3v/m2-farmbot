@@ -76,7 +76,8 @@ public sealed record NativeCombatAction
     public static NativeCombatAction SetTarget(uint vid) => new() { Kind = NativeActionKind.SetTarget, Vid = vid };
     public static NativeCombatAction PressActor(uint vid, float x, float y) => new() { Kind = NativeActionKind.PressActor, Vid = vid, X = x, Y = y };
     public static NativeCombatAction Face(uint vid) => new() { Kind = NativeActionKind.Face, Vid = vid };
-    public static NativeCombatAction Attack(uint vid) => new() { Kind = NativeActionKind.Attack, Vid = vid };
+    public static NativeCombatAction Attack(uint vid, float x = 0, float y = 0) =>
+        new() { Kind = NativeActionKind.Attack, Vid = vid, X = x, Y = y };
     public static NativeCombatAction Shot(uint vid) => new() { Kind = NativeActionKind.Shot, Vid = vid };
 
     public static NativeCombatAction Shot(IReadOnlyList<EntityState> targets, float restoreX, float restoreY, bool avoid = false)
@@ -95,6 +96,7 @@ public sealed record NativeCombatAction
     public static NativeCombatAction MoveTo(float x, float y) => new() { Kind = NativeActionKind.MoveTo, X = x, Y = y };
     public static NativeCombatAction Stop() => new() { Kind = NativeActionKind.Stop };
     public static NativeCombatAction Pickup() => new() { Kind = NativeActionKind.Pickup };
+    public static NativeCombatAction PickupVid(uint vid) => new() { Kind = NativeActionKind.Pickup, Vid = vid };
     public static NativeCombatAction LootLoop(bool on) => LootLoop(on ? 1u : 0, 200, 0);
 
     public static NativeCombatAction LootLoop(bool on, int delayMs, bool ranged, float radius)

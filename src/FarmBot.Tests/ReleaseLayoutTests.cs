@@ -36,4 +36,23 @@ public class ReleaseLayoutTests
         Assert.Equal(0x14u, layout.InstanceNameDisplacement);
         Assert.True(layout.CanEnumerate, dump);
     }
+
+    [Fact]
+    public void RecoversArthionLayoutWhenPresent()
+    {
+        const string arthion = @"E:\Arthion\game\Arthion.exe";
+        if (!File.Exists(arthion))
+            return;
+
+        var layout = ClientReleaseLayout.Recover(arthion);
+        var dump = $"base=0x{layout.PreferredImageBase:X} create=0x{layout.CreateInstanceRva:X} map=+0x{layout.MapDisplacement:X} singletonRva=0x{layout.SingletonRva:X} main=+0x{layout.MainPointerDisplacement:X} graphic=+0x{layout.GraphicDisplacement:X} race=+0x{layout.RaceDisplacement:X} vnum=+0x{layout.VirtualNumberDisplacement:X} type=+0x{layout.ActorTypeDisplacement:X} vid=+0x{layout.SelfVidDisplacement:X} pos=+0x{layout.PixelXDisplacement:X}/+0x{layout.PixelYDisplacement:X}/+0x{layout.PixelZDisplacement:X} nodeKey=+0x{layout.NodeKey:X} nodeVal=+0x{layout.NodeValue:X} name=+0x{layout.InstanceNameDisplacement:X} can={layout.CanEnumerate}\n" +
+                   string.Join("\n", layout.Evidence);
+        Directory.CreateDirectory(@"C:\Temp");
+        File.WriteAllText(@"C:\Temp\arthion-rellayout.txt", dump);
+        Assert.True(layout.CanEnumerate, dump);
+        Assert.NotEqual(0u, layout.SingletonRva);
+        Assert.NotEqual(0u, layout.MapDisplacement);
+        Assert.NotEqual(0u, layout.NodeKey);
+        Assert.NotEqual(0u, layout.NodeValue);
+    }
 }

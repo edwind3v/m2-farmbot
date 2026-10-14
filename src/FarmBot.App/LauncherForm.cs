@@ -87,7 +87,7 @@ public sealed class LauncherForm : Form
     {
         using var dialog = new OpenFileDialog
         {
-            Filter = "Metin2 client|1.metin2client.exe;*.exe",
+            Filter = "Metin2 client|*.exe",
             Title = "Select the original Metin2 client"
         };
         return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;

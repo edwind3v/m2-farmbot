@@ -16,7 +16,7 @@
             <button class="btn btn-save" @onclick="Shell.SaveSettings">Save</button>
         </div>
         <span class="pill @(Shell.View.Enabled ? "on" : "off")"><i></i>@(Shell.RangedOnly ? "Ranged" : Shell.View.Enabled ? "Running" : "Stopped")</span>
-        <select @bind="Shell.ModeIndex" @bind:event="onchange">
+        <select value="@Shell.ModeIndex" @onchange="OnModeChanged">
             <option value="1">Live</option>
             <option value="0">Simulator</option>
         </select>
@@ -94,11 +94,14 @@
 @code {
     private bool _themeOpen;
     private bool _themeApplied;
+    private CancellationTokenSource? _refresh;
 
     protected override void OnInitialized()
     {
         Shell.Changed += OnChanged;
         Themes.Changed += OnChanged;
+        _refresh = new CancellationTokenSource();
+        _ = RefreshLoop(_refresh.Token);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -108,6 +111,36 @@
             _themeApplied = true;
             await Themes.SelectAsync(Themes.CurrentId, JS);
         }
+    }
+
+    private async Task RefreshLoop(CancellationToken token)
+    {
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                Shell.Tick();
+                StateHasChanged();
+            });
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                await InvokeAsync(() =>
+                {
+                    Shell.Tick();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void OnModeChanged(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var mode))
+            Shell.ModeIndex = mode;
     }
 
     private void OnChanged() => InvokeAsync(StateHasChanged);
@@ -124,6 +157,8 @@
 
     public void Dispose()
     {
+        _refresh?.Cancel();
+        _refresh?.Dispose();
         Shell.Changed -= OnChanged;
         Themes.Changed -= OnChanged;
     }

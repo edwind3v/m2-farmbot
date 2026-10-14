@@ -34,7 +34,7 @@ public sealed class NativeGameControl : IGameControl
         BotCommandKind.SetTarget => NativeCombatAction.SetTarget(command.Vid),
         BotCommandKind.PressActor => NativeCombatAction.PressActor(command.Vid, command.X, command.Y),
         BotCommandKind.Face => NativeCombatAction.Face(command.Vid),
-        BotCommandKind.Attack => NativeCombatAction.Attack(command.Vid),
+        BotCommandKind.Attack => NativeCombatAction.Attack(command.Vid, command.X, command.Y),
         BotCommandKind.Shot => new NativeCombatAction
         {
             Kind = NativeActionKind.Shot,

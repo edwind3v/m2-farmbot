@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Text;
 using FarmBot.Core.Combat;
+using FarmBot.Core.Entities;
 
 namespace FarmBot.Platform.Client;
 
@@ -22,10 +24,10 @@ public sealed class ActionModuleHost
             : pipeName.Trim();
     }
 
-    public static IReadOnlyList<ClientProcessInfo> ListClients()
+    public static IReadOnlyList<ClientProcessInfo> ListClients(string? clientPath = null)
     {
         var list = new List<ClientProcessInfo>();
-        foreach (var name in LiveGameStateProvider.ProcessNames)
+        foreach (var name in LiveGameStateProvider.ProcessNamesFor(clientPath))
         {
             foreach (var process in Process.GetProcessesByName(name))
             {
@@ -45,7 +47,17 @@ public sealed class ActionModuleHost
     public bool TryAttach(int processId, out string status)
     {
         LastProcessId = processId;
-        return RunLoader($"--attach {processId}", out status, 20000);
+        var exePath = "";
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            exePath = process.MainModule?.FileName ?? "";
+        }
+        catch
+        {
+        }
+
+        return RunLoader($"--attach {processId}", out status, 20000, exePath);
     }
 
     public bool TryLaunch(string exePath, out string status) =>
@@ -62,7 +74,7 @@ public sealed class ActionModuleHost
         }
 
         var workdir = Path.GetDirectoryName(exePath) ?? "";
-        if (!RunLoader($"--launch \"{exePath}\" --workdir \"{workdir}\"", out status, 45000))
+        if (!RunLoader($"--launch \"{exePath}\" --workdir \"{workdir}\"", out status, 45000, exePath))
             return false;
         if (!LoaderOutput.TryParseLaunchedPid(status, out processId))
         {
@@ -91,7 +103,7 @@ public sealed class ActionModuleHost
         return sink.Available;
     }
 
-    private bool RunLoader(string extraArgs, out string status, int waitMs = 20000)
+    private bool RunLoader(string extraArgs, out string status, int waitMs = 20000, string? clientPath = null)
     {
         var load = Resolve("FarmBotLoad.exe");
         var dll = Resolve("FarmBotAction.dll");
@@ -111,7 +123,7 @@ public sealed class ActionModuleHost
         var psi = new ProcessStartInfo
         {
             FileName = load,
-            Arguments = $"{extraArgs} --dll \"{dll}\" --token {Token} --pipe {PipeName}",
+            Arguments = LoaderArgs(extraArgs, dll, clientPath),
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -140,6 +152,88 @@ public sealed class ActionModuleHost
 
         status = Status = output.Trim();
         return true;
+    }
+
+    private string LoaderArgs(string extraArgs, string dll, string? clientPath)
+    {
+        var args = $"{extraArgs} --dll \"{dll}\" --token {Token} --pipe {PipeName}";
+        var layout = WriteLayoutFile(clientPath);
+        if (layout.Length > 0)
+            args += " --layout \"" + layout + "\"";
+        return args;
+    }
+
+    private static string WriteLayoutFile(string? exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
+            return "";
+        try
+        {
+            var login = PlayerActionLayoutRecoverer.RecoverLogin(exePath);
+            var player = PlayerActionLayoutRecoverer.Recover(exePath);
+            var entity = ClientReleaseLayout.Recover(exePath);
+            var text = new StringBuilder(login.ToNativeConfig());
+            var playerRva = player.PlayerSingletonRva;
+            AppendHex(text, "player", playerRva);
+            AppendHex(text, "playerName", player.PlayerNameDisplacement);
+            AppendHex(text, "charMgr", entity.SingletonRva);
+            AppendHex(text, "thisAdj", player.SetTargetThisAdjustment);
+            AppendHex(text, "setTarget", player.SetTargetRva);
+            AppendHex(text, "setTargetSlot", player.SetTargetVtableSlot);
+            AppendHex(text, "targetDisp", player.TargetVidDisplacement);
+            AppendHex(text, "attackKey", player.SetAttackKeyStateRva);
+            AppendHex(text, "newAttack", player.NewAttackRva);
+            AppendHex(text, "pickClose", player.PickCloseItemRva);
+            AppendHex(text, "getStatus", player.GetStatusRva);
+            AppendHex(text, "getStatusSlot", player.GetStatusVtableSlot);
+            AppendHex(text, "sendAttack", player.SendAttackPacketRva);
+            AppendHex(text, "sendState", player.SendStatePacketRva);
+            AppendHex(text, "sendPickup", player.SendPickupPacketRva);
+            AppendHex(text, "combo", player.ComboAttackRva);
+            AppendHex(text, "setAuto", player.SetAutoRva);
+            AppendHex(text, "reserve", player.ReserveClickRva);
+            AppendHex(text, "reservedMode", player.ReservedModeDisplacement);
+            AppendHex(text, "vidReserved", player.VidReservedDisplacement);
+            AppendHex(text, "moveTo", player.MoveToDestRva);
+            AppendHex(text, "movePixel", player.MoveToPixelRva);
+            AppendHex(text, "getMain", player.GetMainActorRva);
+            AppendHex(text, "pressActor", player.OnPressActorRva);
+            AppendHex(text, "chase", player.ChaseActorRva);
+            AppendHex(text, "approachInst", player.ApproachInstRva);
+            AppendHex(text, "playerUpdate", player.PlayerUpdateRva);
+            AppendHex(text, "getPixel", player.GetPixelRva);
+            AppendHex(text, "inRange", player.InRangeRva);
+            AppendHex(text, "item", player.ItemSingletonRva);
+            AppendHex(text, "getClose", player.GetCloseItemRva);
+            AppendHex(text, "points", player.StatusPointsDisplacement);
+            if (player.StatusPointsDisplacement != 0)
+                text.Append("xor=").Append(player.PointXorMask.ToString("X")).Append('\n');
+            AppendHex(text, "mainPtr", entity.MainPointerDisplacement);
+            AppendHex(text, "graphic", entity.GraphicDisplacement);
+            AppendHex(text, "pixelX", entity.PixelXDisplacement);
+            AppendHex(text, "pixelY", entity.PixelYDisplacement);
+            AppendHex(text, "mapDisp", entity.MapDisplacement);
+            AppendHex(text, "mapHead", entity.MapHeadDisplacement);
+            AppendHex(text, "nodeLeft", entity.NodeLeft);
+            AppendHex(text, "nodeParent", entity.NodeParent);
+            AppendHex(text, "nodeRight", entity.NodeRight);
+            AppendHex(text, "nodeIsNil", entity.NodeIsNil);
+            AppendHex(text, "nodeKey", entity.NodeKey);
+            AppendHex(text, "nodeValue", entity.NodeValue);
+            var path = Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_" + Guid.NewGuid().ToString("N") + ".cfg");
+            File.WriteAllText(path, text.ToString());
+            return path;
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static void AppendHex(StringBuilder text, string key, uint value)
+    {
+        if (value != 0)
+            text.Append(key).Append('=').Append(value.ToString("X")).Append('\n');
     }
 
     private static string Resolve(string fileName)

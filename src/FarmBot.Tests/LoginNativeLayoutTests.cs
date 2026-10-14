@@ -36,6 +36,28 @@ public class LoginNativeLayoutTests
         Assert.Equal(0x117660u, layout.AccountSetLoginInfoRva);
         Assert.Contains("StartGame native 0x13CD40", dump);
         Assert.Contains("NotifyGamePhase 0x11C0C0", dump);
+        Assert.Contains("layout=recovered", layout.ToNativeConfig());
+        Assert.Contains("layout=recovered", layout.ToNativeConfig());
+        Assert.Contains("net=482BA0", layout.ToNativeConfig());
+        Assert.Contains("setLoginPhase=13D240", layout.ToNativeConfig());
+    }
+
+    [Fact]
+    public void RecoversLoginApisFromARenamedOrDifferentClientWhenPresent()
+    {
+        const string arthion = @"E:\Arthion\game\Arthion.exe";
+        if (!File.Exists(arthion))
+            return;
+
+        var layout = PlayerActionLayoutRecoverer.RecoverLogin(arthion);
+        var dump = layout.ToNativeConfig() + "\n" + string.Join("\n", layout.Evidence);
+        Directory.CreateDirectory(@"C:\Temp");
+        File.WriteAllText(@"C:\Temp\arthion-loginlayout.txt", dump);
+        Assert.True(layout.CanLogin, dump);
+        Assert.NotEqual(LoginNativeContract.SetLoginInfoRva, layout.SetLoginInfoRva);
+        Assert.NotEqual(0u, layout.SetLoginInfoRva);
+        Assert.NotEqual(0u, layout.DirectEnterRva);
+        Assert.NotEqual(0u, layout.StartGameRva);
     }
 
     [Fact]

@@ -247,7 +247,14 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         };
         if (type.Length == 0)
             return false;
-        return _client.Submit(type, action.Vid, action.Kind != NativeActionKind.LootLoop || action.Vid != 0, updateStatus: action.Kind != NativeActionKind.Pickup).Ok;
+        return _client.Submit(new ActionRequest
+        {
+            Type = type,
+            Vid = action.Vid,
+            Force = action.Kind != NativeActionKind.LootLoop || action.Vid != 0,
+            X = action.X,
+            Y = action.Y
+        }, updateStatus: action.Kind != NativeActionKind.Pickup).Ok;
     }
 
     public bool TryReadHud(out PlayerHudPoints hud)

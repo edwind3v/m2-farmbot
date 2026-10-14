@@ -7,7 +7,7 @@
 
 // x86 helper: load FarmBotAction.dll into the user's own 32-bit Metin2 process.
 
-static void WriteConfig(const std::string& pipe, const std::string& token, DWORD pid)
+static void WriteConfig(const std::string& pipe, const std::string& token, DWORD pid, const std::string& layoutPath)
 {
     char dir[MAX_PATH];
     GetTempPathA(MAX_PATH, dir);
@@ -17,6 +17,17 @@ static void WriteConfig(const std::string& pipe, const std::string& token, DWORD
     if (fopen_s(&f, path, "w") == 0 && f)
     {
         fprintf(f, "pipe=%s\ntoken=%s\n", pipe.c_str(), token.c_str());
+        if (!layoutPath.empty())
+        {
+            FILE* layout = nullptr;
+            if (fopen_s(&layout, layoutPath.c_str(), "r") == 0 && layout)
+            {
+                char line[512];
+                while (fgets(line, sizeof(line), layout))
+                    fputs(line, f);
+                fclose(layout);
+            }
+        }
         fclose(f);
     }
 }
@@ -80,6 +91,7 @@ int main(int argc, char** argv)
     std::string dll;
     std::string token;
     std::string pipe = "FarmBotAction";
+    std::string layout;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -101,6 +113,8 @@ int main(int argc, char** argv)
             pipe = argv[++i];
         else if (strcmp(argv[i], "--workdir") == 0 && i + 1 < argc)
             workdir = argv[++i];
+        else if (strcmp(argv[i], "--layout") == 0 && i + 1 < argc)
+            layout = argv[++i];
     }
 
     if (dll.empty() || token.empty() || mode.empty())
@@ -146,7 +160,7 @@ int main(int argc, char** argv)
             return 4;
         }
         CloseHandle(pi.hThread);
-        WriteConfig(pipe, token, pi.dwProcessId);
+        WriteConfig(pipe, token, pi.dwProcessId, layout);
         if (!WaitForWindow(pi.dwProcessId, 30000))
         {
             printf("client window did not appear; injecting anyway\n");
@@ -164,7 +178,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    WriteConfig(pipe, token, pid);
+    WriteConfig(pipe, token, pid, layout);
     HANDLE process = OpenProcess(kAccess, FALSE, pid);
     if (!process)
     {

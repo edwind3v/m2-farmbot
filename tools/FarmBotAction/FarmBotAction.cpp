@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdarg>
 #include <cstring>
 #include <queue>
 #include <string>
@@ -17,65 +18,85 @@
 // In-process x86 adapter. Drains on CPythonApplication::Loop (PeekMessage/GetMessage)
 // and calls existing CPythonPlayer methods on that same thread.
 
-static const unsigned kSingletonRva = 0x482398;
-static const unsigned kCharMgrRva = 0x48239C;
-static const unsigned kNewAttackRva = 0xD0C70;
-static const unsigned kNetStreamRva = 0x482BA0;
-static const unsigned kAccountConnectorRva = 0x484D24;
-static const unsigned kSetLoginInfoRva = 0x11C390;
-static const unsigned kAccountSetLoginInfoRva = 0x117660;
-static const unsigned kAccountConnectRva = 0x117510;
-static const unsigned kConnectGameServerRva = 0x11BD40;
-static const unsigned kSelectCharacterRva = 0x13DC60;
-static const unsigned kSetLoginPhaseRva = 0x13D240;
-static const unsigned kSetGamePhaseRva = 0x1367F0;
-static const unsigned kStartGameRva = 0x13CD40;
-static const unsigned kNotifyGamePhaseRva = 0x11C0C0;
-static const unsigned kDirectEnterModeSetRva = 0x11C800;
-static const unsigned kOnLogoCloseRva = 0x13F1A0;
-static const unsigned kAppSingletonRva = 0x484C8C;
-static const unsigned kPhaseDisp = 0xF8;
-static const unsigned kLoginIdDisp = 0xB0;
-static const unsigned kLoginPasswordDisp = 0xC8;
+static unsigned kSingletonRva = 0x482398;
+static unsigned kCharMgrRva = 0x48239C;
+static unsigned kNewAttackRva = 0xD0C70;
+static unsigned kComboRva = 0;
+static unsigned kNetStreamRva = 0x482BA0;
+static unsigned kAccountConnectorRva = 0x484D24;
+static unsigned kSetLoginInfoRva = 0x11C390;
+static unsigned kAccountSetLoginInfoRva = 0x117660;
+static unsigned kAccountConnectRva = 0x117510;
+static unsigned kConnectGameServerRva = 0x11BD40;
+static unsigned kSelectCharacterRva = 0x13DC60;
+static unsigned kSetLoginPhaseRva = 0x13D240;
+static unsigned kSetGamePhaseRva = 0x1367F0;
+static unsigned kStartGameRva = 0x13CD40;
+static unsigned kNotifyGamePhaseRva = 0x11C0C0;
+static unsigned kDirectEnterModeSetRva = 0x11C800;
+static unsigned kOnLogoCloseRva = 0x13F1A0;
+static unsigned kAppSingletonRva = 0x484C8C;
+static unsigned kPhaseDisp = 0xF8;
+static unsigned kLoginIdDisp = 0xB0;
+static unsigned kLoginPasswordDisp = 0xC8;
 static const unsigned kSelectedCharacterDisp = 0x797C;
 static const unsigned kDirectEnterIsSetDisp = 0x79A4;
 static const unsigned kDirectEnterSlotDisp = 0x79A8;
 static const unsigned kStartGameFlagDisp = 0x8C;
 static const unsigned kPythonHandlerDisp = 0x160;
 static const unsigned kGameWindowDisp = 8;
-static const unsigned kSendAttackRva = 0x134BE0;
-static const unsigned kSendStateRva = 0x134DA0;
-static const unsigned kSendPickupRva = 0x13B690;
-static const unsigned kSendClickRva = 0xCE930;
-static const unsigned kItemSingletonRva = 0x482CAC;
-static const unsigned kGetCloseItemRva = 0xBB480;
-static const unsigned kGetCloseMoneyRva = 0xBB580;
-static const unsigned kTreeIncRva = 0xBA810;
-static const unsigned kMoveToDestRva = 0xA6BB0;
+static unsigned kSendAttackRva = 0x134BE0;
+static unsigned kSendStateRva = 0x134DA0;
+static unsigned kSendPickupRva = 0x13B690;
+static unsigned kSendClickRva = 0xCE930;
+static unsigned kItemSingletonRva = 0x482CAC;
+static unsigned kGetCloseItemRva = 0xBB480;
+static unsigned kGetCloseMoneyRva = 0xBB580;
+static unsigned kTreeIncRva = 0xBA810;
+static unsigned kMoveToDestRva = 0xA6BB0;
+static unsigned kMoveToPixelRva = 0;
+static unsigned kGetMainActorRva = 0;
+static unsigned kPressActorRva = 0;
+static unsigned kChaseRva = 0;
+static unsigned kApproachInstRva = 0;
+static unsigned kGetPixelRva = 0;
+static unsigned kInRangeRva = 0;
 static const unsigned kFuncWait = 0;
 static const unsigned kFuncAttack = 2;
-static const unsigned kMainPtrDisp = 0x0C;
-static const unsigned kGraphicDisp = 0x1EC;
-static const unsigned kPixelXDisp = 0x46C;
-static const unsigned kPixelYDisp = 0x470;
+static unsigned kMainPtrDisp = 0x0C;
+static unsigned kMapDisp = 0x20;
+static unsigned kMapHeadOff = 0;
+static unsigned kNodeLeft = 0;
+static unsigned kNodeParent = 4;
+static unsigned kNodeRight = 8;
+static unsigned kNodeIsNil = 0x0D;
+static unsigned kNodeKey = 0x10;
+static unsigned kNodeValue = 0x14;
+static unsigned kGraphicDisp = 0x1EC;
+static unsigned kPixelXDisp = 0x46C;
+static unsigned kPixelYDisp = 0x470;
 static const float kAvoidStand = 250.f;
 static const float kPickDistance = 300.f;
-static const unsigned kAttackKeyRva = 0xD2030;
-static const unsigned kReserveClickRva = 0xD1B90;
-static const unsigned kSetAutoRva = 0xD1DF0;
-static const unsigned kThisAdj = 4;
-static const unsigned kSetTargetSlot = 0x60;
+static unsigned kAttackKeyRva = 0xD2030;
+static unsigned kReserveClickRva = 0xD1B90;
+static unsigned kSetAutoRva = 0xD1DF0;
+static unsigned kThisAdj = 4;
+static unsigned kSetTargetSlot = 0;
+static unsigned kSetTargetRva = 0;
 static const unsigned kGetInstSlot = 8;
-static const unsigned kGetNameSlot = 0x14;
+static unsigned kGetNameSlot = 0x14;
 static const unsigned kOwnerNameDisp = 0x2FC;
-static const unsigned kPlayerNameDisp = 0x14;
-static const unsigned kTargetDisp = 0x10814;
-static const unsigned kReservedModeDisp = 0x54;
-static const unsigned kVidReservedDisp = 0x10770;
-static const unsigned kPlayerUpdateRva = 0xCF2D0;
-static const unsigned kPickCloseRva = 0xD1280;
-static const unsigned kPickCloseMoneyRva = 0xD12F0;
-static const unsigned kGetStatusRva = 0xCDBB0;
+static unsigned kPlayerNameDisp = 0x14;
+static unsigned kTargetDisp = 0x10814;
+static unsigned kReservedModeDisp = 0x54;
+static unsigned kVidReservedDisp = 0x10770;
+static unsigned kPlayerUpdateRva = 0xCF2D0;
+static unsigned kPickCloseRva = 0xD1280;
+static unsigned kPickCloseMoneyRva = 0xD12F0;
+static unsigned kGetStatusRva = 0xCDBB0;
+static unsigned kGetStatusSlot = 0;
+static unsigned kPointsDisp = 0;
+static unsigned kPointXor = 0;
 static const unsigned kMiniMapRva = 0x482BA8;
 static const unsigned kBackgroundRva = 0x48238C;
 static const unsigned kLoadAtlasRva = 0xF9980;
@@ -114,8 +135,12 @@ typedef int (__thiscall* FnSendPickup)(void* self, unsigned vid);
 typedef void (__thiscall* FnSendClick)(void* self, unsigned vid);
 typedef void* (__thiscall* FnTreeInc)(void* it);
 typedef int (__thiscall* FnGetCloseItem)(void* self, float* pos, unsigned* vid, unsigned dist);
-typedef int (__thiscall* FnMoveToDest)(void* inst, const float* pos);
+typedef int (__thiscall* FnMoveToDest)(void* inst, const void* dest);
+typedef void (__thiscall* FnGetPixel)(void* inst, float* out);
+typedef int (__thiscall* FnInRange)(void* me, const void* you);
+typedef void* (__thiscall* FnGetMain)(void* self);
 typedef void (__thiscall* FnAttackKey)(void* self, bool press);
+typedef void (__thiscall* FnPressActor)(void* self, void* inst, unsigned vid, int isAuto);
 typedef void (__thiscall* FnVid)(void* self, unsigned vid);
 typedef int (__thiscall* FnLoadAtlas)(void* self);
 typedef void (__thiscall* FnAtlasSize)(void* self, float* x, float* y);
@@ -179,6 +204,13 @@ static std::queue<Command> g_queue;
 static bool g_lastOk;
 static std::string g_lastReason;
 static unsigned g_lastVid;
+static unsigned g_chaseVid;
+static unsigned g_walkVid;
+static float g_chaseX;
+static float g_chaseY;
+static DWORD g_lastWalkMs;
+static volatile long g_allowMelee;
+static BYTE* g_updateComboCall;
 static volatile long g_busy;
 static DWORD g_loopTid;
 static int g_iatHooks;
@@ -223,6 +255,7 @@ static int g_loadNearEnd;
 static int g_maxLoadSteps;
 static int g_loginSent;
 static int g_selectSent;
+static int g_layoutRecovered;
 static unsigned g_atlasSeq;
 static volatile long g_atlasCrash;
 
@@ -232,11 +265,51 @@ static FnGetMsg g_getA;
 static FnGetMsg g_getW;
 static FnUpdate g_playerUpdate;
 static FnSetLoginInfo g_setLoginInfo;
+static FnAttackKey g_origAttackKey;
+static FnVid g_origReserveClick;
+static FnSetTarget g_origSetTarget;
+static FnVoid g_origCombo;
+static FnVoid g_origChase;
+static FnMoveToDest g_origMoveToDest;
+static FnInRange g_origInRange;
+static volatile long g_botCall;
+static unsigned g_lastUpdateMode = 0xFFFFFFFFu;
 
 static bool UserPtr(const void* p)
 {
     const uintptr_t a = (uintptr_t)p;
     return a >= 0x10000 && a < 0x7FFF0000 && (a & 3) == 0;
+}
+
+static void NativeLog(const char* fmt, ...)
+{
+    char body[400];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(body, _TRUNCATE, fmt, ap);
+    va_end(ap);
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char line[480];
+    _snprintf_s(line, _TRUNCATE, "%02u:%02u:%02u.%03u %s\r\n",
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, body);
+    FILE* f = nullptr;
+    if (fopen_s(&f, "C:\\Temp\\farmbot-native.log", "a") == 0 && f)
+    {
+        fputs(line, f);
+        fclose(f);
+    }
+    char temp[MAX_PATH];
+    if (GetTempPathA(MAX_PATH, temp))
+    {
+        char path[MAX_PATH];
+        _snprintf_s(path, _TRUNCATE, "%sfarmbot-native.log", temp);
+        if (fopen_s(&f, path, "a") == 0 && f)
+        {
+            fputs(line, f);
+            fclose(f);
+        }
+    }
 }
 
 static void* Player()
@@ -271,9 +344,24 @@ static unsigned ReadTargetVid(void* player)
     return *(unsigned*)((char*)player + kTargetDisp);
 }
 
+static int ReadPoint(void* player, int type)
+{
+    if (!player || !kPointsDisp || type < 0)
+        return 0;
+    __try
+    {
+        unsigned raw = *(unsigned*)((char*)player + kPointsDisp + type * 4);
+        return (int)(raw ^ kPointXor);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
 static int FindGetStatusSlot(void** vtbl)
 {
-    if (!g_base || !vtbl)
+    if (!g_base || !vtbl || !kGetStatusRva)
         return -1;
     void* want = g_base + kGetStatusRva;
     for (int i = 0; i < 32; ++i)
@@ -286,15 +374,49 @@ static int FindGetStatusSlot(void** vtbl)
 
 static int CallGetStatus(void* player, int type)
 {
+    if (kGetStatusRva)
+    {
+        FnGetStatus fn = (FnGetStatus)(g_base + kGetStatusRva);
+        if (!IsBadCodePtr((FARPROC)fn))
+        {
+            void* selves[2] = { (char*)player + kThisAdj, player };
+            for (int i = 0; i < 2; ++i)
+            {
+                __try
+                {
+                    return fn(selves[i], type);
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER)
+                {
+                }
+            }
+        }
+    }
     void** vtbl = IAbsVtbl(player);
-    if (!vtbl)
-        return 0;
-    if (g_getStatusSlot < 0)
-        g_getStatusSlot = FindGetStatusSlot(vtbl);
-    if (g_getStatusSlot < 0 || !UserPtr(vtbl[g_getStatusSlot]))
-        return 0;
-    void* iabs = (char*)player + kThisAdj;
-    return ((FnGetStatus)vtbl[g_getStatusSlot])(iabs, type);
+    if (vtbl)
+    {
+        int slot = -1;
+        if (kGetStatusSlot)
+            slot = (int)(kGetStatusSlot / 4);
+        else
+        {
+            if (g_getStatusSlot < 0)
+                g_getStatusSlot = FindGetStatusSlot(vtbl);
+            slot = g_getStatusSlot;
+        }
+        if (slot >= 0 && UserPtr(vtbl[slot]))
+        {
+            void* iabs = (char*)player + kThisAdj;
+            __try
+            {
+                return ((FnGetStatus)vtbl[slot])(iabs, type);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+        }
+    }
+    return ReadPoint(player, type);
 }
 
 static void RefreshHud(void* player)
@@ -316,65 +438,165 @@ static void RefreshHud(void* player)
 
 static bool CallSetTarget(void* player, unsigned vid, int force)
 {
-    void** vtbl = IAbsVtbl(player);
-    if (!vtbl || !UserPtr(vtbl[kSetTargetSlot / 4]))
-        return false;
     void* iabs = (char*)player + kThisAdj;
-    ((FnSetTarget)vtbl[kSetTargetSlot / 4])(iabs, vid, force);
-    return true;
+    __try
+    {
+        if (kSetTargetSlot)
+        {
+            void** vtbl = IAbsVtbl(player);
+            if (vtbl && UserPtr(vtbl[kSetTargetSlot / 4]))
+            {
+                ((FnSetTarget)vtbl[kSetTargetSlot / 4])(iabs, vid, force);
+                return true;
+            }
+        }
+        if (kSetTargetRva)
+        {
+            FnSetTarget fn = (FnSetTarget)(g_base + kSetTargetRva);
+            if (!IsBadCodePtr((FARPROC)fn))
+            {
+                fn(iabs, vid, force);
+                return true;
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    return false;
+}
+
+static void* MapFindVid(unsigned vid)
+{
+    void* mgr = CharMgr();
+    if (!mgr || !vid || !kMapDisp)
+        return nullptr;
+    __try
+    {
+        void* head = *(void**)((char*)mgr + kMapDisp + kMapHeadOff);
+        if (!UserPtr(head))
+            return nullptr;
+        void* node = *(void**)((char*)head + kNodeParent);
+        for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
+        {
+            if (*((BYTE*)node + kNodeIsNil))
+                break;
+            unsigned key = *(unsigned*)((char*)node + kNodeKey);
+            if (key == vid)
+            {
+                void* inst = *(void**)((char*)node + kNodeValue);
+                return UserPtr(inst) ? inst : nullptr;
+            }
+            node = *(void**)((char*)node + (vid < key ? kNodeLeft : kNodeRight));
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    return nullptr;
 }
 
 static void* CallGetInstance(unsigned vid)
 {
+    void* fromMap = MapFindVid(vid);
+    if (fromMap)
+        return fromMap;
     void* mgr = CharMgr();
     if (!mgr)
         return nullptr;
-    void* iabs = (char*)mgr + kThisAdj;
-    void** vtbl = *(void***)iabs;
-    if (!UserPtr(vtbl) || !UserPtr(vtbl[kGetInstSlot / 4]))
-        return nullptr;
-    void* inst = ((FnGetInst)vtbl[kGetInstSlot / 4])(iabs, vid);
-    return UserPtr(inst) ? inst : nullptr;
+    const unsigned adjs[2] = { 0, kThisAdj };
+    for (int a = 0; a < 2; ++a)
+    {
+        void* iabs = (char*)mgr + adjs[a];
+        __try
+        {
+            void** vtbl = *(void***)iabs;
+            if (!UserPtr(vtbl) || !UserPtr(vtbl[kGetInstSlot / 4]))
+                continue;
+            void* inst = ((FnGetInst)vtbl[kGetInstSlot / 4])(iabs, vid);
+            if (UserPtr(inst))
+                return inst;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+    return nullptr;
 }
 
 static bool CallRva(unsigned rva, void* player, unsigned vid)
 {
-    if (!g_base || !player)
+    if (!g_base || !player || !rva)
         return false;
     FnVid fn = (FnVid)(g_base + rva);
     if (IsBadCodePtr((FARPROC)fn))
         return false;
-    fn(player, vid);
-    return true;
+    void* selves[2] = { player, (char*)player + kThisAdj };
+    for (int i = 0; i < 2; ++i)
+    {
+        __try
+        {
+            fn(selves[i], vid);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+    return false;
 }
 
 static bool CallPickClose(void* player)
 {
+    if (!kPickCloseRva)
+        return false;
     FnVoid fn = (FnVoid)(g_base + kPickCloseRva);
     if (!g_base || !player || IsBadCodePtr((FARPROC)fn))
         return false;
-    fn(player);
-    return true;
+    __try
+    {
+        fn(player);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static bool CallPickCloseMoney(void* player)
 {
+    if (!kPickCloseMoneyRva)
+        return false;
     FnVoid fn = (FnVoid)(g_base + kPickCloseMoneyRva);
     if (!g_base || !player || IsBadCodePtr((FARPROC)fn))
         return false;
-    fn(player);
-    return true;
+    __try
+    {
+        fn(player);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static bool CallSendPickup(unsigned vid);
 static bool CallSendClick(void* player, unsigned vid);
 static bool CallSendState(float x, float y, unsigned func);
 static bool ReadMainPixel(float* x, float* y);
+static bool ReadPixel(void* inst, float* x, float* y);
 static void* MainInstance();
+static void* CallGetMainActor();
+static bool CallAttackKey(void* player, bool press);
+static bool CallPressActor(void* player, unsigned vid);
+static void ClearReserved(void* player);
 static void CollectGroundItems(std::vector<ShotHit>* out, const char* me);
 static void CollectClosestItem(float x, float y, float radius, std::vector<ShotHit>* out, const char* me);
 static void CollectClosestMoney(float x, float y, float radius, std::vector<ShotHit>* out, const char* me);
-static bool CallMoveToDest(float x, float y);
+static bool CallMoveToDest(unsigned vid, float x, float y);
 static unsigned PickupNear(float x, float y, const std::vector<ShotHit>& items);
 static LONGLONG NowMs();
 static bool HasVid(const std::vector<ShotHit>& items, unsigned vid);
@@ -427,25 +649,31 @@ static void MaybeAutoLoot(void* player)
 {
     if (!player || (!g_lootFast && !g_lootRanged))
         return;
-    const LONGLONG now = NowMs();
-    const DWORD delay = g_lootDelay < 1 ? 1 : g_lootDelay;
-    float px = 0;
-    float py = 0;
-    ReadMainPixel(&px, &py);
-
-    if (g_lootFast && (g_lastFastMs == 0 || now - g_lastFastMs >= delay))
+    __try
     {
-        g_lastFastMs = now;
-        CallPickClose(player);
-        CallPickCloseMoney(player);
-        DrainGroundLoot(player, px, py, kPickDistance);
+        const LONGLONG now = NowMs();
+        const DWORD delay = g_lootDelay < 1 ? 1 : g_lootDelay;
+        float px = 0;
+        float py = 0;
+        ReadMainPixel(&px, &py);
+
+        if (g_lootFast && (g_lastFastMs == 0 || now - g_lastFastMs >= delay))
+        {
+            g_lastFastMs = now;
+            CallPickClose(player);
+            CallPickCloseMoney(player);
+            DrainGroundLoot(player, px, py, kPickDistance);
+        }
+
+        if (g_lootRanged && (g_lastRangedMs == 0 || now - g_lastRangedMs >= 1))
+        {
+            g_lastRangedMs = now;
+            const float radius = g_lootRadius > 1.f ? g_lootRadius : 8000.f;
+            DrainGroundLoot(player, px, py, radius);
+        }
     }
-
-    if (g_lootRanged && (g_lastRangedMs == 0 || now - g_lastRangedMs >= 1))
+    __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        g_lastRangedMs = now;
-        const float radius = g_lootRadius > 1.f ? g_lootRadius : 8000.f;
-        DrainGroundLoot(player, px, py, radius);
     }
 }
 
@@ -1003,13 +1231,36 @@ static void InitAtlasMap()
         g_atlasView = (BYTE*)MapViewOfFile(g_atlasMap, FILE_MAP_ALL_ACCESS, 0, 0, kAtlasBytes);
 }
 
+static bool CallPlayerVoid(unsigned rva, void* player)
+{
+    if (!rva || !g_base || !player)
+        return false;
+    FnVoid fn = (FnVoid)(g_base + rva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    void* selves[2] = { player, (char*)player + kThisAdj };
+    for (int i = 0; i < 2; ++i)
+    {
+        __try
+        {
+            fn(selves[i]);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+    return false;
+}
+
 static bool CallNewAttack(void* player)
 {
-    FnNewAttack fn = (FnNewAttack)(g_base + kNewAttackRva);
-    if (!g_base || !player || IsBadCodePtr((FARPROC)fn))
-        return false;
-    fn(player);
-    return true;
+    return CallPlayerVoid(kNewAttackRva, player);
+}
+
+static bool CallCombo(void* player)
+{
+    return CallPlayerVoid(kComboRva, player);
 }
 
 static void* NetStream()
@@ -1334,6 +1585,12 @@ static HMODULE PythonDll()
         py = GetModuleHandleA("python26.dll");
     if (!py)
         py = GetModuleHandleA("python22.dll");
+    if (!py)
+    {
+        HMODULE exe = GetModuleHandleA(nullptr);
+        if (exe && (GetProcAddress(exe, "PyObject_CallMethod") || GetProcAddress(exe, "Py_Initialize")))
+            py = exe;
+    }
     return py;
 }
 
@@ -1676,6 +1933,7 @@ static bool ExecuteSession(const Command& cmd)
 
     if (cmd.type == "get_phase" || cmd.type == "get_session")
     {
+        RefreshSession();
         g_lastOk = !g_sessionPhase.empty() || !g_sessionAccount.empty();
         g_lastReason = !g_sessionPhase.empty()
             ? g_sessionPhase
@@ -1704,6 +1962,13 @@ static bool ExecuteSession(const Command& cmd)
         }
         if (!g_skippedIntro)
         {
+            if (!kSetLoginPhaseRva)
+            {
+                RefreshSession();
+                g_lastOk = IsPastIntro();
+                g_lastReason = g_sessionPhase.empty() ? "waiting for login phase" : g_sessionPhase;
+                return true;
+            }
             if (!SafePhase((FnPhase)(g_base + kSetLoginPhaseRva), net))
             {
                 g_lastReason = "SetLoginPhase trapped";
@@ -1872,41 +2137,77 @@ static bool ExecuteSession(const Command& cmd)
 static bool CallSendAttackPacket(unsigned vid)
 {
     void* net = NetStream();
+    if (!kSendAttackRva)
+        return false;
     FnSendAttack fn = (FnSendAttack)(g_base + kSendAttackRva);
     if (!net || IsBadCodePtr((FARPROC)fn))
         return false;
-    fn(net, 0, vid);
-    return true;
+    __try
+    {
+        fn(net, 0, vid);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static bool CallSendState(float x, float y, unsigned func)
 {
     void* net = NetStream();
+    if (!kSendStateRva)
+        return false;
     FnSendState fn = (FnSendState)(g_base + kSendStateRva);
     if (!net || IsBadCodePtr((FARPROC)fn))
         return false;
     float pos[3] = { x, y, 0 };
-    fn(net, pos, 0.f, func, 0);
-    return true;
+    __try
+    {
+        fn(net, pos, 0.f, func, 0);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static bool CallSendPickup(unsigned vid)
 {
     void* net = NetStream();
+    if (!kSendPickupRva)
+        return false;
     FnSendPickup fn = (FnSendPickup)(g_base + kSendPickupRva);
     if (!net || IsBadCodePtr((FARPROC)fn))
         return false;
-    fn(net, vid);
-    return true;
+    __try
+    {
+        fn(net, vid);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static bool CallSendClick(void* player, unsigned vid)
 {
+    if (!kSendClickRva)
+        return false;
     FnSendClick fn = (FnSendClick)(g_base + kSendClickRva);
     if (!g_base || !player || IsBadCodePtr((FARPROC)fn))
         return false;
-    fn(player, vid);
-    return true;
+    __try
+    {
+        fn(player, vid);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static bool HasVid(const std::vector<ShotHit>& items, unsigned vid)
@@ -1921,7 +2222,7 @@ static bool HasVid(const std::vector<ShotHit>& items, unsigned vid)
 
 static void* ItemMgr()
 {
-    if (!g_base)
+    if (!g_base || !kItemSingletonRva)
         return nullptr;
     void* p = *(void**)(g_base + kItemSingletonRva);
     return UserPtr(p) ? p : nullptr;
@@ -1992,19 +2293,28 @@ static bool ReadPlayerName(void* player, char* out, int cap)
     if (!player || !out || cap < 2)
         return false;
     out[0] = 0;
-    void* iabs = (char*)player + kThisAdj;
-    void** vtbl = *(void***)iabs;
-    if (UserPtr(vtbl) && UserPtr(vtbl[kGetNameSlot / 4]))
+    if (kGetNameSlot)
     {
-        const char* name = ((FnGetName)vtbl[kGetNameSlot / 4])(iabs);
-        const uintptr_t a = (uintptr_t)name;
-        if (name && a >= 0x10000 && a < 0x7FFF0000)
+        __try
         {
-            strncpy_s(out, cap, name, _TRUNCATE);
-            return true;
+            void* iabs = (char*)player + kThisAdj;
+            void** vtbl = *(void***)iabs;
+            if (UserPtr(vtbl) && UserPtr(vtbl[kGetNameSlot / 4]))
+            {
+                const char* name = ((FnGetName)vtbl[kGetNameSlot / 4])(iabs);
+                const uintptr_t a = (uintptr_t)name;
+                if (name && a >= 0x10000 && a < 0x7FFF0000)
+                {
+                    strncpy_s(out, cap, name, _TRUNCATE);
+                    return true;
+                }
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
         }
     }
-    return ReadStdString((char*)player + kPlayerNameDisp, out, cap);
+    return kPlayerNameDisp ? ReadStdString((char*)player + kPlayerNameDisp, out, cap) : false;
 }
 
 static int CanTakeGround(void* inst, const char* me)
@@ -2050,6 +2360,21 @@ static void* ItemSuccessor(void* node, void* head)
     return head;
 }
 
+static int SafeTreeInc(FnTreeInc inc, void** node)
+{
+    if (!inc || !node || IsBadCodePtr((FARPROC)inc))
+        return 0;
+    __try
+    {
+        inc(node);
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
 static void CollectGroundItems(std::vector<ShotHit>* out, const char* me)
 {
     out->clear();
@@ -2059,16 +2384,17 @@ static void CollectGroundItems(std::vector<ShotHit>* out, const char* me)
     void* head = *(void**)((char*)item + 4);
     if (!UserPtr(head))
         return;
-    FnTreeInc inc = (FnTreeInc)(g_base + kTreeIncRva);
+    FnTreeInc inc = kTreeIncRva ? (FnTreeInc)(g_base + kTreeIncRva) : nullptr;
     void* node = *(void**)head;
-    if (!IsBadCodePtr((FARPROC)inc))
+    if (inc && !IsBadCodePtr((FARPROC)inc))
     {
         for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
         {
             ShotHit hit;
             if (ReadGroundHit(node, &hit, me) && !HasVid(*out, hit.vid))
                 out->push_back(hit);
-            inc(&node);
+            if (!SafeTreeInc(inc, &node))
+                break;
         }
     }
     node = *(void**)head;
@@ -2083,15 +2409,24 @@ static void CollectGroundItems(std::vector<ShotHit>* out, const char* me)
 
 static bool CallGetClose(unsigned rva, float x, float y, unsigned radius, unsigned* vid)
 {
+    if (!rva)
+        return false;
     void* item = ItemMgr();
     FnGetCloseItem fn = (FnGetCloseItem)(g_base + rva);
     if (!item || !vid || !g_base || IsBadCodePtr((FARPROC)fn))
         return false;
     float pos[3] = { x, y, 0 };
     unsigned out = 0;
-    const int ok = fn(item, pos, &out, radius);
-    *vid = out;
-    return ok && out != 0;
+    __try
+    {
+        const int ok = fn(item, pos, &out, radius);
+        *vid = out;
+        return ok && out != 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static void CollectClosest(unsigned rva, float x, float y, float radius, std::vector<ShotHit>* out, int moneyHint, const char* me)
@@ -2101,31 +2436,38 @@ static void CollectClosest(unsigned rva, float x, float y, float radius, std::ve
     if (!CallGetClose(rva, x, y, dist, &vid) || HasVid(*out, vid))
         return;
     void* item = ItemMgr();
-    FnTreeInc inc = (FnTreeInc)(g_base + kTreeIncRva);
-    if (!item || IsBadCodePtr((FARPROC)inc))
-        return;
-    void* head = *(void**)((char*)item + 4);
-    if (!UserPtr(head))
-        return;
-    void* node = *(void**)head;
-    for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
+    if (item && kTreeIncRva)
     {
-        ShotHit hit;
-        if (ReadGroundHit(node, &hit, me) && hit.vid == vid)
+        FnTreeInc inc = (FnTreeInc)(g_base + kTreeIncRva);
+        if (!IsBadCodePtr((FARPROC)inc))
         {
-            if (moneyHint)
-                hit.money = 1;
-            out->push_back(hit);
-            return;
+            void* head = *(void**)((char*)item + 4);
+            if (UserPtr(head))
+            {
+                void* node = *(void**)head;
+                for (int i = 0; i < 512 && UserPtr(node) && node != head; ++i)
+                {
+                    ShotHit hit;
+                    if (ReadGroundHit(node, &hit, me) && hit.vid == vid)
+                    {
+                        if (moneyHint)
+                            hit.money = 1;
+                        hit.take = 1;
+                        out->push_back(hit);
+                        return;
+                    }
+                    if (!SafeTreeInc(inc, &node))
+                        break;
+                }
+            }
         }
-        inc(&node);
     }
     ShotHit hit;
     hit.vid = vid;
     hit.x = x;
     hit.y = y;
     hit.money = moneyHint;
-    hit.take = moneyHint ? 1 : 0;
+    hit.take = 1;
     out->push_back(hit);
 }
 
@@ -2139,15 +2481,276 @@ static void CollectClosestMoney(float x, float y, float radius, std::vector<Shot
     CollectClosest(kGetCloseMoneyRva, x, y, radius, out, 1, me);
 }
 
-static bool CallMoveToDest(float x, float y)
+static void* CallGetMainActor()
 {
-    void* inst = MainInstance();
-    FnMoveToDest fn = (FnMoveToDest)(g_base + kMoveToDestRva);
-    if (!inst || !g_base || IsBadCodePtr((FARPROC)fn))
+    void* fromPtr = MainInstance();
+    if (!kGetMainActorRva || !g_base)
+        return fromPtr;
+    FnGetMain fn = (FnGetMain)(g_base + kGetMainActorRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return fromPtr;
+    void* player = Player();
+    if (!player)
+        return fromPtr;
+    void* selves[2] = { (char*)player + kThisAdj, player };
+    for (int i = 0; i < 2; ++i)
+    {
+        __try
+        {
+            void* inst = fn(selves[i]);
+            if (UserPtr(inst))
+                return inst;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+    return fromPtr;
+}
+
+static bool CallInstMove(unsigned rva, void* me, const void* arg)
+{
+    if (!rva || !me || !arg || !g_base)
         return false;
-    float pos[3] = { x, y, 0 };
-    fn(inst, pos);
-    return true;
+    FnMoveToDest fn = (FnMoveToDest)(g_base + rva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    __try
+    {
+        fn(me, arg);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool CallGetPixel(void* inst, float* pos)
+{
+    if (!kGetPixelRva || !inst || !pos || !g_base)
+        return false;
+    FnGetPixel fn = (FnGetPixel)(g_base + kGetPixelRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    __try
+    {
+        fn(inst, pos);
+        return pos[0] != 0.f || pos[1] != 0.f;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool CallInRange(void* me, void* you)
+{
+    if (!kInRangeRva || !me || !you || !g_base)
+        return false;
+    FnInRange fn = (FnInRange)(g_base + kInRangeRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    __try
+    {
+        return fn(me, you) != 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool CallMoveToDest(unsigned vid, float x, float y)
+{
+    if (!g_base || (!kMoveToDestRva && !kMoveToPixelRva && !kApproachInstRva))
+        return false;
+    void* mains[2] = { CallGetMainActor(), MainInstance() };
+    void* you = vid ? CallGetInstance(vid) : nullptr;
+    float pos[3] = { 0, 0, 0 };
+    bool havePixel = you && CallGetPixel(you, pos);
+    if (!havePixel && (x != 0.f || y != 0.f))
+    {
+        pos[0] = x;
+        pos[1] = y;
+        pos[2] = 0;
+        havePixel = true;
+    }
+    bool ok = false;
+    for (int i = 0; i < 2; ++i)
+    {
+        void* me = mains[i];
+        if (!me || (i == 1 && me == mains[0]) || me == you)
+            continue;
+        if (you)
+            ok = CallInstMove(kMoveToDestRva, me, you) || ok;
+        if (havePixel)
+            ok = CallInstMove(kMoveToPixelRva, me, pos) || ok;
+    }
+    return ok;
+}
+
+static bool ReadActorPixel(void* inst, float* x, float* y)
+{
+    float pos[3] = { 0, 0, 0 };
+    if (CallGetPixel(inst, pos))
+    {
+        *x = pos[0];
+        *y = pos[1];
+        return true;
+    }
+    return ReadPixel(inst, x, y);
+}
+
+static bool PixelInMelee(unsigned vid)
+{
+    if (!vid)
+        return false;
+    void* you = CallGetInstance(vid);
+    if (!you)
+        return false;
+    void* mains[2] = { CallGetMainActor(), MainInstance() };
+    for (int i = 0; i < 2; ++i)
+    {
+        void* me = mains[i];
+        if (!me || me == you || (i == 1 && me == mains[0]))
+            continue;
+        float mx = 0, my = 0, tx = 0, ty = 0;
+        if (!ReadActorPixel(me, &mx, &my) || !ReadActorPixel(you, &tx, &ty))
+            continue;
+        if ((mx == 0.f && my == 0.f) || (tx == 0.f && ty == 0.f))
+            continue;
+        const float dx = mx - tx;
+        const float dy = my - ty;
+        if (dx * dx + dy * dy <= 150.f * 150.f)
+            return true;
+    }
+    return false;
+}
+
+static void LogPixels(const char* tag, unsigned vid)
+{
+    void* me = CallGetMainActor();
+    if (!me)
+        me = MainInstance();
+    void* you = vid ? CallGetInstance(vid) : nullptr;
+    float mx = 0, my = 0, tx = 0, ty = 0;
+    if (me)
+        ReadActorPixel(me, &mx, &my);
+    if (you)
+        ReadActorPixel(you, &tx, &ty);
+    const float dx = mx - tx;
+    const float dy = my - ty;
+    NativeLog("%s vid=%u me=%p (%.0f,%.0f) you=%p (%.0f,%.0f) dist=%.0f bot=%d",
+        tag, vid, me, mx, my, you, tx, ty, sqrtf(dx * dx + dy * dy), (int)g_botCall);
+}
+
+static unsigned AutoAttackVidDisp()
+{
+    return kReservedModeDisp >= 4 ? kReservedModeDisp - 4 : 0x54;
+}
+
+static void SetAutoAttackVid(void* player, unsigned vid)
+{
+    if (!player)
+        return;
+    const unsigned disp = AutoAttackVidDisp();
+    __try
+    {
+        *(unsigned*)((char*)player + disp) = vid;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    if (kSetAutoRva)
+        CallRva(kSetAutoRva, player, vid);
+}
+
+static void HoldAttackKeyOff(void* player)
+{
+    CallAttackKey(player, false);
+    if (!player)
+        return;
+    __try
+    {
+        *((BYTE*)player + 0x68) = 0;
+        if (kThisAdj)
+        {
+            *((BYTE*)((char*)player + kThisAdj) + 0x68) = 0;
+            *((BYTE*)((char*)player - (int)kThisAdj) + 0x68) = 0;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
+static BYTE ReadAtkKey(void* player)
+{
+    BYTE v = 0xFF;
+    if (!player)
+        return v;
+    __try
+    {
+        v = *((BYTE*)player + 0x68);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    return v;
+}
+
+static bool DriveToTarget(void* player, unsigned vid, float x, float y)
+{
+    (void)x;
+    (void)y;
+    InterlockedExchange(&g_botCall, 1);
+    HoldAttackKeyOff(player);
+
+    if (PixelInMelee(vid))
+    {
+        InterlockedExchange(&g_allowMelee, 1);
+        LogPixels("BOT melee", vid);
+        CallSetTarget(player, vid, 1);
+        SetAutoAttackVid(player, vid);
+        const bool pressed = CallPressActor(player, vid);
+        const bool reserved = CallRva(kReserveClickRva, player, vid);
+        CallAttackKey(player, true);
+        NativeLog("BOT in melee press=%d reserve=%d (attack allowed)", pressed ? 1 : 0, reserved ? 1 : 0);
+        InterlockedExchange(&g_botCall, 0);
+        return true;
+    }
+
+    InterlockedExchange(&g_allowMelee, 0);
+    const bool fresh = g_walkVid != vid;
+    const DWORD now = GetTickCount();
+    const unsigned atk = ReadAtkKey(player);
+    if (fresh)
+    {
+        g_walkVid = vid;
+        g_lastWalkMs = now;
+        CallSetTarget(player, vid, 1);
+        SetAutoAttackVid(player, vid);
+        const bool pressed = CallPressActor(player, vid);
+        const bool reserved = CallRva(kReserveClickRva, player, vid);
+        LogPixels("BOT click-walk", vid);
+        NativeLog("BOT click-walk vid=%u press=%d reserve=%d atkKey=%u pressActor=0x%X reserve=0x%X",
+            vid, pressed ? 1 : 0, reserved ? 1 : 0, atk, kPressActorRva, kReserveClickRva);
+        InterlockedExchange(&g_botCall, 0);
+        return false;
+    }
+
+    if (now - g_lastWalkMs >= 200)
+    {
+        g_lastWalkMs = now;
+        HoldAttackKeyOff(player);
+        SetAutoAttackVid(player, vid);
+        CallRva(kReserveClickRva, player, vid);
+        LogPixels("BOT keep click-walk", vid);
+        NativeLog("BOT keep click-walk atkKey=%u", atk);
+    }
+    InterlockedExchange(&g_botCall, 0);
+    return false;
 }
 
 static unsigned PickupNear(float x, float y, const std::vector<ShotHit>& items)
@@ -2170,11 +2773,18 @@ static unsigned PickupNear(float x, float y, const std::vector<ShotHit>& items)
 
 static bool ReadPixel(void* inst, float* x, float* y)
 {
-    if (!UserPtr(inst) || !x || !y)
+    if (!UserPtr(inst) || !x || !y || !kGraphicDisp || !kPixelXDisp)
         return false;
-    *x = *(float*)((char*)inst + kGraphicDisp + kPixelXDisp);
-    *y = *(float*)((char*)inst + kGraphicDisp + kPixelYDisp);
-    return true;
+    __try
+    {
+        *x = *(float*)((char*)inst + kGraphicDisp + kPixelXDisp);
+        *y = *(float*)((char*)inst + kGraphicDisp + kPixelYDisp);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static void* MainInstance()
@@ -2234,35 +2844,102 @@ static void ParseHits(Command* cmd, const std::string& src)
 
 static bool CallAttackKey(void* player, bool press)
 {
+    if (!kAttackKeyRva)
+        return false;
     FnAttackKey fn = (FnAttackKey)(g_base + kAttackKeyRva);
     if (!g_base || !player || IsBadCodePtr((FARPROC)fn))
         return false;
-    fn(player, press);
-    return true;
+    void* selves[2] = { player, (char*)player + kThisAdj };
+    for (int i = 0; i < 2; ++i)
+    {
+        __try
+        {
+            fn(selves[i], press);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+    return false;
+}
+
+static bool CallPressActor(void* player, unsigned vid)
+{
+    if (!kPressActorRva || !player || !vid)
+        return false;
+    void* main = CallGetMainActor();
+    if (!main)
+        main = MainInstance();
+    if (!main)
+        return false;
+    FnPressActor fn = (FnPressActor)(g_base + kPressActorRva);
+    if (!g_base || IsBadCodePtr((FARPROC)fn))
+        return false;
+    void* selves[2] = { player, (char*)player + kThisAdj };
+    for (int i = 0; i < 2; ++i)
+    {
+        __try
+        {
+            fn(selves[i], main, vid, 1);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+    return false;
 }
 
 static void ClearReserved(void* player)
 {
     if (!player)
         return;
-    *(unsigned*)((char*)player + kReservedModeDisp) = 0;
-    *(unsigned*)((char*)player + kVidReservedDisp) = 0;
+    __try
+    {
+        if (kReservedModeDisp)
+            *(unsigned*)((char*)player + kReservedModeDisp) = 0;
+        if (kVidReservedDisp)
+            *(unsigned*)((char*)player + kVidReservedDisp) = 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
 }
 
 static void StopCombat(void* player)
 {
+    g_chaseVid = 0;
+    g_walkVid = 0;
+    InterlockedExchange(&g_allowMelee, 0);
     CallRva(kSetAutoRva, player, 0);
+    SetAutoAttackVid(player, 0);
     ClearReserved(player);
-    CallAttackKey(player, false);
+    HoldAttackKeyOff(player);
     CallSetTarget(player, 0, 1);
 }
 
-static void StartCombat(void* player, unsigned vid, bool)
+static void ChaseTick(void* player)
 {
-    CallAttackKey(player, false);
-    CallSetTarget(player, vid, 1);
-    CallRva(kSetAutoRva, player, vid);
-    CallRva(kReserveClickRva, player, vid);
+    if (!g_chaseVid || !player)
+        return;
+    DriveToTarget(player, g_chaseVid, g_chaseX, g_chaseY);
+}
+
+static bool StartCombat(void* player, unsigned vid, float x, float y, bool click, bool autoAttack)
+{
+    (void)autoAttack;
+    if (!click)
+    {
+        g_chaseVid = 0;
+        CallSetTarget(player, vid, 1);
+        return false;
+    }
+    g_chaseVid = vid;
+    g_chaseX = x;
+    g_chaseY = y;
+    DriveToTarget(player, vid, x, y);
+    return false;
 }
 
 static void Execute(const Command& cmd)
@@ -2317,6 +2994,18 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "pickup")
     {
+        if (cmd.vid != 0)
+        {
+            if (!CallSendPickup(cmd.vid))
+            {
+                g_lastReason = "SendItemPickUpPacket missing";
+                return;
+            }
+            g_lastOk = true;
+            g_lastReason = "SendItemPickUpPacket";
+            g_lastVid = cmd.vid;
+            return;
+        }
         if (!CallPickClose(player))
         {
             g_lastReason = "PickCloseItem missing";
@@ -2338,7 +3027,7 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "move")
     {
-        if (!CallMoveToDest(cmd.x, cmd.y))
+        if (!CallMoveToDest(cmd.vid, cmd.x, cmd.y))
         {
             g_lastReason = "MoveToDestPosition missing";
             return;
@@ -2391,14 +3080,18 @@ static void Execute(const Command& cmd)
         for (size_t i = 0; i < hits.size(); ++i)
         {
             const ShotHit& hit = hits[i];
-            if (!CallGetInstance(hit.vid))
-                continue;
             float sx = hit.x;
             float sy = hit.y;
             if (cmd.avoid)
                 StandOff(hit.x, hit.y, px, py, &sx, &sy);
             CallSendState(sx, sy, kFuncAttack);
             if (CallSendAttackPacket(hit.vid))
+            {
+                g_lastVid = hit.vid;
+                ++sent;
+            }
+            else if (CallSetTarget(player, hit.vid, 1) &&
+                     (CallNewAttack(player) || CallCombo(player) || CallAttackKey(player, true)))
             {
                 g_lastVid = hit.vid;
                 ++sent;
@@ -2419,19 +3112,26 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "set_target" || cmd.type == "face" || cmd.type == "press_actor" || cmd.type == "attack")
     {
+        NativeLog("BOT cmd=%s vid=%u xy=%.0f,%.0f", cmd.type.c_str(), cmd.vid, cmd.x, cmd.y);
         const void* inst = CallGetInstance(cmd.vid);
-        if (!CallSetTarget(player, cmd.vid, 1))
+        const bool click = cmd.type == "attack" || cmd.type == "press_actor";
+        if (!click)
         {
-            g_lastReason = "SetTarget vtable missing";
+            if (!CallSetTarget(player, cmd.vid, 1))
+            {
+                g_lastReason = "SetTarget vtable missing";
+                return;
+            }
+            g_chaseVid = 0;
+            g_lastVid = ReadTargetVid(player);
+            g_lastOk = g_lastVid == cmd.vid;
+            g_lastReason = g_lastOk ? "selected" : "SetTarget did not stick";
             return;
         }
-        StartCombat(player, cmd.vid, cmd.type == "attack");
-        g_lastVid = ReadTargetVid(player);
-        g_lastOk = g_lastVid == cmd.vid;
-        if (g_lastOk)
-            g_lastReason = inst ? "target+approach+auto-attack" : "selected (instance lookup missed)";
-        else
-            g_lastReason = inst ? "SetTarget did not stick" : "VID not in live instance map";
+        StartCombat(player, cmd.vid, cmd.x, cmd.y, true, false);
+        g_lastVid = cmd.vid;
+        g_lastOk = true;
+        g_lastReason = inst ? "reserve-click walk" : "reserve-click walk (instance lookup missed)";
         return;
     }
 
@@ -2451,6 +3151,21 @@ static void Execute(const Command& cmd)
     g_lastReason = "unsupported action";
 }
 
+static void Drain();
+
+static void SafeDrain()
+{
+    __try
+    {
+        Drain();
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        g_lastOk = false;
+        g_lastReason = "native action trapped";
+    }
+}
+
 static void Drain()
 {
     if (InterlockedCompareExchange(&g_busy, 1, 0) != 0)
@@ -2466,6 +3181,7 @@ static void Drain()
         EnterCriticalSection(&g_lock);
     }
     LeaveCriticalSection(&g_lock);
+    ChaseTick(Player());
     InterlockedExchange(&g_busy, 0);
 }
 
@@ -2476,7 +3192,7 @@ static void OnLoopPump(HWND hwnd, UINT min, UINT max)
     if (hwnd != nullptr || min != 0 || max != 0)
         return;
     g_loopTid = GetCurrentThreadId();
-    Drain();
+    SafeDrain();
     MaybeAutoLoot(Player());
 }
 
@@ -2507,7 +3223,10 @@ static BOOL WINAPI HookGetW(LPMSG msg, HWND hwnd, UINT min, UINT max)
 static void CaptureLogin(const char* id, const char* pwd)
 {
     if (id && id[0])
+    {
         g_capturedAccount = id;
+        g_sessionAccount = id;
+    }
     if (pwd && pwd[0])
         g_capturedPassword = pwd;
 }
@@ -2519,10 +3238,145 @@ static void __fastcall HookSetLoginInfo(void* self, void*, const char* id, const
         g_setLoginInfo(self, id, pwd);
 }
 
+static void __fastcall HookAttackKey(void* self, void*, bool press)
+{
+    NativeLog("%s AttackKey this=%p press=%d", g_botCall ? "BOT" : "GAME", self, press ? 1 : 0);
+    if (g_origAttackKey)
+        g_origAttackKey(self, press);
+}
+
+static void __fastcall HookReserveClick(void* self, void*, unsigned vid)
+{
+    unsigned mode = 0;
+    __try
+    {
+        mode = *(unsigned*)((char*)self + 0x58);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    NativeLog("%s ReserveClick this=%p vid=%u beforeMode=%u", g_botCall ? "BOT" : "GAME", self, vid, mode);
+    LogPixels(g_botCall ? "BOT ReserveClick" : "GAME ReserveClick", vid);
+    if (g_origReserveClick)
+        g_origReserveClick(self, vid);
+}
+
+static void __fastcall HookSetTarget(void* self, void*, unsigned vid, int force)
+{
+    NativeLog("%s SetTarget this=%p vid=%u force=%d", g_botCall ? "BOT" : "GAME", self, vid, force);
+    if (!g_botCall)
+        LogPixels("GAME SetTarget", vid);
+    if (g_origSetTarget)
+        g_origSetTarget(self, vid, force);
+}
+
+static void __fastcall HookCombo(void* self, void*)
+{
+    NativeLog("%s Combo this=%p allowMelee=%d chase=%u",
+        g_botCall ? "BOT" : "GAME", self, (int)g_allowMelee, g_chaseVid);
+    if (g_chaseVid && InterlockedCompareExchange(&g_allowMelee, 0, 0) == 0)
+        return;
+    if (g_origCombo)
+        g_origCombo(self);
+}
+
+static void __fastcall GuardCombo(void* self, void*)
+{
+    if (g_chaseVid && InterlockedCompareExchange(&g_allowMelee, 0, 0) == 0)
+        return;
+    FnVoid combo = (FnVoid)(g_base + kComboRva);
+    if (combo && !IsBadCodePtr((FARPROC)combo))
+        combo(self);
+}
+
+static void PatchUpdateComboCall()
+{
+    if (!g_base || !kPlayerUpdateRva || !kComboRva || g_updateComboCall)
+        return;
+    BYTE* upd = g_base + kPlayerUpdateRva;
+    for (int i = 0; i < 0x280; ++i)
+    {
+        if (upd[i] != 0xE8)
+            continue;
+        const int rel = *(int*)(upd + i + 1);
+        if ((unsigned)(upd + i + 5 + rel - g_base) != kComboRva)
+            continue;
+        DWORD oldp = 0;
+        if (!VirtualProtect(upd + i, 5, PAGE_EXECUTE_READWRITE, &oldp))
+            return;
+        const int nrel = (int)((BYTE*)GuardCombo - (upd + i + 5));
+        upd[i] = 0xE8;
+        *(int*)(upd + i + 1) = nrel;
+        VirtualProtect(upd + i, 5, oldp, &oldp);
+        g_updateComboCall = upd + i;
+        NativeLog("patched Update Combo call +0x%X -> GuardCombo (skip in-place swing while walking)", i);
+        return;
+    }
+    NativeLog("Update Combo call site not found in 0x280");
+}
+
+static void __fastcall HookChase(void* self, void*)
+{
+    unsigned mode = 0, rvid = 0;
+    __try
+    {
+        mode = *(unsigned*)((char*)self + (kReservedModeDisp ? kReservedModeDisp : 0x58));
+        rvid = kVidReservedDisp ? *(unsigned*)((char*)self + kVidReservedDisp) : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    NativeLog("%s Chase this=%p mode=%u rvid=%u", g_botCall ? "BOT" : "GAME", self, mode, rvid);
+    LogPixels(g_botCall ? "BOT Chase" : "GAME Chase", rvid);
+    if (g_origChase)
+        g_origChase(self);
+}
+
+static int __fastcall HookInRange(void* me, void*, const void* you)
+{
+    int ok = 0;
+    if (g_origInRange)
+        ok = g_origInRange(me, you);
+    static DWORD last = 0;
+    const DWORD now = GetTickCount();
+    if (now - last >= 200)
+    {
+        last = now;
+        NativeLog("%s InRange me=%p you=%p -> %d", g_botCall ? "BOT" : "GAME", me, you, ok);
+    }
+    return ok;
+}
+
+static int __fastcall HookMoveToDest(void* me, void*, const void* dest)
+{
+    static DWORD last = 0;
+    const DWORD now = GetTickCount();
+    if (now - last >= 200)
+    {
+        last = now;
+        NativeLog("%s MoveToDest me=%p dest=%p", g_botCall ? "BOT" : "GAME", me, dest);
+    }
+    return g_origMoveToDest ? g_origMoveToDest(me, dest) : 0;
+}
+
 static void __fastcall HookUpdate(void* self)
 {
     g_loopTid = GetCurrentThreadId();
-    Drain();
+    SafeDrain();
+    unsigned mode = 0, rvid = 0;
+    __try
+    {
+        mode = *(unsigned*)((char*)self + (kReservedModeDisp ? kReservedModeDisp : 0x58));
+        rvid = kVidReservedDisp ? *(unsigned*)((char*)self + kVidReservedDisp) : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    if (mode != g_lastUpdateMode)
+    {
+        NativeLog("GAME Update mode %u -> %u rvid=%u chaseVid=%u", g_lastUpdateMode, mode, rvid, g_chaseVid);
+        g_lastUpdateMode = mode;
+    }
     g_playerUpdate(self);
     MaybeAutoLoot(Player());
     RefreshHud(Player());
@@ -2568,6 +3422,10 @@ static unsigned StealLen(const BYTE* p)
         return 5;
     if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x53)
         return 5;
+    if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x51)
+        return 5;
+    if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x8B && p[4] == 0x45)
+        return 6;
     if (p[0] == 0x8B && p[1] == 0xFF && p[2] == 0x55 && p[3] == 0x8B && p[4] == 0xEC)
         return 5;
     return 0;
@@ -2645,6 +3503,15 @@ static void InstallLoopHooks(HMODULE client)
     FARPROC peekW = GetProcAddress(user, "PeekMessageW");
     FARPROC getA = GetProcAddress(user, "GetMessageA");
     FARPROC getW = GetProcAddress(user, "GetMessageW");
+    // Hook user32 first so Drain/RefreshSession run even when this exe's IAT is unused.
+    if (Trampoline(peekA, (void*)HookPeekA, (void**)&g_peekA))
+        ++g_iatHooks;
+    if (Trampoline(peekW, (void*)HookPeekW, (void**)&g_peekW))
+        ++g_iatHooks;
+    if (Trampoline(getA, (void*)HookGetA, (void**)&g_getA))
+        ++g_iatHooks;
+    if (Trampoline(getW, (void*)HookGetW, (void**)&g_getW))
+        ++g_iatHooks;
     if (client)
     {
         if (SwapIat(client, peekA, (void*)HookPeekA, (void**)&g_peekA))
@@ -2655,19 +3522,21 @@ static void InstallLoopHooks(HMODULE client)
             ++g_iatHooks;
         if (SwapIat(client, getW, (void*)HookGetW, (void**)&g_getW))
             ++g_iatHooks;
+        if (kPlayerUpdateRva && Trampoline((BYTE*)client + kPlayerUpdateRva, (void*)HookUpdate, (void**)&g_playerUpdate))
+            ++g_iatHooks;
+        if (kSetLoginInfoRva && Trampoline((BYTE*)client + kSetLoginInfoRva, (void*)HookSetLoginInfo, (void**)&g_setLoginInfo))
+            ++g_iatHooks;
+        NativeLog("hook AttackKey=%d Reserve=%d SetTarget=%d Combo=%d Chase=%d InRange=%d MoveTo=%d Update=%d",
+            kAttackKeyRva && Trampoline((BYTE*)client + kAttackKeyRva, (void*)HookAttackKey, (void**)&g_origAttackKey) ? 1 : 0,
+            kReserveClickRva && Trampoline((BYTE*)client + kReserveClickRva, (void*)HookReserveClick, (void**)&g_origReserveClick) ? 1 : 0,
+            kSetTargetRva && Trampoline((BYTE*)client + kSetTargetRva, (void*)HookSetTarget, (void**)&g_origSetTarget) ? 1 : 0,
+            kComboRva && Trampoline((BYTE*)client + kComboRva, (void*)HookCombo, (void**)&g_origCombo) ? 1 : 0,
+            kChaseRva && Trampoline((BYTE*)client + kChaseRva, (void*)HookChase, (void**)&g_origChase) ? 1 : 0,
+            kInRangeRva && Trampoline((BYTE*)client + kInRangeRva, (void*)HookInRange, (void**)&g_origInRange) ? 1 : 0,
+            kMoveToDestRva && Trampoline((BYTE*)client + kMoveToDestRva, (void*)HookMoveToDest, (void**)&g_origMoveToDest) ? 1 : 0,
+            g_playerUpdate ? 1 : 0);
+        PatchUpdateComboCall();
     }
-    if (Trampoline(peekA, (void*)HookPeekA, (void**)&g_peekA))
-        ++g_iatHooks;
-    if (Trampoline(peekW, (void*)HookPeekW, (void**)&g_peekW))
-        ++g_iatHooks;
-    if (Trampoline(getA, (void*)HookGetA, (void**)&g_getA))
-        ++g_iatHooks;
-    if (Trampoline(getW, (void*)HookGetW, (void**)&g_getW))
-        ++g_iatHooks;
-    if (client && Trampoline((BYTE*)client + kPlayerUpdateRva, (void*)HookUpdate, (void**)&g_playerUpdate))
-        ++g_iatHooks;
-    if (client && Trampoline((BYTE*)client + kSetLoginInfoRva, (void*)HookSetLoginInfo, (void**)&g_setLoginInfo))
-        ++g_iatHooks;
 }
 
 static bool JsonSpace(char c)
@@ -2774,8 +3643,72 @@ static bool ReadFrame(std::string* json)
     return ReadFile(g_pipe, &(*json)[0], length, &read, nullptr) && read == length;
 }
 
+static unsigned ParseHex(const char* text)
+{
+    unsigned value = 0;
+    if (!text)
+        return 0;
+    while (*text == ' ' || *text == '\t')
+        text++;
+    sscanf_s(text, "%x", &value);
+    return value;
+}
+
+static void ClearLoginRvas()
+{
+    kNetStreamRva = 0;
+    kAccountConnectorRva = 0;
+    kSetLoginInfoRva = 0;
+    kAccountSetLoginInfoRva = 0;
+    kAccountConnectRva = 0;
+    kConnectGameServerRva = 0;
+    kSelectCharacterRva = 0;
+    kSetLoginPhaseRva = 0;
+    kSetGamePhaseRva = 0;
+    kStartGameRva = 0;
+    kNotifyGamePhaseRva = 0;
+    kOnLogoCloseRva = 0;
+    kPlayerUpdateRva = 0;
+    kSingletonRva = 0;
+    kCharMgrRva = 0;
+    kGetNameSlot = 0;
+    kNewAttackRva = 0;
+    kComboRva = 0;
+    kAttackKeyRva = 0;
+    kSetTargetSlot = 0;
+    kSetTargetRva = 0;
+    kSendAttackRva = 0;
+    kSendStateRva = 0;
+    kSendPickupRva = 0;
+    kGetStatusRva = 0;
+    kGetStatusSlot = 0;
+    kPointsDisp = 0;
+    kPointXor = 0;
+    kPickCloseRva = 0;
+    kPickCloseMoneyRva = 0;
+    kSetAutoRva = 0;
+    kReserveClickRva = 0;
+    kTargetDisp = 0;
+    kItemSingletonRva = 0;
+    kGetCloseItemRva = 0;
+    kGetCloseMoneyRva = 0;
+    kTreeIncRva = 0;
+    kMoveToDestRva = 0;
+    kMoveToPixelRva = 0;
+    kGetMainActorRva = 0;
+    kPressActorRva = 0;
+    kChaseRva = 0;
+    kApproachInstRva = 0;
+    kGetPixelRva = 0;
+    kInRangeRva = 0;
+    kSendClickRva = 0;
+    kReservedModeDisp = 0;
+    kVidReservedDisp = 0;
+}
+
 static void LoadConfig()
 {
+    ClearLoginRvas();
     char dir[MAX_PATH];
     GetTempPathA(MAX_PATH, dir);
     char path[MAX_PATH];
@@ -2802,18 +3735,141 @@ static void LoadConfig()
             while (!g_token.empty() && (g_token.back() == '\n' || g_token.back() == '\r'))
                 g_token.pop_back();
         }
+        else if (strncmp(line, "layout=recovered", 16) == 0)
+        {
+            g_layoutRecovered = 1;
+            ClearLoginRvas();
+        }
+        else if (strncmp(line, "net=", 4) == 0)
+            kNetStreamRva = ParseHex(line + 4);
+        else if (strncmp(line, "account=", 8) == 0)
+            kAccountConnectorRva = ParseHex(line + 8);
+        else if (strncmp(line, "setLogin=", 9) == 0)
+            kSetLoginInfoRva = ParseHex(line + 9);
+        else if (strncmp(line, "accountSetLogin=", 16) == 0)
+            kAccountSetLoginInfoRva = ParseHex(line + 16);
+        else if (strncmp(line, "connect=", 8) == 0)
+            kAccountConnectRva = ParseHex(line + 8);
+        else if (strncmp(line, "direct=", 7) == 0)
+            kConnectGameServerRva = ParseHex(line + 7);
+        else if (strncmp(line, "select=", 7) == 0)
+            kSelectCharacterRva = ParseHex(line + 7);
+        else if (strncmp(line, "setLoginPhase=", 14) == 0)
+            kSetLoginPhaseRva = ParseHex(line + 14);
+        else if (strncmp(line, "setGamePhase=", 13) == 0)
+            kSetGamePhaseRva = ParseHex(line + 13);
+        else if (strncmp(line, "startGame=", 10) == 0)
+            kStartGameRva = ParseHex(line + 10);
+        else if (strncmp(line, "notifyGame=", 11) == 0)
+            kNotifyGamePhaseRva = ParseHex(line + 11);
+        else if (strncmp(line, "logoClose=", 10) == 0)
+            kOnLogoCloseRva = ParseHex(line + 10);
+        else if (strncmp(line, "phaseDisp=", 10) == 0)
+        {
+            const unsigned v = ParseHex(line + 10);
+            if (v)
+                kPhaseDisp = v;
+        }
+        else if (strncmp(line, "player=", 7) == 0)
+            kSingletonRva = ParseHex(line + 7);
+        else if (strncmp(line, "charMgr=", 8) == 0)
+            kCharMgrRva = ParseHex(line + 8);
+        else if (strncmp(line, "playerUpdate=", 13) == 0)
+            kPlayerUpdateRva = ParseHex(line + 13);
+        else if (strncmp(line, "playerName=", 11) == 0)
+            kPlayerNameDisp = ParseHex(line + 11);
+        else if (strncmp(line, "thisAdj=", 8) == 0)
+            kThisAdj = ParseHex(line + 8);
+        else if (strncmp(line, "setTargetSlot=", 14) == 0)
+            kSetTargetSlot = ParseHex(line + 14);
+        else if (strncmp(line, "setTarget=", 10) == 0)
+            kSetTargetRva = ParseHex(line + 10);
+        else if (strncmp(line, "targetDisp=", 11) == 0)
+            kTargetDisp = ParseHex(line + 11);
+        else if (strncmp(line, "attackKey=", 10) == 0)
+            kAttackKeyRva = ParseHex(line + 10);
+        else if (strncmp(line, "newAttack=", 10) == 0)
+            kNewAttackRva = ParseHex(line + 10);
+        else if (strncmp(line, "combo=", 6) == 0)
+            kComboRva = ParseHex(line + 6);
+        else if (strncmp(line, "setAuto=", 8) == 0)
+            kSetAutoRva = ParseHex(line + 8);
+        else if (strncmp(line, "reserve=", 8) == 0)
+            kReserveClickRva = ParseHex(line + 8);
+        else if (strncmp(line, "reservedMode=", 13) == 0)
+            kReservedModeDisp = ParseHex(line + 13);
+        else if (strncmp(line, "vidReserved=", 12) == 0)
+            kVidReservedDisp = ParseHex(line + 12);
+        else if (strncmp(line, "moveTo=", 7) == 0)
+            kMoveToDestRva = ParseHex(line + 7);
+        else if (strncmp(line, "movePixel=", 10) == 0)
+            kMoveToPixelRva = ParseHex(line + 10);
+        else if (strncmp(line, "getMain=", 8) == 0)
+            kGetMainActorRva = ParseHex(line + 8);
+        else if (strncmp(line, "pressActor=", 11) == 0)
+            kPressActorRva = ParseHex(line + 11);
+        else if (strncmp(line, "chase=", 6) == 0)
+            kChaseRva = ParseHex(line + 6);
+        else if (strncmp(line, "approachInst=", 13) == 0)
+            kApproachInstRva = ParseHex(line + 13);
+        else if (strncmp(line, "getPixel=", 9) == 0)
+            kGetPixelRva = ParseHex(line + 9);
+        else if (strncmp(line, "inRange=", 8) == 0)
+            kInRangeRva = ParseHex(line + 8);
+        else if (strncmp(line, "pickClose=", 10) == 0)
+            kPickCloseRva = ParseHex(line + 10);
+        else if (strncmp(line, "getStatus=", 10) == 0)
+            kGetStatusRva = ParseHex(line + 10);
+        else if (strncmp(line, "getStatusSlot=", 14) == 0)
+            kGetStatusSlot = ParseHex(line + 14);
+        else if (strncmp(line, "item=", 5) == 0)
+            kItemSingletonRva = ParseHex(line + 5);
+        else if (strncmp(line, "getClose=", 9) == 0)
+            kGetCloseItemRva = ParseHex(line + 9);
+        else if (strncmp(line, "points=", 7) == 0)
+            kPointsDisp = ParseHex(line + 7);
+        else if (strncmp(line, "xor=", 4) == 0)
+            kPointXor = ParseHex(line + 4);
+        else if (strncmp(line, "sendAttack=", 11) == 0)
+            kSendAttackRva = ParseHex(line + 11);
+        else if (strncmp(line, "sendState=", 10) == 0)
+            kSendStateRva = ParseHex(line + 10);
+        else if (strncmp(line, "sendPickup=", 11) == 0)
+            kSendPickupRva = ParseHex(line + 11);
+        else if (strncmp(line, "mainPtr=", 8) == 0)
+            kMainPtrDisp = ParseHex(line + 8);
+        else if (strncmp(line, "mapDisp=", 8) == 0)
+            kMapDisp = ParseHex(line + 8);
+        else if (strncmp(line, "mapHead=", 8) == 0)
+            kMapHeadOff = ParseHex(line + 8);
+        else if (strncmp(line, "nodeLeft=", 9) == 0)
+            kNodeLeft = ParseHex(line + 9);
+        else if (strncmp(line, "nodeParent=", 11) == 0)
+            kNodeParent = ParseHex(line + 11);
+        else if (strncmp(line, "nodeRight=", 10) == 0)
+            kNodeRight = ParseHex(line + 10);
+        else if (strncmp(line, "nodeIsNil=", 10) == 0)
+            kNodeIsNil = ParseHex(line + 10);
+        else if (strncmp(line, "nodeKey=", 8) == 0)
+            kNodeKey = ParseHex(line + 8);
+        else if (strncmp(line, "nodeValue=", 10) == 0)
+            kNodeValue = ParseHex(line + 10);
+        else if (strncmp(line, "graphic=", 8) == 0)
+            kGraphicDisp = ParseHex(line + 8);
+        else if (strncmp(line, "pixelX=", 7) == 0)
+            kPixelXDisp = ParseHex(line + 7);
+        else if (strncmp(line, "pixelY=", 7) == 0)
+            kPixelYDisp = ParseHex(line + 7);
+        else if (strncmp(line, "loginId=", 8) == 0)
+            kLoginIdDisp = ParseHex(line + 8);
+        else if (strncmp(line, "loginPwd=", 9) == 0)
+            kLoginPasswordDisp = ParseHex(line + 9);
     }
     fclose(f);
 }
 
 static HMODULE FindClient()
 {
-    HMODULE found = GetModuleHandleA("1.metin2client.exe");
-    if (found)
-        return found;
-    found = GetModuleHandleA("1.Debug-metin2client.exe");
-    if (found)
-        return found;
     return GetModuleHandleA(nullptr);
 }
 
@@ -2903,8 +3959,21 @@ static void Serve()
         g_queue.push(cmd);
         LeaveCriticalSection(&g_lock);
 
-        const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
-        const DWORD wait = WaitForSingleObject(g_done, waitMs);
+        const bool waitReply = cmd.type == "get_phase" || cmd.type == "get_session" ||
+            cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game" ||
+            cmd.type == "skip_intro" || cmd.type == "get_atlas";
+        DWORD wait = WAIT_OBJECT_0;
+        if (waitReply)
+        {
+            const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
+            wait = WaitForSingleObject(g_done, waitMs);
+        }
+        else if (g_lastReason.empty() || g_lastReason == "not executed")
+        {
+            g_lastOk = true;
+            g_lastVid = cmd.vid;
+            g_lastReason = "queued";
+        }
         if (wait != WAIT_OBJECT_0 && (g_lastReason.empty() || g_lastReason == "not executed"))
         {
             char why[192];
@@ -2968,6 +4037,8 @@ static DWORD WINAPI InitThread(void*)
     g_base = (BYTE*)client;
     InitAtlasMap();
     InstallLoopHooks(client);
+    NativeLog("loaded base=%p setTarget=0x%X attackKey=0x%X combo=0x%X reserve=0x%X pressActor=0x%X chase=0x%X moveTo=0x%X inRange=0x%X update=0x%X hooks=%d comboPatch=%d",
+        g_base, kSetTargetRva, kAttackKeyRva, kComboRva, kReserveClickRva, kPressActorRva, kChaseRva, kMoveToDestRva, kInRangeRva, kPlayerUpdateRva, g_iatHooks, g_updateComboCall ? 1 : 0);
     Serve();
     return 0;
 }

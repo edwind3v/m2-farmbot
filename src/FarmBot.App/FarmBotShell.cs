@@ -27,10 +27,11 @@ public sealed class FarmBotShell : IDisposable
     private AdapterActionSink? _actionSink;
     private readonly bool _ownsCompanion;
     private bool _live = true;
-    private PlayerHudPoints? _hud;
-    private long _hudAt;
     private AtlasPixels? _atlas;
     private string _atlasMap = "";
+    private long _atlasAt;
+    private float _atlasX;
+    private float _atlasY;
 
     public FarmBotShell()
         : this(ConfigStore.DefaultPath(AppContext.BaseDirectory), 0, null, null)
@@ -159,12 +160,10 @@ public sealed class FarmBotShell : IDisposable
     {
         try
         {
-            if (_live)
-                RefreshClientList();
             var runtime = _runtime;
             if (runtime == null)
                 return;
-            View = OverlayHud(runtime.Capture());
+            View = runtime.Capture();
             RefreshAtlas();
             Notify();
         }
@@ -280,7 +279,6 @@ public sealed class FarmBotShell : IDisposable
         ConfigStore.Save(_configPath, _config);
         _runtime?.SetEnabled(true);
         _log.Info("bot started");
-        Tick();
     }
 
     public void StartRanged()
@@ -295,7 +293,6 @@ public sealed class FarmBotShell : IDisposable
         ConfigStore.Save(_configPath, _config);
         _runtime?.SetRangedOnly(true);
         _log.Info("ranged attack started; follows the player");
-        Tick();
     }
 
     public void StopBot() => _runtime?.Stop();
@@ -372,38 +369,6 @@ public sealed class FarmBotShell : IDisposable
         _actionHost = null;
     }
 
-    private BotView OverlayHud(BotView view)
-    {
-        if (_actionSink != null && Environment.TickCount64 - _hudAt >= 350)
-        {
-            _hudAt = Environment.TickCount64;
-            if (_actionSink.TryReadHud(out var hud))
-                _hud = hud;
-        }
-
-        if (_hud is not { } cached)
-            return view;
-        var snapshot = view.Snapshot;
-        if (snapshot == null)
-            return view;
-        return view with
-        {
-            Snapshot = snapshot with
-            {
-                Player = snapshot.Player with
-                {
-                    Level = cached.Level,
-                    Exp = cached.Exp,
-                    NextExp = cached.NextExp,
-                    Hp = cached.Hp,
-                    MaxHp = cached.MaxHp,
-                    Mp = cached.Mp,
-                    MaxMp = cached.MaxMp
-                }
-            }
-        };
-    }
-
     private void RefreshAtlas()
     {
         var player = View.Snapshot?.Player;
@@ -427,9 +392,18 @@ public sealed class FarmBotShell : IDisposable
             _log.Info($"atlas {map} {atlas.Width}x{atlas.Height}  world {atlas.WorldW:0} x {atlas.WorldH:0}");
         }
 
+        var x = player?.X ?? 0;
+        var y = player?.Y ?? 0;
+        var dx = x - _atlasX;
+        var dy = y - _atlasY;
+        if (AtlasUrl.Length > 0 && dx * dx + dy * dy < 40_000 && Environment.TickCount64 - _atlasAt < 500)
+            return;
+        _atlasAt = Environment.TickCount64;
+        _atlasX = x;
+        _atlasY = y;
         var worldW = player is { MapWorldW: >= 1000 } ? player.MapWorldW : _atlas.WorldW;
         var worldH = player is { MapWorldH: >= 1000 } ? player.MapWorldH : _atlas.WorldH;
-        AtlasUrl = _atlas.ToCroppedBmpUrl(player?.X ?? 0, player?.Y ?? 0, MapViewRadius, worldW, worldH);
+        AtlasUrl = _atlas.ToCroppedBmpUrl(x, y, MapViewRadius, worldW, worldH);
     }
 
     private bool EnsureCompanion()
@@ -494,7 +468,7 @@ public sealed class FarmBotShell : IDisposable
     private void RefreshClientList()
     {
         var selected = SelectedClientPid;
-        var clients = ActionModuleHost.ListClients();
+        var clients = ActionModuleHost.ListClients(_config.ClientPath);
         Clients = clients;
         if (clients.Count == 0)
         {
@@ -556,8 +530,6 @@ public sealed class FarmBotShell : IDisposable
             if (_logLines.Count > 400)
                 _logLines.RemoveRange(0, _logLines.Count - 300);
         }
-
-        Notify();
     }
 
     private void Notify() => Changed?.Invoke();

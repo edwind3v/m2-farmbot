@@ -11,6 +11,18 @@ namespace FarmBot.Platform.Client;
 public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource, IDisposable
 {
     public static readonly string[] ProcessNames = { "1.metin2client", "1.Debug-metin2client" };
+
+    public static IReadOnlyList<string> ProcessNamesFor(string? clientPath)
+    {
+        var names = new List<string>(ProcessNames);
+        if (string.IsNullOrWhiteSpace(clientPath))
+            return names;
+        var name = Path.GetFileNameWithoutExtension(clientPath);
+        if (!string.IsNullOrWhiteSpace(name) &&
+            !names.Exists(item => item.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            names.Insert(0, name);
+        return names;
+    }
     public const int MaxEntities = 512;
     private const uint ItemSingletonRva = 0x482CAC;
     private const uint ItemMapHead = 4;
@@ -100,7 +112,6 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             if (!EnsureLayout(memory, out var layoutStatus))
             {
                 Status = layoutStatus;
-                Close(layoutStatus);
                 return null;
             }
 
@@ -121,12 +132,17 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 
         var layout = _layout;
         var process = _memory;
-        if (layout == null || process == null || !layout.CanEnumerate)
+        if (layout == null || process == null)
         {
-            Status = layout == null
-                ? "release layout was not recovered from the running image"
-                : "release layout is incomplete; live walk is not enabled. " + string.Join(" ", layout.Evidence.TakeLast(3));
+            Status = "release layout was not recovered from the running image";
             return null;
+        }
+
+        if (!layout.CanEnumerate)
+        {
+            Status = "release layout is incomplete; HUD-only until the alive-instance map is recovered. " +
+                     string.Join(" ", layout.Evidence.TakeLast(3));
+            return Frame(nowMs, process, null, Array.Empty<Entity>(), ReadPlayerHud(process, null));
         }
 
         if (!process.TryReadU32(process.ImageBase + layout.SingletonRva, out var manager) || !IsUserPointer(manager))
@@ -225,22 +241,29 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         if (_layout != null && string.Equals(_layoutPath, path, StringComparison.OrdinalIgnoreCase))
         {
             status = "layout cached";
-            return _layout.CanEnumerate;
+            return _layout.CanEnumerate || _playerLayout is { PlayerSingletonRva: > 0x1000 };
         }
 
         _layout = ClientReleaseLayout.Recover(path);
         _playerLayout = PlayerActionLayoutRecoverer.Recover(path);
         _layoutPath = path;
-        if (!_layout.CanEnumerate)
+        if (_layout.CanEnumerate)
         {
-            status = $"layout from {path} is incomplete: " + string.Join(" ", _layout.Evidence.TakeLast(4));
-            _log?.Warn(status);
-            return false;
+            status = $"layout recovered from {path} singletonRva=0x{_layout.SingletonRva:X} map=+0x{_layout.MapDisplacement:X}";
+            Log(status);
+            return true;
         }
 
-        status = $"layout recovered from {path} singletonRva=0x{_layout.SingletonRva:X} map=+0x{_layout.MapDisplacement:X}";
-        Log(status);
-        return true;
+        status = $"layout from {path} is incomplete: " + string.Join(" ", _layout.Evidence.TakeLast(4));
+        _log?.Warn(status);
+        if (_playerLayout is { PlayerSingletonRva: > 0x1000 })
+        {
+            status += $"; player singleton 0x{_playerLayout.PlayerSingletonRva:X} recovered for HUD";
+            Log(status);
+            return true;
+        }
+
+        return false;
     }
 
     private static string ResolveLayoutPath(ProcessMemory memory)
@@ -299,9 +322,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 
         var type = (ActorType)typeRaw;
         var vnumOrRace = vnum != 0 ? vnum : race;
-        var distance = originX == 0 && originY == 0 && originZ == 0
-            ? 0
-            : WorldGeometry.Distance(originX, originY, originZ, x, y, z);
+        var distance = WorldGeometry.Distance(originX, originY, originZ, x, y, z);
         var name = "";
         if (layout.InstanceNameDisplacement != 0)
             TryReadStdString(memory, instance + layout.InstanceNameDisplacement, out name);
@@ -372,7 +393,8 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 
     private void AppendGroundItems(ProcessMemory memory, Entity? main, List<Entity> entities)
     {
-        if (!memory.TryReadU32(memory.ImageBase + ItemSingletonRva, out var item) || !IsUserPointer(item))
+        var itemRva = _playerLayout is { ItemSingletonRva: > 0x1000 } ? _playerLayout.ItemSingletonRva : ItemSingletonRva;
+        if (!memory.TryReadU32(memory.ImageBase + itemRva, out var item) || !IsUserPointer(item))
             return;
         if (!memory.TryReadU32(item + ItemMapHead, out var head) || !IsUserPointer(head))
             return;
@@ -590,8 +612,6 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             : new PlayerState
             {
                 Name = main.Name,
-                Hp = main.Hp,
-                MaxHp = Math.Max(main.Hp, 1),
                 X = main.X,
                 Y = main.Y,
                 Z = main.Z
@@ -604,25 +624,44 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         out int level, out int exp, out int nextExp, out int hp, out int maxHp, out int mp, out int maxMp)
     {
         level = exp = nextExp = hp = maxHp = mp = maxMp = 0;
-        var disp = layout.StatusPointsDisplacement;
-        if (disp == 0)
-            return false;
-
-        var magic = layout.PointXorMask != 0 ? layout.PointXorMask : PlayerHudDecoder.DefaultXor;
-        foreach (var xor in new[] { magic, 0u })
+        var xors = new[]
         {
-            if (!TryHudAt(process, player, layout, disp, xor, out level, out exp, out nextExp, out hp, out maxHp, out mp, out maxMp))
-                continue;
-            _resolvedPointsDisp = disp;
-            _resolvedPointsXor = xor;
-            return true;
+            layout.PointXorMask,
+            0u,
+            PlayerHudDecoder.DefaultXor
+        }.Distinct().ToArray();
+
+        IEnumerable<uint> Disps()
+        {
+            if (_resolvedPointsDisp != 0)
+            {
+                yield return _resolvedPointsDisp;
+                yield break;
+            }
+
+            if (layout.StatusPointsDisplacement != 0)
+                yield return layout.StatusPointsDisplacement;
+        }
+
+        foreach (var disp in Disps())
+        {
+            foreach (var xor in xors)
+            {
+                if (!TryHudAt(process, player, layout, disp, xor, _resolvedPointsDisp != 0, out level, out exp, out nextExp, out hp, out maxHp, out mp, out maxMp))
+                    continue;
+                if (_resolvedPointsDisp != disp)
+                    Log($"player HUD points at +0x{disp:X} xor 0x{xor:X8}");
+                _resolvedPointsDisp = disp;
+                _resolvedPointsXor = xor;
+                return true;
+            }
         }
 
         return false;
     }
 
     private static bool TryHudAt(
-        ProcessMemory process, uint player, PlayerActionLayout layout, uint displacement, uint xor,
+        ProcessMemory process, uint player, PlayerActionLayout layout, uint displacement, uint xor, bool allowDead,
         out int level, out int exp, out int nextExp, out int hp, out int maxHp, out int mp, out int maxMp)
     {
         level = Point(process, player, displacement, xor, layout.PointLevel);
@@ -632,7 +671,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         maxHp = Point(process, player, displacement, xor, layout.PointMaxHp);
         mp = Point(process, player, displacement, xor, layout.PointSp);
         maxMp = Point(process, player, displacement, xor, layout.PointMaxSp);
-        return PlayerHudDecoder.LooksLikeHud(level, hp, maxHp, mp, maxMp, exp, nextExp);
+        return PlayerHudDecoder.LooksLikeHud(level, hp, maxHp, mp, maxMp, exp, nextExp, allowDead);
     }
 
     private static int Point(ProcessMemory memory, uint player, uint displacement, uint xor, int index)

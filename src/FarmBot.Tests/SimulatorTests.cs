@@ -56,6 +56,18 @@ public class SimulatorTests
     }
 
     [Fact]
+    public void DisposeStopsARunningLoopWithoutThrowing()
+    {
+        var log = new ListLog();
+        var world = new SimulatedWorld();
+        var runtime = new BotRuntime(world, world, log, () => Fixtures.Config());
+        runtime.StartLoop();
+        Thread.Sleep(40);
+        runtime.Dispose();
+        Assert.DoesNotContain(log.Entries, entry => entry.Message.Contains("bot loop failed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void RepresentativeWorldFillsHudAndColoredMapEntities()
     {
         var world = new SimulatedWorld();

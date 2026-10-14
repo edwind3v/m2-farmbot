@@ -31,6 +31,29 @@ public class PlayerHudDecoderTests
     }
 
     [Fact]
+    public void DiscoveryRejectsZeroHpSoUnknownHudIsNotDead()
+    {
+        Assert.False(PlayerHudDecoder.LooksLikeHud(
+            level: 12,
+            hp: 0,
+            maxHp: 800,
+            mp: 100,
+            maxMp: 200,
+            exp: 10,
+            nextExp: 1000,
+            allowDead: false));
+        Assert.True(PlayerHudDecoder.LooksLikeHud(
+            level: 12,
+            hp: 0,
+            maxHp: 800,
+            mp: 100,
+            maxMp: 200,
+            exp: 10,
+            nextExp: 1000,
+            allowDead: true));
+    }
+
+    [Fact]
     public void RejectsXorOfEmptyTable()
     {
         var empty = PlayerHudDecoder.XorOfZero;

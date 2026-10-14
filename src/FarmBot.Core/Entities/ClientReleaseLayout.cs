@@ -60,12 +60,22 @@ public static class ClientReleaseLayout
         var methods = RecoverMethods(pe, evidence);
 
         var create = FindStringFunction(pe, "CPythonCharacterManager::CreateInstance VID[%d] Race[%d]");
+        if (create == 0)
+            create = FindStringFunction(pe, "CPythonCharacterManager::CreateInstance");
         evidence.Add(create == 0
             ? "CreateInstance log string has no .text function start."
             : $"CreateInstance log function RVA 0x{create:X}.");
 
-        var mapDisp = FindMapDisplacement(pe, create, evidence);
         var singleton = FindSingletonRva(pe, methods, evidence);
+        var mapDisp = FindMapDisplacement(pe, create, evidence);
+        if (mapDisp == 0)
+            mapDisp = FindMapDisplacementFromMethods(pe, methods, singleton, evidence);
+        if (mapDisp == 0 && singleton != 0)
+        {
+            mapDisp = 0x20;
+            evidence.Add("CreateInstance missing; using CPythonCharacterManager m_kAliveInstMap default this+0x20.");
+        }
+
         var mainDisp = FindMainPointerDisplacement(pe, methods, evidence);
 
         uint graphic = 0, race = 0, vnum = 0, actorType = 0, selfVid = 0, px = 0, py = 0, pz = 0, instanceName = 0;
@@ -73,7 +83,17 @@ public static class ClientReleaseLayout
         RecoverInstanceFields(pe, methods, evidence, ref graphic, ref race, ref vnum, ref actorType, ref selfVid, ref px, ref py, ref pz, ref negateY, ref instanceName);
 
         uint nodeLeft = 0, nodeParent = 4, nodeRight = 8, nodeIsNil = 0, nodeKey = 0, nodeValue = 0;
-        RecoverMapNode(pe, create, evidence, ref nodeLeft, ref nodeParent, ref nodeRight, ref nodeIsNil, ref nodeKey, ref nodeValue);
+        RecoverMapNode(pe, create, methods, singleton, evidence, ref nodeLeft, ref nodeParent, ref nodeRight, ref nodeIsNil, ref nodeKey, ref nodeValue);
+        if (nodeKey == 0 && mapDisp != 0)
+        {
+            nodeLeft = 0;
+            nodeParent = 4;
+            nodeRight = 8;
+            nodeIsNil = 0x0D;
+            nodeKey = 0x10;
+            nodeValue = 0x14;
+            evidence.Add("std::map node defaults: _Isnil+0x0D, VID key+0x10, CInstanceBase*+0x14.");
+        }
 
         var probe = 0u;
         if (pe.TryFindAscii("CPythonCharacterManager::CreateInstance VID[%d] Race[%d]", out var probeVa))
@@ -120,26 +140,27 @@ public static class ClientReleaseLayout
         var list = new List<ReleaseMethod>();
         foreach (var name in names)
         {
-            if (!pe.TryFindAscii(name, out var va))
+            var found = false;
+            foreach (var va in pe.FindAsciiZ(name))
             {
-                evidence.Add($"method name '{name}' missing.");
-                continue;
+                foreach (var site in pe.FindImmediateXrefs(va))
+                {
+                    var off = pe.VaToFile(site);
+                    if (off < 0 || !TryMethodTable(pe, off, out var fn))
+                        continue;
+                    var rva = fn - pe.ImageBase;
+                    list.Add(new ReleaseMethod(name, va - pe.ImageBase, rva));
+                    evidence.Add($"Python method {name} -> fn RVA 0x{rva:X}.");
+                    found = true;
+                    break;
+                }
+
+                if (found)
+                    break;
             }
 
-            foreach (var site in pe.FindImmediateXrefs(va))
-            {
-                var off = pe.VaToFile(site);
-                if (off < 8)
-                    continue;
-                var flags = pe.ReadU32(off - 8);
-                var fn = pe.ReadU32(off + 4);
-                if (flags != 1 || fn < pe.ImageBase)
-                    continue;
-                var rva = fn - pe.ImageBase;
-                list.Add(new ReleaseMethod(name, va - pe.ImageBase, rva));
-                evidence.Add($"Python method {name} -> fn RVA 0x{rva:X}.");
-                break;
-            }
+            if (!found)
+                evidence.Add($"method name '{name}' missing.");
         }
 
         return list;
@@ -153,17 +174,102 @@ public static class ClientReleaseLayout
         return sites.Count == 0 ? 0 : pe.FunctionStart(sites[0]) - pe.ImageBase;
     }
 
+    private static bool TryMethodTable(MappedPe pe, int off, out uint fn)
+    {
+        fn = 0;
+        if (off < 0)
+            return false;
+        var meth = pe.ReadU32(off + 4);
+        var flags = pe.ReadU32(off + 8);
+        if ((flags & 0xFF) == 1 && meth >= pe.ImageBase)
+        {
+            fn = meth;
+            return true;
+        }
+
+        if (off < 8)
+            return false;
+        flags = pe.ReadU32(off - 8);
+        meth = pe.ReadU32(off + 4);
+        if ((flags & 0xFF) == 1 && meth >= pe.ImageBase)
+        {
+            fn = meth;
+            return true;
+        }
+
+        return false;
+    }
+
     private static uint FindMapDisplacement(MappedPe pe, uint createRva, List<string> evidence)
     {
-        if (createRva == 0)
-            return 0;
-        var off = pe.VaToFile(pe.ImageBase + createRva);
+        if (TryFindAliveMap(pe, createRva, 0x900, out var disp, out _))
+        {
+            evidence.Add($"Alive-instance map at this+0x{disp:X} near CreateInstance.");
+            return disp;
+        }
+
+        if (createRva != 0)
+            evidence.Add("No lea-before-_Isnil map displacement found near CreateInstance.");
+        return 0;
+    }
+
+    private static uint FindMapDisplacementFromMethods(
+        MappedPe pe,
+        IReadOnlyList<ReleaseMethod> methods,
+        uint singletonRva,
+        List<string> evidence)
+    {
+        var seen = new HashSet<uint>();
+        foreach (var method in methods)
+        {
+            if (TryRecordMap(pe, method.FunctionRva, 0x200, seen, evidence, method.Name + " wrapper", out var disp))
+                return disp;
+            foreach (var call in RelativeCalls(pe, method.FunctionRva, 0x80))
+            {
+                if (TryRecordMap(pe, call, 0x400, seen, evidence, method.Name + " callee", out disp))
+                    return disp;
+            }
+        }
+
+        if (singletonRva != 0)
+        {
+            foreach (var site in pe.FindImmediateXrefs(pe.ImageBase + singletonRva))
+            {
+                var fn = pe.FunctionStart(site) - pe.ImageBase;
+                if (TryRecordMap(pe, fn, 0x400, seen, evidence, "singleton xref", out var disp))
+                    return disp;
+            }
+        }
+
+        evidence.Add("No lea-before-_Isnil map displacement found from Python character-manager methods.");
+        return 0;
+    }
+
+    private static bool TryRecordMap(
+        MappedPe pe, uint rva, int window, HashSet<uint> seen, List<string> evidence, string label, out uint disp)
+    {
+        disp = 0;
+        if (rva == 0 || !seen.Add(rva))
+            return false;
+        if (!TryFindAliveMap(pe, rva, window, out disp, out _))
+            return false;
+        evidence.Add($"Alive-instance map at this+0x{disp:X} from {label} RVA 0x{rva:X}.");
+        return true;
+    }
+
+    private static bool TryFindAliveMap(MappedPe pe, uint rva, int window, out uint mapDisp, out int isNilFile)
+    {
+        mapDisp = 0;
+        isNilFile = -1;
+        if (rva == 0)
+            return false;
+        var off = pe.VaToFile(pe.ImageBase + rva);
         if (off < 0)
-            return 0;
+            return false;
 
         // RegisterInstance / GetInstancePtr compare _Isnil at node+0x0D, then key at +0x10.
-        // The map object is the lea [reg+disp8] immediately before that check.
-        for (var i = off; i < off + 0x900 && i + 4 < pe.Length; i++)
+        // The map object is the lea/add [reg+disp] immediately before that check.
+        for (var i = off; i < off + window && i + 4 < pe.Length; i++)
         {
             if (pe.Byte(i) != 0x80 || pe.Byte(i + 2) != 0x0D || pe.Byte(i + 3) != 0x00)
                 continue;
@@ -173,26 +279,77 @@ public static class ClientReleaseLayout
 
             for (var j = i; j >= off && i - j < 0x50; j--)
             {
-                if (pe.Byte(j) != 0x8D)
-                    continue;
-                var modrm = pe.Byte(j + 1);
-                if ((modrm & 0xC0) != 0x40)
-                    continue;
-                var disp = pe.Byte(j + 2);
-                if (disp is 0 or > 0x40)
-                    continue;
-                evidence.Add($"Alive-instance map at this+0x{disp:X} (lea before _Isnil check at RVA 0x{pe.FileToRva(i):X}).");
-                return disp;
+                if (pe.Byte(j) == 0x8D)
+                {
+                    var modrm = pe.Byte(j + 1);
+                    if ((modrm & 0xC0) == 0x40)
+                    {
+                        var disp = pe.Byte(j + 2);
+                        if (disp is > 0 and <= 0x40)
+                        {
+                            mapDisp = disp;
+                            isNilFile = i;
+                            return true;
+                        }
+                    }
+                }
+
+                if (pe.Byte(j) == 0x83 && pe.Byte(j + 1) == 0xC1)
+                {
+                    var disp = pe.Byte(j + 2);
+                    if (disp is > 0 and <= 0x40)
+                    {
+                        mapDisp = disp;
+                        isNilFile = i;
+                        return true;
+                    }
+                }
+
+                if (pe.Byte(j) == 0x81 && pe.Byte(j + 1) == 0xC1)
+                {
+                    var disp = pe.ReadU32(j + 2);
+                    if (disp is > 0 and <= 0x40)
+                    {
+                        mapDisp = disp;
+                        isNilFile = i;
+                        return true;
+                    }
+                }
             }
         }
 
-        evidence.Add("No lea-before-_Isnil map displacement found near CreateInstance.");
-        return 0;
+        return false;
+    }
+
+    private static List<uint> RelativeCalls(MappedPe pe, uint rva, int window)
+    {
+        var list = new List<uint>();
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        if (off < 0)
+            return list;
+        for (var i = off; i < off + window && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            if (target < pe.ImageBase || IsImportThunk(pe, target))
+                continue;
+            var body = FollowJmp(pe, SkipInt3(pe, target - pe.ImageBase));
+            if (body != 0 && !list.Contains(body))
+                list.Add(body);
+        }
+
+        return list;
     }
 
     private static uint FindSingletonRva(MappedPe pe, IReadOnlyList<ReleaseMethod> methods, List<string> evidence)
     {
-        foreach (var name in new[] { "HasInstance", "GetPixelPosition", "GetMainVID" })
+        foreach (var name in new[]
+                 {
+                     "HasInstance", "GetMainVID", "GetNameByVID", "GetVID",
+                     "GetPixelPosition", "GetInstanceType", "GetRace", "GetVirtualNumber",
+                     "GetMainCharacterPosition"
+                 })
         {
             var method = methods.FirstOrDefault(item => item.Name == name);
             if (method == null)
@@ -262,12 +419,73 @@ public static class ClientReleaseLayout
 
         graphic = FirstAddEcX(pe, typeFn != 0 ? typeFn : posFn, evidence, "embedded CActorInstance");
         race = FirstLoadFromEcx(pe, raceFn, evidence, "m_dwRace");
+        if (race == 0)
+            race = FirstCalleeLoad(pe, methods, "GetRace", evidence, "m_dwRace");
         vnum = FirstLoadFromEcx(pe, vnumFn, evidence, "m_dwVirtualNumber");
         selfVid = FindSiblingDwordGetter(pe, raceFn, race, evidence);
+        if (selfVid == 0 && race != 0)
+        {
+            foreach (var call in MethodCallees(pe, methods, "GetRace"))
+            {
+                selfVid = FindSiblingDwordGetter(pe, call, race, evidence);
+                if (selfVid != 0)
+                    break;
+            }
+        }
 
         actorType = FollowGraphicMember(pe, typeFn, graphic, evidence, "m_eActorType");
         RecoverPixelFields(pe, posFn, graphic, evidence, ref px, ref py, ref pz, ref negateY);
+        if (px == 0)
+        {
+            foreach (var call in MethodCallees(pe, methods, "GetPixelPosition"))
+            {
+                RecoverPixelFields(pe, call, graphic, evidence, ref px, ref py, ref pz, ref negateY);
+                if (px != 0)
+                    break;
+            }
+        }
+
         instanceName = RecoverInstanceName(pe, methods, evidence);
+        if (race == 0 && vnum >= 4)
+        {
+            race = vnum - 4;
+            evidence.Add($"m_dwRace inferred as virtual-number-4 (+0x{race:X}).");
+        }
+
+        if (selfVid == 0 && race >= 4)
+        {
+            selfVid = race - 4;
+            evidence.Add($"m_dwVID inferred as race-4 (+0x{selfVid:X}).");
+        }
+
+        if (px == 0 && graphic != 0)
+        {
+            px = 0x46C;
+            py = 0x470;
+            pz = 0x474;
+            negateY = true;
+            evidence.Add("pixel fallback CActorInstance m_x/m_y/m_z +0x46C/+0x470/+0x474 with negated Y.");
+        }
+    }
+
+    private static IEnumerable<uint> MethodCallees(
+        MappedPe pe, IReadOnlyList<ReleaseMethod> methods, string name)
+    {
+        var method = methods.FirstOrDefault(item => item.Name == name);
+        return method == null ? Array.Empty<uint>() : RelativeCalls(pe, method.FunctionRva, 0xA0);
+    }
+
+    private static uint FirstCalleeLoad(
+        MappedPe pe, IReadOnlyList<ReleaseMethod> methods, string name, List<string> evidence, string label)
+    {
+        foreach (var call in MethodCallees(pe, methods, name))
+        {
+            var disp = FirstLoadFromEcx(pe, call, evidence, label);
+            if (disp != 0)
+                return disp;
+        }
+
+        return 0;
     }
 
     private static uint FollowAfterGetInstancePtr(MappedPe pe, IReadOnlyList<ReleaseMethod> methods, string name, List<string> evidence)
@@ -282,7 +500,7 @@ public static class ClientReleaseLayout
         var afterVtbl = -1;
         for (var i = off; i < off + 0x80 && i + 3 < pe.Length; i++)
         {
-            if (pe.Byte(i) == 0xFF && pe.Byte(i + 1) == 0x50 && pe.Byte(i + 2) == 0x08)
+            if (pe.Byte(i) == 0xFF && (pe.Byte(i + 1) == 0x50 || pe.Byte(i + 1) == 0x51) && pe.Byte(i + 2) == 0x08)
             {
                 afterVtbl = i + 3;
                 break;
@@ -367,10 +585,7 @@ public static class ClientReleaseLayout
         }
 
         if (impl == 0)
-        {
-            evidence.Add("NEW_GetPixelPosition did not call a position implementation.");
-            return;
-        }
+            impl = rva;
 
         var implOff = pe.VaToFile(pe.ImageBase + impl);
         if (implOff < 0)
@@ -648,6 +863,8 @@ public static class ClientReleaseLayout
     private static void RecoverMapNode(
         MappedPe pe,
         uint createRva,
+        IReadOnlyList<ReleaseMethod> methods,
+        uint singletonRva,
         List<string> evidence,
         ref uint left,
         ref uint parent,
@@ -656,25 +873,26 @@ public static class ClientReleaseLayout
         ref uint key,
         ref uint value)
     {
-        if (createRva == 0)
+        var rvas = new List<uint>();
+        if (createRva != 0)
+            rvas.Add(createRva);
+        foreach (var method in methods)
         {
-            evidence.Add("Map node layout not recovered from CreateInstance.");
-            return;
+            rvas.Add(method.FunctionRva);
+            rvas.AddRange(RelativeCalls(pe, method.FunctionRva, 0x80));
         }
 
-        var off = pe.VaToFile(pe.ImageBase + createRva);
-        if (off < 0)
-            return;
-
-        for (var i = off; i < off + 0x900 && i + 4 < pe.Length; i++)
+        if (singletonRva != 0)
         {
-            // cmp byte [r32+0x0D], 0  then later cmp/mov of [r32+0x10]
-            if (pe.Byte(i) != 0x80 || pe.Byte(i + 2) != 0x0D || pe.Byte(i + 3) != 0x00)
-                continue;
-            if ((pe.Byte(i + 1) & 0xC0) != 0x40)
-                continue;
+            foreach (var site in pe.FindImmediateXrefs(pe.ImageBase + singletonRva))
+                rvas.Add(pe.FunctionStart(site) - pe.ImageBase);
+        }
 
-            for (var j = i; j < i + 0x20 && j + 3 < pe.Length; j++)
+        foreach (var rva in rvas.Distinct())
+        {
+            if (!TryFindAliveMap(pe, rva, rva == createRva ? 0x900 : 0x400, out _, out var isNilFile) || isNilFile < 0)
+                continue;
+            for (var j = isNilFile; j < isNilFile + 0x20 && j + 3 < pe.Length; j++)
             {
                 if (pe.Byte(j) == 0x3B && (pe.Byte(j + 1) & 0xC0) == 0x40 && pe.Byte(j + 2) == 0x10)
                     key = 0x10;
@@ -693,7 +911,9 @@ public static class ClientReleaseLayout
             }
         }
 
-        evidence.Add("Map node key/value were not recovered from an _Isnil check.");
+        evidence.Add(createRva == 0
+            ? "Map node layout not recovered from CreateInstance."
+            : "Map node key/value were not recovered from an _Isnil check.");
     }
 
     private static List<uint> CollectGlobalLoads(MappedPe pe, uint va, int window)
@@ -744,6 +964,13 @@ public static class ClientReleaseLayout
 
         public bool TryFindAscii(string text, out uint va)
         {
+            var hits = FindAsciiZ(text);
+            if (hits.Count > 0)
+            {
+                va = hits[0];
+                return true;
+            }
+
             var needle = Encoding.ASCII.GetBytes(text);
             for (var i = 0; i + needle.Length < _bytes.Length; i++)
             {
@@ -766,6 +993,34 @@ public static class ClientReleaseLayout
 
             va = 0;
             return false;
+        }
+
+        public List<uint> FindAsciiZ(string text)
+        {
+            var needle = Encoding.ASCII.GetBytes(text);
+            var hits = new List<uint>();
+            for (var i = 0; i + needle.Length < _bytes.Length; i++)
+            {
+                var ok = true;
+                for (var j = 0; j < needle.Length; j++)
+                {
+                    if (_bytes[i + j] != needle[j])
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+
+                if (!ok)
+                    continue;
+                if (i + needle.Length < _bytes.Length && _bytes[i + needle.Length] != 0)
+                    continue;
+                var va = FileToVa(i);
+                if (va != 0)
+                    hits.Add(va);
+            }
+
+            return hits;
         }
 
         public List<uint> FindImmediateXrefs(uint value)

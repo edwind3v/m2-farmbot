@@ -20,8 +20,8 @@ public sealed record PlayerActionLayout(
     IReadOnlyList<string> Evidence)
 {
     public bool HasSetTarget =>
-        PlayerSingletonRva is > 0x1000 and < 0x800000 &&
-        (SetTargetVtableSlot != 0 || SetTargetRva is > 0 and < 0x800000);
+        PlayerSingletonRva is > 0x1000 and < 0x8000000 &&
+        (SetTargetVtableSlot != 0 || SetTargetRva is > 0 and < 0x8000000);
 
     public bool HasPlayerHud => StatusPointsDisplacement != 0 || PlayerNameDisplacement != 0;
 
@@ -32,6 +32,27 @@ public sealed record PlayerActionLayout(
     public int PointMaxHp { get; init; } = 6;
     public int PointSp { get; init; } = 7;
     public int PointMaxSp { get; init; } = 8;
+    public uint NewAttackRva { get; init; }
+    public uint GetStatusRva { get; init; }
+    public uint GetStatusVtableSlot { get; init; }
+    public uint SendAttackPacketRva { get; init; }
+    public uint SendStatePacketRva { get; init; }
+    public uint SendPickupPacketRva { get; init; }
+    public uint ItemSingletonRva { get; init; }
+    public uint GetCloseItemRva { get; init; }
+    public uint SetAutoRva { get; init; }
+    public uint ReserveClickRva { get; init; }
+    public uint ReservedModeDisplacement { get; init; }
+    public uint VidReservedDisplacement { get; init; }
+    public uint MoveToDestRva { get; init; }
+    public uint MoveToPixelRva { get; init; }
+    public uint GetMainActorRva { get; init; }
+    public uint OnPressActorRva { get; init; }
+    public uint ChaseActorRva { get; init; }
+    public uint ApproachInstRva { get; init; }
+    public uint PlayerUpdateRva { get; init; }
+    public uint GetPixelRva { get; init; }
+    public uint InRangeRva { get; init; }
 }
 
 public sealed record LoginNativeLayout(
@@ -52,11 +73,43 @@ public sealed record LoginNativeLayout(
     IReadOnlyList<string> Evidence)
 {
     public bool CanLogin =>
-        NetStreamRva is > 0x1000 and < 0x800000 &&
-        AccountConnectorRva is > 0x1000 and < 0x800000 &&
-        SetLoginInfoRva is > 0 and < 0x800000 &&
-        AccountConnectRva is > 0 and < 0x800000 &&
-        DirectEnterRva is > 0 and < 0x800000;
+        NetStreamRva is > 0x1000 and < 0x8000000 &&
+        AccountConnectorRva is > 0x1000 and < 0x8000000 &&
+        SetLoginInfoRva is > 0 and < 0x8000000 &&
+        AccountConnectRva is > 0 and < 0x8000000 &&
+        DirectEnterRva is > 0 and < 0x8000000;
+
+    public string ToNativeConfig()
+    {
+        var text = new StringBuilder();
+        text.Append("layout=recovered\n");
+        Line(text, "net", NetStreamRva);
+        Line(text, "account", AccountConnectorRva);
+        Line(text, "setLogin", SetLoginInfoRva);
+        Line(text, "accountSetLogin", AccountSetLoginInfoRva);
+        Line(text, "connect", AccountConnectRva);
+        Line(text, "direct", DirectEnterRva);
+        Line(text, "select", SelectCharacterRva);
+        Line(text, "setLoginPhase", SetLoginPhaseRva);
+        Line(text, "setGamePhase", SetGamePhaseRva);
+        Line(text, "startGame", StartGameRva);
+        Line(text, "notifyGame", NotifyGamePhaseRva);
+        Line(text, "enterGame", SendEnterGamePacketRva);
+        Line(text, "logoClose", OnLogoCloseRva);
+        Line(text, "phaseDisp", PhaseDisplacement);
+        Line(text, "loginId", LoginIdDisplacement);
+        Line(text, "loginPwd", LoginPasswordDisplacement);
+        return text.ToString();
+    }
+
+    public uint LoginIdDisplacement { get; init; }
+    public uint LoginPasswordDisplacement { get; init; }
+
+    private static void Line(StringBuilder text, string key, uint value)
+    {
+        if (value != 0)
+            text.Append(key).Append('=').Append(value.ToString("X")).Append('\n');
+    }
 }
 
 public sealed record MiniMapLayout(
@@ -82,9 +135,20 @@ public static class PlayerActionLayoutRecoverer
         var pickClose = RecoverNamedNative(pe, "PickCloseItem", evidence);
         if (pickClose.native == 0)
             pickClose = RecoverNamedNative(pe, "PickCloseItemVector", evidence);
-        var singleton = PreferInImage(pe, getTarget.singleton, setTarget.singleton, attackKey.singleton);
+        var newAttack = RecoverNamedNative(pe, "NEW_Attack", evidence);
+        var sendAttack = RecoverLoginExport(pe, "SendAttackPacket", evidence);
+        if (sendAttack.native == 0)
+            sendAttack = RecoverLoginExport(pe, "SendBattleAttackPacket", evidence);
+        var sendState = RecoverLoginExport(pe, "SendCharacterStatePacket", evidence);
+        var sendPickup = RecoverLoginExport(pe, "SendItemPickUpPacket", evidence);
+        var singleton = PreferInImage(pe, getTarget.singleton, setTarget.singleton, attackKey.singleton, newAttack.singleton);
         if (singleton == 0)
-            singleton = FindSingletonFromGetMainCharacterPosition(pe, evidence);
+            evidence.Add("CPythonPlayer singleton was not recovered from SetTarget/GetTargetVID wrappers.");
+        var getStatus = RecoverNamedNativePrefer(pe, "GetStatus", singleton, evidence);
+        var statusVirt = RecoverVirtualDispatch(pe, getStatus.wrapper);
+        if (statusVirt.slot != 0)
+            evidence.Add($"player.GetStatus is virtual: ecx=CPythonPlayer*+0x{statusVirt.thisAdj:X}, call [vtable+0x{statusVirt.slot:X}].");
+        var getStatusRva = statusVirt.slot == 0 && getStatus.singleton == singleton ? getStatus.native : 0;
         var targetDisp = RecoverEcxLoad(pe, getTarget.native);
         if (targetDisp != 0)
             evidence.Add($"GetTargetVID reads [ecx+0x{targetDisp:X}] (m_dwTargetVID).");
@@ -95,9 +159,100 @@ public static class PlayerActionLayoutRecoverer
             evidence.Add("The following E8 in that wrapper is Py_BuildNone, not CPythonPlayer::SetTarget.");
         }
 
-        var setTargetRva = virt.slot == 0 ? setTarget.native : 0;
+        var setTargetSlot = virt.slot;
+        var afterLea = NativeCallAfterThisAdjust(pe, setTarget.wrapper);
+        var setTargetRva = virt.slot != 0 ? 0u : afterLea != 0 ? afterLea : virt.thisAdj != 0 ? 0u : setTarget.native;
+        if (afterLea != 0 && virt.slot == 0)
+            evidence.Add($"player.SetTarget is thiscall after lea ecx,[ecx+0x{virt.thisAdj:X}] native RVA 0x{afterLea:X}.");
         var prologue = virt.slot == 0 ? pe.Hex(pe.ImageBase + setTarget.native, 16) : "";
-        var hud = RecoverPlayerHud(pe, singleton, evidence);
+        var attackVirt = RecoverVirtualDispatch(pe, attackKey.wrapper);
+        var attackKeyRva = attackVirt.slot == 0 ? attackKey.native : 0;
+        if (sendAttack.native == 0)
+            sendAttack = (RecoverFunctionFromUniqueString(pe, "Send Battle Attack Packet Error", evidence), sendAttack.singleton, sendAttack.wrapper);
+        if (sendState.native == 0)
+            sendState = (RecoverFunctionFromUniqueString(pe, "CPythonNetworkStream::SendCharacterStatePacket", evidence), sendState.singleton, sendState.wrapper);
+        if (sendAttack.native == 0)
+        {
+            var send = RecoverNetworkSend(pe, sendPickup.native, evidence);
+            foreach (var size in new byte[] { 6, 7, 8 })
+            {
+                var rva = RecoverSiblingPacket(pe, send, sendPickup.native, size, 8, evidence, "SendAttackPacket");
+                if (rva == 0)
+                    continue;
+                sendAttack = (rva, sendAttack.singleton, sendAttack.wrapper);
+                break;
+            }
+        }
+        if (sendAttack.native == 0)
+            sendAttack = (RecoverPacketByHeader(pe, sendPickup.native, CombatNativeContract.AttackPacketHeader, evidence, "SendAttackPacket"), sendAttack.singleton, sendAttack.wrapper);
+        if (sendState.native == 0)
+            sendState = (RecoverPacketByHeader(pe, sendPickup.native, 7, evidence, "SendCharacterStatePacket"), sendState.singleton, sendState.wrapper);
+        var setAuto = TryNamed(pe, new[] { "SetToAutoAttack", "SetAutoAttack", "SetAutoAttackTargetVID" }, singleton, evidence);
+        var reserve = TryNamed(pe, new[] { "ReserveClickActor", "SetReservedDestPixelPosition", "SetClickActor" }, singleton, evidence);
+        var loot = RecoverItemFromPickClose(pe, pickClose.native, singleton, evidence);
+        var moveTo = TryNamed(pe, new[]
+        {
+            "NEW_MoveToDestPixelPositionDirection",
+            "NEW_MoveToDestPixelPosition",
+            "NEW_MoveToMousePickedPosition",
+            "SetMoveToDestPixelPosition",
+            "MoveToDestPixelPosition"
+        }, singleton, evidence);
+        if (moveTo.native == 0)
+            moveTo = TryNamed(pe, new[] { "MoveToDestPosition", "SetMoveToDestPosition", "SetMoveToDestPixelPosition" }, 0, evidence);
+        var methods = NeighborMethods(pe, combo.wrapper != 0 ? combo.wrapper : setTarget.wrapper, singleton);
+        if (methods.Count > 0)
+            evidence.Add("player methods: " + string.Join(", ", methods.ConvertAll(item => item.name)));
+        foreach (var method in methods)
+        {
+            if (moveTo.native == 0 && method.name.IndexOf("MoveToDest", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var native = NativeCallAfterSingleton(pe, method.wrapper, singleton == 0 ? 0 : pe.ImageBase + singleton);
+                if (native != 0 && !LooksLikePythonHelper(pe, pe.VaToFile(pe.ImageBase + native)))
+                {
+                    moveTo = (native, singleton, method.wrapper);
+                    evidence.Add($"player.{method.name} native RVA 0x{native:X} used as MoveToDest.");
+                }
+            }
+
+            if (newAttack.native == 0 && method.name is "NEW_Attack" or "Attack" or "StartAttack")
+            {
+                var native = NativeCallAfterSingleton(pe, method.wrapper, singleton == 0 ? 0 : pe.ImageBase + singleton);
+                if (native != 0)
+                {
+                    newAttack = (native, singleton, method.wrapper);
+                    evidence.Add($"player.{method.name} native RVA 0x{native:X} used as NEW_Attack.");
+                }
+            }
+        }
+
+        if (moveTo.native != 0 && LooksLikePythonHelper(pe, pe.VaToFile(pe.ImageBase + moveTo.native)))
+        {
+            evidence.Add($"rejected MoveToDest RVA 0x{moveTo.native:X} (python helper, not CInstanceBase/CPythonPlayer).");
+            moveTo = (0, 0, 0);
+        }
+
+        if (moveTo.native != 0 && loot.item != 0 && moveTo.singleton == loot.item)
+        {
+            evidence.Add($"rejected MoveToDest RVA 0x{moveTo.native:X} (item singleton 0x{loot.item:X}, not player).");
+            moveTo = (0, 0, 0);
+        }
+
+        var getMain = RecoverGetMainActor(pe, setTargetRva, evidence);
+        var fromMove = RecoverMoveToActor(pe, setTargetRva, evidence);
+        if (fromMove != 0)
+            moveTo = (fromMove, 0, 0);
+        var movePixel = fromMove != 0 ? RecoverMoveToPixel(pe, fromMove, evidence) : 0;
+        var getPixel = fromMove != 0 ? RecoverGetPixel(pe, fromMove, evidence) : 0;
+        var reserved = RecoverReserveClick(pe, combo.native, evidence);
+        if (reserved.rva != 0)
+            reserve = (reserved.rva, singleton, 0);
+        var pressActor = RecoverOnPressActor(pe, setTargetRva, setTarget.wrapper, reserved.rva != 0 ? reserved.rva : reserve.native, evidence);
+        var chase = RecoverChaseActor(pe, getMain, reserved.vidDisp, reserved.rva, evidence);
+        var approachInst = RecoverApproachInst(pe, chase, fromMove, evidence);
+        var inRange = RecoverInRangeCheck(pe, chase, approachInst, combo.native, evidence);
+        var playerUpdate = RecoverPlayerUpdate(pe, getMain, reserved.modeDisp != 0 ? reserved.modeDisp : 0x58u, evidence);
+        var hud = RecoverPlayerHud(pe, singleton, getStatusRva != 0 ? getStatusRva : getStatus.native, evidence);
         var points = RecoverPointIds(pe, evidence);
 
         evidence.Add("MSVC x86 thiscall: ecx=CPythonPlayer*, args right-to-left, callee pops.");
@@ -118,7 +273,7 @@ public static class PlayerActionLayoutRecoverer
         var mini = RecoverMiniMap(pe, evidence);
         evidence.Add($"MiniMap singleton=0x{mini.singleton:X} load=0x{mini.load:X} update=0x{mini.update:X} render=0x{mini.render:X}.");
 
-        return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKey.native, combo.native, pickClose.native, targetDisp, virt.thisAdj, virt.slot, prologue, hud.points, hud.name, hud.xor, evidence)
+        return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKeyRva, combo.native, pickClose.native, targetDisp, virt.thisAdj != 0 ? virt.thisAdj : attackVirt.thisAdj, setTargetSlot, prologue, hud.points, hud.name != 0 ? hud.name : 0x14, hud.xor, evidence)
         {
             PointLevel = points.level,
             PointExp = points.exp,
@@ -126,7 +281,28 @@ public static class PlayerActionLayoutRecoverer
             PointHp = points.hp,
             PointMaxHp = points.maxHp,
             PointSp = points.sp,
-            PointMaxSp = points.maxSp
+            PointMaxSp = points.maxSp,
+            NewAttackRva = newAttack.native,
+            GetStatusRva = getStatusRva,
+            GetStatusVtableSlot = statusVirt.slot,
+            SendAttackPacketRva = sendAttack.native,
+            SendStatePacketRva = sendState.native,
+            SendPickupPacketRva = sendPickup.native,
+            ItemSingletonRva = loot.item,
+            GetCloseItemRva = loot.getClose,
+            SetAutoRva = setAuto.native,
+            ReserveClickRva = reserve.native,
+            ReservedModeDisplacement = reserved.modeDisp,
+            VidReservedDisplacement = reserved.vidDisp,
+            MoveToDestRva = moveTo.native,
+            MoveToPixelRva = movePixel,
+            GetMainActorRva = getMain,
+            OnPressActorRva = pressActor,
+            ChaseActorRva = chase,
+            ApproachInstRva = approachInst,
+            PlayerUpdateRva = playerUpdate,
+            GetPixelRva = getPixel,
+            InRangeRva = inRange
         };
     }
 
@@ -140,8 +316,14 @@ public static class PlayerActionLayoutRecoverer
         var select = RecoverLoginExport(pe, "SendSelectCharacterPacket", evidence);
         var logoClose = RecoverLoginExport(pe, "OnLogoClose", evidence);
         var setPhase = RecoverFunctionFromUniqueString(pe, "## Network - Login Phase ##", evidence);
+        if (setPhase == 0)
+            setPhase = RecoverLoginExport(pe, "SetLoginPhase", evidence).native;
         var setGamePhase = RecoverFunctionFromUniqueString(pe, "## Network - Game Phase ##", evidence);
+        if (setGamePhase == 0)
+            setGamePhase = RecoverLoginExport(pe, "SetGamePhase", evidence).native;
         var setLoadingPhase = RecoverFunctionFromUniqueString(pe, "## Network - Loading Phase ##", evidence);
+        if (setLoadingPhase == 0)
+            setLoadingPhase = RecoverLoginExport(pe, "SetLoadingPhase", evidence).native;
         var startGame = RecoverLoginExport(pe, "StartGame", evidence);
         var enterGamePkt = RecoverLoginExport(pe, "SendEnterGamePacket", evidence);
         var setHandler = RecoverLoginExport(pe, "SetHandler", evidence);
@@ -151,17 +333,9 @@ public static class PlayerActionLayoutRecoverer
         var netRva = PreferInImage(pe, setLogin.singleton, direct.singleton, select.singleton);
         var accountRva = PreferInImage(pe, connectAuth.singleton, accountSetLogin == 0 ? 0 : SecondImageLoad(pe, setLogin.wrapper, setLogin.singleton));
 
-        var startGameNative = startGame.wrapper == 0
-            ? startGame.native
-            : RelativeCall(pe, pe.VaToFile(pe.ImageBase + startGame.wrapper), pe.VaToFile(pe.ImageBase + startGame.wrapper) + 0x40);
-        if (startGameNative == 0)
-            startGameNative = startGame.native;
+        var startGameNative = PreferLoginNative(pe, startGame.native, startGame.wrapper, connectAuth.native);
         var notifyGame = RecoverNotifyGamePhase(pe, evidence);
-        var enterGameNative = enterGamePkt.wrapper == 0
-            ? enterGamePkt.native
-            : RelativeCall(pe, pe.VaToFile(pe.ImageBase + enterGamePkt.wrapper), pe.VaToFile(pe.ImageBase + enterGamePkt.wrapper) + 0x40);
-        if (enterGameNative == 0)
-            enterGameNative = enterGamePkt.native;
+        var enterGameNative = PreferLoginNative(pe, enterGamePkt.native, enterGamePkt.wrapper, connectAuth.native);
         evidence.Add($"SetGamePhase RVA 0x{setGamePhase:X} SetLoadingPhase RVA 0x{setLoadingPhase:X} StartGame native 0x{startGameNative:X} NotifyGamePhase 0x{notifyGame:X} SendEnterGamePacket 0x{enterGameNative:X}.");
         if (startGameNative != 0)
             evidence.Add($"StartGame bytes={pe.Hex(pe.ImageBase + startGameNative, 16)}.");
@@ -174,6 +348,7 @@ public static class PlayerActionLayoutRecoverer
         evidence.Add("net.DirectEnter is CPythonNetworkStream::ConnectGameServer(slot) and sets DirectEnter mode.");
         evidence.Add("Login/Handshake skip Python UI when DirectEnter mode is set.");
         evidence.Add("LoadingWindow.__StartGame sets CPythonNetworkStream+0x8C; 0x11C0C0 then PyCalls MainStream.SetGamePhase to open GameWindow.");
+        var loginStr = RecoverLoginStringDisps(pe, setLogin.native, evidence);
 
         return new LoginNativeLayout(
             netRva,
@@ -190,7 +365,11 @@ public static class PlayerActionLayoutRecoverer
             startGameNative,
             notifyGame,
             enterGameNative,
-            evidence);
+            evidence)
+        {
+            LoginIdDisplacement = loginStr.id,
+            LoginPasswordDisplacement = loginStr.pwd
+        };
     }
 
     public static MiniMapLayout RecoverMiniMap(string path)
@@ -375,6 +554,770 @@ public static class PlayerActionLayoutRecoverer
         return 0;
     }
 
+    private static (uint native, uint singleton, uint wrapper) TryNamed(
+        ActionPe pe, IEnumerable<string> names, uint preferSingleton, List<string> evidence)
+    {
+        foreach (var name in names)
+        {
+            var probe = new List<string>();
+            var found = preferSingleton != 0
+                ? RecoverNamedNativePrefer(pe, name, preferSingleton, probe)
+                : RecoverNamedNative(pe, name, probe);
+            if (found.native == 0 && found.wrapper == 0)
+                continue;
+            evidence.AddRange(probe);
+            return found;
+        }
+
+        evidence.Add("none of " + string.Join("/", names) + " recovered.");
+        return (0, 0, 0);
+    }
+
+    private static uint LastSubstantialCall(ActionPe pe, uint rva)
+    {
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        if (off < 0)
+            return 0;
+        uint last = 0;
+        for (var i = off; i < off + 0xA0 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            var destOff = pe.VaToFile(target);
+            if (destOff < 0 || !pe.IsCode(target) || LooksLikePythonStub(pe, destOff))
+                continue;
+            last = target;
+        }
+
+        return last;
+    }
+
+    private static bool FunctionWritesHeader(ActionPe pe, int fnOff, byte header)
+    {
+        for (var i = fnOff; i < fnOff + 0x70 && i + 3 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0xC6 && pe.Byte(i + 1) == 0x45 && pe.Byte(i + 3) == header)
+                return true;
+            if (pe.Byte(i) == 0xC7 && pe.Byte(i + 1) == 0x45 && pe.Byte(i + 3) == header)
+                return true;
+            if (pe.Byte(i) == 0xC6 && pe.Byte(i + 1) is 0x00 or 0x01 or 0x02 or 0x03 or 0x06 or 0x07 &&
+                pe.Byte(i + 2) == header)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static uint RecoverPacketByHeader(ActionPe pe, uint siblingNative, byte header, List<string> evidence, string name)
+    {
+        if (siblingNative == 0)
+            return 0;
+        var sendVa = LastSubstantialCall(pe, siblingNative);
+        if (sendVa == 0)
+        {
+            evidence.Add($"{name}: no Send() callee on sibling 0x{siblingNative:X}.");
+            return 0;
+        }
+
+        foreach (var call in FindRelativeTransfersTo(pe, sendVa))
+        {
+            var callOff = pe.VaToFile(call);
+            if (callOff < 0)
+                continue;
+            var fnOff = FunctionStart(pe, callOff);
+            var fnRva = pe.FileToVa(fnOff) - pe.ImageBase;
+            if (fnRva == siblingNative || !pe.IsRva(fnRva))
+                continue;
+            if (!FunctionWritesHeader(pe, fnOff, header))
+                continue;
+            evidence.Add($"{name} RVA 0x{fnRva:X} shares Send() with 0x{siblingNative:X}, header {header}.");
+            return fnRva;
+        }
+
+        evidence.Add($"{name}: no sibling Send() caller writes header {header}.");
+        return 0;
+    }
+
+    private static uint RecoverNetworkSend(ActionPe pe, uint packetNative, List<string> evidence)
+    {
+        if (packetNative == 0)
+            return 0;
+        var off = pe.VaToFile(pe.ImageBase + packetNative);
+        if (off < 0)
+            return 0;
+        for (var i = off; i < off + 0x80 && i + 8 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0x6A)
+                continue;
+            var size = pe.Byte(i + 1);
+            if (size is < 4 or > 40)
+                continue;
+            for (var j = i + 2; j < i + 18 && j + 5 < pe.Length; j++)
+            {
+                if (pe.Byte(j) != 0xE8)
+                    continue;
+                var target = (uint)(pe.FileToVa(j + 5) + pe.ReadI32(j + 1));
+                var destOff = pe.VaToFile(target);
+                if (destOff < 0 || !pe.IsCode(target) || LooksLikePythonStub(pe, destOff) || LooksLikePythonHelper(pe, destOff))
+                    continue;
+                evidence.Add($"network Send() RVA 0x{target - pe.ImageBase:X} size {size} from packet 0x{packetNative:X}.");
+                return target - pe.ImageBase;
+            }
+        }
+
+        evidence.Add($"no Send() after size-push in packet 0x{packetNative:X}.");
+        return 0;
+    }
+
+    private static uint RecoverSiblingPacket(
+        ActionPe pe, uint sendRva, uint siblingNative, byte wantSize, ushort retBytes, List<string> evidence, string name)
+    {
+        if (sendRva == 0)
+            return 0;
+        uint found = 0;
+        var bestScore = -1;
+        foreach (var call in pe.FindRelativeCallsTo(pe.ImageBase + sendRva))
+        {
+            var callOff = pe.VaToFile(call);
+            if (callOff < 0)
+                continue;
+            var fnOff = FunctionStart(pe, callOff);
+            var fnRva = pe.FileToVa(fnOff) - pe.ImageBase;
+            if (fnRva == siblingNative || !pe.IsRva(fnRva))
+                continue;
+            var dist = fnRva > siblingNative ? fnRva - siblingNative : siblingNative - fnRva;
+            if (dist > 0x20000)
+                continue;
+            if (LastImm8PushBefore(pe, fnOff, callOff) != wantSize)
+                continue;
+            if (!FunctionHasRet(pe, fnOff, retBytes))
+                continue;
+            var score = 1;
+            if (LooksLikeBattleAttack(pe, fnOff))
+                score += 4;
+            if (found == 0 || score > bestScore || (score == bestScore && fnRva < found))
+            {
+                found = fnRva;
+                bestScore = score;
+            }
+        }
+
+        if (found != 0)
+            evidence.Add($"{name} RVA 0x{found:X} shares Send() with 0x{siblingNative:X}, size {wantSize}.");
+        else
+            evidence.Add($"{name}: no Send() caller size {wantSize} ret {retBytes}.");
+        return found;
+    }
+
+    private static uint RecoverOnPressActor(ActionPe pe, uint setTargetRva, uint wrapperRva, uint reserveRva, List<string> evidence)
+    {
+        var found = RecoverOnPressActorFromCalls(pe, setTargetRva, wrapperRva, setTargetRva, evidence, "SetTarget");
+        if (found != 0)
+            return found;
+        if (reserveRva != 0)
+            found = RecoverOnPressActorFromCalls(pe, reserveRva, wrapperRva, setTargetRva, evidence, "ReserveClick");
+        return found;
+    }
+
+    private static uint RecoverOnPressActorFromCalls(ActionPe pe, uint targetRva, uint wrapperRva, uint setTargetRva, List<string> evidence, string via)
+    {
+        if (targetRva == 0)
+            return 0;
+        foreach (var call in FindRelativeTransfersTo(pe, pe.ImageBase + targetRva))
+        {
+            var callOff = pe.VaToFile(call);
+            if (callOff < 0)
+                continue;
+            var prologue = NearestPrologue(pe, callOff, 0x400);
+            if (prologue < 0)
+                continue;
+            var fnRva = pe.FileToVa(prologue) - pe.ImageBase;
+            if (fnRva == wrapperRva || fnRva == setTargetRva || fnRva == targetRva || !pe.IsRva(fnRva))
+                continue;
+            var end = NextFunction(pe, prologue + 4);
+            if (!HasRet12(pe, callOff, end))
+                continue;
+            evidence.Add($"__OnPressActor RVA 0x{fnRva:X} calls {via}, ret 12.");
+            return fnRva;
+        }
+
+        return 0;
+    }
+
+    private static (uint rva, uint modeDisp, uint vidDisp) RecoverReserveClick(ActionPe pe, uint comboRva, List<string> evidence)
+    {
+        if (comboRva == 0)
+            return default;
+        var off = pe.VaToFile(pe.ImageBase + comboRva);
+        if (off < 0)
+            return default;
+        for (var i = off; i < off + 0x280 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var destOff = pe.VaToFile((uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1)));
+            if (destOff < 0)
+                continue;
+            if (pe.Byte(destOff) != 0x55 || pe.Byte(destOff + 1) != 0x8B || pe.Byte(destOff + 2) != 0xEC)
+                continue;
+            if (pe.Byte(destOff + 3) != 0x8B || pe.Byte(destOff + 4) != 0x45 || pe.Byte(destOff + 5) != 0x08)
+                continue;
+            if (pe.Byte(destOff + 6) != 0xC7 || pe.Byte(destOff + 7) != 0x41)
+                continue;
+            if (pe.Byte(destOff + 9) != 0x03 || pe.Byte(destOff + 10) != 0 || pe.Byte(destOff + 11) != 0 || pe.Byte(destOff + 12) != 0)
+                continue;
+            if (pe.Byte(destOff + 13) != 0x89 || pe.Byte(destOff + 14) != 0x81)
+                continue;
+            if (!FunctionHasRet(pe, destOff, 4))
+                continue;
+            var rva = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1) - pe.ImageBase);
+            var modeDisp = pe.Byte(destOff + 8);
+            var vidDisp = pe.ReadU32(destOff + 15);
+            evidence.Add($"ReserveClickActor RVA 0x{rva:X} mode=+0x{modeDisp:X} vid=+0x{vidDisp:X} from Combo/NEW_Attack (TeraBox 0xD1B90 equivalent).");
+            return (rva, modeDisp, vidDisp);
+        }
+
+        return default;
+    }
+
+    private static uint RecoverGetMainActor(ActionPe pe, uint setTargetRva, List<string> evidence)
+    {
+        if (setTargetRva == 0)
+            return 0;
+        foreach (var call in FindRelativeTransfersTo(pe, pe.ImageBase + setTargetRva))
+        {
+            var callOff = pe.VaToFile(call);
+            if (callOff < 0)
+                continue;
+            var prologue = NearestPrologue(pe, callOff, 0x400);
+            if (prologue < 0)
+                continue;
+            for (var i = prologue; i < callOff && i + 5 < pe.Length; i++)
+            {
+                if (pe.Byte(i) != 0xE8)
+                    continue;
+                var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+                var destOff = pe.VaToFile(target);
+                if (destOff < 0)
+                    continue;
+                if (pe.Byte(destOff) == 0xFF && pe.Byte(destOff + 1) == 0x71 && pe.Byte(destOff + 2) == 0x28 &&
+                    pe.Byte(destOff + 3) == 0x83 && pe.Byte(destOff + 4) == 0xC1 && pe.Byte(destOff + 5) == 0xFC)
+                {
+                    var rva = target - pe.ImageBase;
+                    evidence.Add($"IAbstractPlayer::GetMainActor thunk RVA 0x{rva:X} (push [ecx+0x28], this-4, map lookup).");
+                    return rva;
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverGetPixel(ActionPe pe, uint moveActorRva, List<string> evidence)
+    {
+        var off = pe.VaToFile(pe.ImageBase + moveActorRva);
+        if (off < 0)
+            return 0;
+        for (var i = off; i < off + 0x40 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            var destOff = pe.VaToFile(target);
+            if (destOff < 0)
+                continue;
+            if (pe.Byte(destOff) == 0x55 && pe.Byte(destOff + 1) == 0x8B && pe.Byte(destOff + 2) == 0xEC &&
+                pe.Byte(destOff + 3) == 0x81 && pe.Byte(destOff + 4) == 0xC1)
+            {
+                var rva = target - pe.ImageBase;
+                evidence.Add($"CInstanceBase::GetPixelPosition RVA 0x{rva:X} from MoveToDestActor.");
+                return rva;
+            }
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverMoveToPixel(ActionPe pe, uint moveActorRva, List<string> evidence)
+    {
+        var off = pe.VaToFile(pe.ImageBase + moveActorRva);
+        if (off < 0)
+            return 0;
+        var seen = 0;
+        for (var i = off; i < off + 0x40 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            var rva = target - pe.ImageBase;
+            var destOff = pe.VaToFile(target);
+            if (destOff < 0)
+                continue;
+            seen++;
+            if (seen < 2)
+                continue;
+            if (pe.Byte(destOff) == 0x55 && pe.Byte(destOff + 1) == 0x8B && pe.Byte(destOff + 2) == 0xEC &&
+                FunctionHasRet(pe, destOff, 4))
+            {
+                evidence.Add($"CInstanceBase::MoveToDestPixelPosition RVA 0x{rva:X} from MoveToDestActor.");
+                return rva;
+            }
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverMoveToActor(ActionPe pe, uint setTargetRva, List<string> evidence)
+    {
+        if (setTargetRva == 0)
+            return 0;
+        foreach (var call in FindRelativeTransfersTo(pe, pe.ImageBase + setTargetRva))
+        {
+            var callOff = pe.VaToFile(call);
+            if (callOff < 0)
+                continue;
+            for (var i = callOff + 5; i < callOff + 0x20 && i + 5 < pe.Length; i++)
+            {
+                if (pe.Byte(i) != 0xE8)
+                    continue;
+                var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+                var rva = target - pe.ImageBase;
+                if (rva == setTargetRva || !pe.IsRva(rva))
+                    continue;
+                var destOff = pe.VaToFile(target);
+                if (destOff < 0 || LooksLikePythonHelper(pe, destOff))
+                    continue;
+                if (pe.Byte(destOff) != 0x55 || pe.Byte(destOff + 1) != 0x8B || pe.Byte(destOff + 2) != 0xEC)
+                    continue;
+                if (!FunctionHasRet(pe, destOff, 4) || !CallsGetPixelPosition(pe, destOff))
+                    continue;
+                evidence.Add($"CInstanceBase::MoveToDestActor RVA 0x{rva:X} after SetTarget (this=main, arg=target instance).");
+                return rva;
+            }
+        }
+
+        return 0;
+    }
+
+    private static bool CallsGetPixelPosition(ActionPe pe, int fnOff)
+    {
+        for (var i = fnOff; i < fnOff + 0x40 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var destOff = pe.VaToFile((uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1)));
+            if (destOff < 0)
+                continue;
+            if (pe.Byte(destOff) == 0x55 && pe.Byte(destOff + 1) == 0x8B && pe.Byte(destOff + 2) == 0xEC &&
+                pe.Byte(destOff + 3) == 0x81 && pe.Byte(destOff + 4) == 0xC1)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasPushDisplacement(ActionPe pe, int from, int to, uint disp)
+    {
+        var end = Math.Min(pe.Length - 6, to);
+        for (var i = Math.Max(0, from); i < end; i++)
+        {
+            if (pe.Byte(i) != 0xFF)
+                continue;
+            var mod = pe.Byte(i + 1);
+            if (mod is 0xB0 or 0xB1 or 0xB2 or 0xB3 or 0xB6 or 0xB7 && pe.ReadU32(i + 2) == disp)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool CallsRva(ActionPe pe, int from, int to, uint rva)
+    {
+        if (rva == 0)
+            return false;
+        var end = Math.Min(pe.Length - 5, to);
+        for (var i = Math.Max(0, from); i < end; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            if ((uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1) - pe.ImageBase) == rva)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static uint RecoverChaseActor(ActionPe pe, uint getMainRva, uint vidDisp, uint reserveRva, List<string> evidence)
+    {
+        if (vidDisp == 0 || getMainRva == 0)
+            return 0;
+        foreach (var call in FindRelativeTransfersTo(pe, pe.ImageBase + getMainRva))
+        {
+            var callOff = pe.VaToFile(call);
+            if (callOff < 0)
+                continue;
+            var prologue = NearestPrologue(pe, callOff, 0x20);
+            if (prologue < 0)
+                continue;
+            if (!HasPushDisplacement(pe, prologue, prologue + 0x20, vidDisp))
+                continue;
+            var rva = pe.FileToVa(prologue) - pe.ImageBase;
+            if (!pe.IsRva(rva))
+                continue;
+            evidence.Add($"CPythonPlayer reserved-VID chase RVA 0x{rva:X} (GetMainActor, then MoveToDest when out of range).");
+            return rva;
+        }
+
+        if (reserveRva == 0)
+            return 0;
+        var off = pe.VaToFile(pe.ImageBase + reserveRva);
+        if (off < 0)
+            return 0;
+        var end = Math.Min(pe.Length - 6, off + 0x200);
+        for (var i = off + 0x10; i < end; i++)
+        {
+            if (pe.Byte(i) != 0x55 || pe.Byte(i + 1) != 0x8B || pe.Byte(i + 2) != 0xEC)
+                continue;
+            if (!CallsRva(pe, i, i + 0x20, getMainRva))
+                continue;
+            if (!HasPushDisplacement(pe, i, i + 0x20, vidDisp))
+                continue;
+            var rva = pe.FileToVa(i) - pe.ImageBase;
+            if (!pe.IsRva(rva))
+                continue;
+            evidence.Add($"CPythonPlayer reserved-VID chase RVA 0x{rva:X} after ReserveClickActor.");
+            return rva;
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverApproachInst(ActionPe pe, uint chaseRva, uint moveToRva, List<string> evidence)
+    {
+        if (chaseRva == 0)
+            return 0;
+        var off = pe.VaToFile(pe.ImageBase + chaseRva);
+        if (off < 0)
+            return 0;
+        for (var i = off; i < off + 0x80 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            var rva = target - pe.ImageBase;
+            if (rva == chaseRva || rva == moveToRva || !pe.IsRva(rva))
+                continue;
+            var destOff = pe.VaToFile(target);
+            if (destOff < 0)
+                continue;
+            if (pe.Byte(destOff) != 0x55 || pe.Byte(destOff + 1) != 0x8B || pe.Byte(destOff + 2) != 0xEC)
+                continue;
+            if (pe.Byte(destOff + 3) != 0x83 || pe.Byte(destOff + 4) != 0xEC)
+                continue;
+            if (!FunctionHasRet(pe, destOff, 4))
+                continue;
+            evidence.Add($"CInstanceBase out-of-range approach RVA 0x{rva:X} from reserved-VID chase.");
+            return rva;
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverInRangeCheck(ActionPe pe, uint chaseRva, uint approachInstRva, uint comboRva, List<string> evidence)
+    {
+        uint found = 0;
+        if (chaseRva != 0 && approachInstRva != 0)
+        {
+            var off = pe.VaToFile(pe.ImageBase + chaseRva);
+            if (off < 0)
+                off = pe.Length;
+            uint prev = 0;
+            for (var i = off; i < off + 0x80 && i + 5 < pe.Length; i++)
+            {
+                if (pe.Byte(i) != 0xE8)
+                    continue;
+                var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+                var rva = target - pe.ImageBase;
+                if (rva == approachInstRva && prev != 0)
+                {
+                    found = prev;
+                    break;
+                }
+
+                var destOff = pe.VaToFile(target);
+                if (destOff < 0)
+                    continue;
+                if (pe.Byte(destOff) == 0x55 && pe.Byte(destOff + 1) == 0x8B && pe.Byte(destOff + 2) == 0xEC &&
+                    pe.Byte(destOff + 3) == 0x51 && pe.Byte(destOff + 4) == 0xF3 && pe.Byte(destOff + 5) == 0x0F &&
+                    pe.Byte(destOff + 6) == 0x10)
+                    prev = rva;
+            }
+        }
+
+        if (found == 0 && comboRva != 0)
+        {
+            var off = pe.VaToFile(pe.ImageBase + comboRva);
+            if (off < 0)
+                off = pe.Length;
+            for (var i = off; i < off + 0x180 && i + 5 < pe.Length; i++)
+            {
+                if (pe.Byte(i) != 0xE8)
+                    continue;
+                var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+                var destOff = pe.VaToFile(target);
+                if (destOff < 0)
+                    continue;
+                if (pe.Byte(destOff) == 0x55 && pe.Byte(destOff + 1) == 0x8B && pe.Byte(destOff + 2) == 0xEC &&
+                    pe.Byte(destOff + 3) == 0x51 && pe.Byte(destOff + 4) == 0xF3 && pe.Byte(destOff + 5) == 0x0F &&
+                    pe.Byte(destOff + 6) == 0x10)
+                {
+                    found = target - pe.ImageBase;
+                    break;
+                }
+            }
+        }
+
+        if (found != 0 && pe.IsRva(found))
+            evidence.Add($"CInstanceBase melee-range check RVA 0x{found:X} (150px default; walk if false, attack if true).");
+        return pe.IsRva(found) ? found : 0;
+    }
+
+    private static uint RecoverPlayerUpdate(ActionPe pe, uint getMainRva, uint modeDisp, List<string> evidence)
+    {
+        if (getMainRva == 0 || modeDisp == 0 || modeDisp > 0xFF)
+            return 0;
+        var center = pe.VaToFile(pe.ImageBase + getMainRva);
+        if (center < 0)
+            return 0;
+        var start = Math.Max(0, center - 0x1000);
+        var end = Math.Min(pe.Length - 7, center + 0x20000);
+        for (var i = start; i < end; i++)
+        {
+            if (pe.Byte(i) != 0x8B || pe.Byte(i + 2) != (byte)modeDisp)
+                continue;
+            if (pe.Byte(i + 1) is not (0x4B or 0x4E or 0x4F or 0x48 or 0x49))
+                continue;
+            if (pe.Byte(i + 3) != 0x49 || pe.Byte(i + 4) != 0x83 || pe.Byte(i + 5) != 0xF9 || pe.Byte(i + 6) != 0x04)
+                continue;
+            var prologue = NearestPrologue(pe, i, 0x80);
+            if (prologue < 0 || !CallsRva(pe, prologue, i + 1, getMainRva))
+                continue;
+            var rva = pe.FileToVa(prologue) - pe.ImageBase;
+            if (!pe.IsRva(rva))
+                continue;
+            evidence.Add($"CPythonPlayer::Update RVA 0x{rva:X} switches on reserved mode +0x{modeDisp:X}.");
+            return rva;
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverReserveFromPress(
+        ActionPe pe, uint pressRva, uint setTargetRva, uint comboRva, List<string> evidence)
+    {
+        var off = pe.VaToFile(pe.ImageBase + pressRva);
+        if (off < 0)
+            return 0;
+        var afterSet = -1;
+        for (var i = off; i < off + 0x280 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            if ((uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1)) - pe.ImageBase == setTargetRva)
+                afterSet = i + 5;
+        }
+
+        if (afterSet < 0)
+            return 0;
+        for (var i = afterSet; i < off + 0x280 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            var rva = target - pe.ImageBase;
+            if (rva == setTargetRva || rva == comboRva || rva == pressRva || !pe.IsRva(rva))
+                continue;
+            var dist = rva > pressRva ? rva - pressRva : pressRva - rva;
+            if (dist > 0x8000)
+                continue;
+            var destOff = pe.VaToFile(target);
+            if (destOff < 0 || LooksLikePythonHelper(pe, destOff))
+                continue;
+            if (pe.Byte(destOff) != 0x55 || pe.Byte(destOff + 1) != 0x8B || pe.Byte(destOff + 2) != 0xEC)
+                continue;
+            if (!FunctionHasRet(pe, destOff, 4))
+                continue;
+            evidence.Add($"ReserveClickActor RVA 0x{rva:X} from __OnPressActor after SetTarget.");
+            return rva;
+        }
+
+        return 0;
+    }
+
+    private static int NextFunction(ActionPe pe, int from)
+    {
+        var end = Math.Min(pe.Length - 3, from + 0x800);
+        for (var i = from; i < end; i++)
+        {
+            if (pe.Byte(i) == 0xCC && pe.Byte(i + 1) == 0x55 && pe.Byte(i + 2) == 0x8B && pe.Byte(i + 3) == 0xEC)
+                return i + 1;
+        }
+
+        return end;
+    }
+
+    private static int NearestPrologue(ActionPe pe, int callOff, int maxBack)
+    {
+        var start = Math.Max(0, callOff - maxBack);
+        for (var i = callOff; i >= start; i--)
+        {
+            if (pe.Byte(i) == 0x55 && pe.Byte(i + 1) == 0x8B && pe.Byte(i + 2) == 0xEC)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool HasRet12(ActionPe pe, int from, int to)
+    {
+        var end = Math.Min(pe.Length - 2, to);
+        for (var i = Math.Max(0, from); i < end; i++)
+        {
+            if (pe.Byte(i) == 0xC2 && pe.Byte(i + 1) == 0x0C && pe.Byte(i + 2) == 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static byte LastImm8PushBefore(ActionPe pe, int from, int to)
+    {
+        byte size = 0;
+        for (var i = from; i + 1 < to; i++)
+        {
+            if (pe.Byte(i) == 0x6A)
+                size = pe.Byte(i + 1);
+        }
+
+        return size;
+    }
+
+    private static bool LooksLikeBattleAttack(ActionPe pe, int fnOff)
+    {
+        var sawByte = false;
+        var sawDword = false;
+        for (var i = fnOff; i < fnOff + 0x24 && i + 3 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0x8A && pe.Byte(i + 1) == 0x45 && pe.Byte(i + 2) == 0x08)
+                sawByte = true;
+            if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x45 && pe.Byte(i + 2) == 0x0C)
+                sawDword = true;
+        }
+
+        return sawByte && sawDword;
+    }
+
+    private static List<(string name, uint wrapper)> NeighborMethods(ActionPe pe, uint knownWrapper, uint playerSingletonRva)
+    {
+        var result = new List<(string name, uint wrapper)>();
+        if (knownWrapper == 0)
+            return result;
+        var preferVa = playerSingletonRva == 0 ? 0 : pe.ImageBase + playerSingletonRva;
+        foreach (var site in pe.FindImmediateXrefs(pe.ImageBase + knownWrapper))
+        {
+            var methOff = pe.VaToFile(site);
+            if (methOff < 4)
+                continue;
+            var flags = pe.ReadU32(methOff + 4);
+            if ((flags & 0xFF) is not (1 or 2 or 4 or 8 or 9))
+                continue;
+            var table = methOff - 4;
+            for (var i = -80; i <= 80; i++)
+            {
+                var at = table + i * 16;
+                if (at < 0 || at + 12 >= pe.Length)
+                    continue;
+                var namePtr = pe.ReadU32(at);
+                var fn = pe.ReadU32(at + 4);
+                var fl = pe.ReadU32(at + 8);
+                if ((fl & 0xFF) is not (1 or 2 or 4 or 8 or 9) || !pe.IsCode(fn) || !pe.IsVa(namePtr))
+                    continue;
+                var name = pe.CString(namePtr, 80);
+                if (name.Length is < 2 or > 64)
+                    continue;
+                if (preferVa != 0)
+                {
+                    var loaded = FirstGlobalLoad(pe, fn - pe.ImageBase);
+                    if (loaded != 0 && loaded != preferVa)
+                        continue;
+                }
+
+                if (result.Exists(item => item.wrapper == fn - pe.ImageBase))
+                    continue;
+                result.Add((name, fn - pe.ImageBase));
+            }
+
+            if (result.Count > 3)
+                break;
+        }
+
+        return result;
+    }
+
+    private static uint FirstCallRva(ActionPe pe, uint fnRva)
+    {
+        var off = pe.VaToFile(pe.ImageBase + fnRva);
+        if (off < 0)
+            return 0;
+        for (var i = off; i < off + 0x40 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            if (pe.IsCode(target))
+                return target - pe.ImageBase;
+        }
+
+        return 0;
+    }
+
+    private static bool FunctionHasRet(ActionPe pe, int fnOff, ushort bytes)
+    {
+        for (var i = fnOff; i < fnOff + 0xC0 && i + 3 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0xC2 && pe.Byte(i + 1) == (byte)bytes && pe.Byte(i + 2) == (byte)(bytes >> 8))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool FunctionPushesImm8(ActionPe pe, int fnOff, byte imm)
+    {
+        for (var i = fnOff; i < fnOff + 0x80 && i + 1 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0x6A && pe.Byte(i + 1) == imm)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool FunctionCalls(ActionPe pe, int fnOff, uint targetVa)
+    {
+        for (var i = fnOff; i < fnOff + 0xA0 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var dest = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            if (dest == targetVa)
+                return true;
+        }
+
+        return false;
+    }
+
     private static (uint native, uint singleton, uint wrapper) RecoverNamedNative(ActionPe pe, string name, List<string> evidence)
     {
         var foundString = false;
@@ -407,17 +1350,62 @@ public static class PlayerActionLayoutRecoverer
         if (off < 0)
             return (0, 0);
         uint thisAdj = 0, slot = 0;
-        for (var i = off; i < off + 0x80 && i + 7 < pe.Length; i++)
+        var leaAt = -1;
+        for (var i = off; i < off + 0x100 && i + 7 < pe.Length; i++)
         {
             if (pe.Byte(i) == 0x83 && pe.Byte(i + 1) == 0xC1)
+            {
                 thisAdj = pe.Byte(i + 2);
-            if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x01 && pe.Byte(i + 2) == 0xFF && pe.Byte(i + 3) == 0x50)
+                leaAt = i;
+            }
+            if (pe.Byte(i) == 0x8D && pe.Byte(i + 1) == 0x49)
+            {
+                thisAdj = pe.Byte(i + 2);
+                leaAt = i;
+            }
+            if (leaAt < 0 || i < leaAt)
+                continue;
+            if (slot == 0 && pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x01 && pe.Byte(i + 2) == 0xFF && pe.Byte(i + 3) == 0x50)
                 slot = pe.Byte(i + 4);
-            if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x01 && pe.Byte(i + 2) == 0xFF && pe.Byte(i + 3) == 0x90)
+            if (slot == 0 && pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x01 && pe.Byte(i + 2) == 0xFF && pe.Byte(i + 3) == 0x90)
                 slot = pe.ReadU32(i + 4);
+            if (slot == 0 && pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x11 && pe.Byte(i + 2) == 0xFF && pe.Byte(i + 3) == 0x52)
+                slot = pe.Byte(i + 4);
+            if (slot == 0 && pe.Byte(i) == 0xFF && pe.Byte(i + 1) == 0x51)
+                slot = pe.Byte(i + 2);
+            if (slot == 0 && pe.Byte(i) == 0xFF && pe.Byte(i + 1) == 0x91)
+                slot = pe.ReadU32(i + 2);
         }
 
         return (thisAdj, slot);
+    }
+
+    private static uint NativeCallAfterThisAdjust(ActionPe pe, uint wrapperRva)
+    {
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+        for (var i = off; i < off + 0x100 && i + 8 < pe.Length; i++)
+        {
+            var lea = pe.Byte(i) == 0x8D && pe.Byte(i + 1) == 0x49 ||
+                      pe.Byte(i) == 0x83 && pe.Byte(i + 1) == 0xC1;
+            if (!lea)
+                continue;
+            for (var j = i + 3; j < i + 18 && j + 5 < pe.Length; j++)
+            {
+                if (pe.Byte(j) == 0xFF && (pe.Byte(j + 1) is 0x50 or 0x51 or 0x90 or 0x91))
+                    return 0;
+                if (pe.Byte(j) != 0xE8)
+                    continue;
+                var target = (uint)(pe.FileToVa(j + 5) + pe.ReadI32(j + 1));
+                var destOff = pe.VaToFile(target);
+                if (destOff < 0 || !pe.IsCode(target) || LooksLikePythonStub(pe, destOff))
+                    continue;
+                return target - pe.ImageBase;
+            }
+        }
+
+        return 0;
     }
 
     private static bool TryMethodTable(ActionPe pe, int off, out uint fn)
@@ -478,7 +1466,8 @@ public static class PlayerActionLayoutRecoverer
                     return addr;
             }
 
-            if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15))
+            if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15 ||
+                                       pe.Byte(i + 1) == 0x35 || pe.Byte(i + 1) == 0x3D))
             {
                 var addr = pe.ReadU32(i + 2);
                 if (pe.IsData(addr))
@@ -506,7 +1495,8 @@ public static class PlayerActionLayoutRecoverer
                     break;
                 }
 
-                if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15) &&
+                if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15 ||
+                                           pe.Byte(i + 1) == 0x35 || pe.Byte(i + 1) == 0x3D) &&
                     pe.ReadU32(i + 2) == singletonVa)
                 {
                     start = i + 6;
@@ -554,6 +1544,14 @@ public static class PlayerActionLayoutRecoverer
         return 0;
     }
 
+    private static bool LooksLikePythonHelper(ActionPe pe, int off)
+    {
+        if (off < 0 || LooksLikePythonStub(pe, off))
+            return true;
+        return pe.Byte(off) == 0x55 && pe.Byte(off + 1) == 0x8B && pe.Byte(off + 2) == 0xEC &&
+               pe.Byte(off + 3) == 0xFF && pe.Byte(off + 4) == 0x75 && pe.Byte(off + 5) == 0x08;
+    }
+
     private static bool LooksLikePythonStub(ActionPe pe, int off)
     {
         if (pe.Byte(off) == 0xA1 && pe.Byte(off + 10) == 0xC3)
@@ -569,6 +1567,36 @@ public static class PlayerActionLayoutRecoverer
         }
 
         return length > 0 && length < 16;
+    }
+
+    private static uint PreferLoginNative(ActionPe pe, uint exportNative, uint wrapperRva, uint collideRva)
+    {
+        var followed = 0u;
+        if (wrapperRva != 0)
+        {
+            followed = RelativeCall(
+                pe,
+                pe.VaToFile(pe.ImageBase + wrapperRva),
+                pe.VaToFile(pe.ImageBase + wrapperRva) + 0x40);
+        }
+
+        if (LooksLikeStartGameFlag(pe, followed))
+            return followed;
+        if (LooksLikeStartGameFlag(pe, exportNative))
+            return exportNative;
+        if (exportNative != 0 && exportNative != collideRva)
+            return exportNative;
+        return followed != 0 ? followed : exportNative;
+    }
+
+    private static bool LooksLikeStartGameFlag(ActionPe pe, uint rva)
+    {
+        if (rva == 0)
+            return false;
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        if (off < 0 || off + 11 > pe.Length)
+            return false;
+        return pe.Byte(off) == 0xC7 && pe.ReadU32(off + 2) == 0x8C && pe.Byte(off + 10) == 0xC3;
     }
 
     private static uint RelativeCall(ActionPe pe, int start, int end)
@@ -777,6 +1805,41 @@ public static class PlayerActionLayoutRecoverer
         return 0;
     }
 
+    private static (uint id, uint pwd) RecoverLoginStringDisps(ActionPe pe, uint rva, List<string> evidence)
+    {
+        if (rva == 0)
+            return (0, 0);
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        if (off < 0)
+            return (0, 0);
+        var found = new List<uint>();
+        for (var i = off; i < off + 0x120 && i + 6 < pe.Length; i++)
+        {
+            uint disp = 0;
+            if (pe.Byte(i) == 0x8D && (pe.Byte(i + 1) == 0x81 || pe.Byte(i + 1) == 0x86 ||
+                                       pe.Byte(i + 1) == 0x87 || pe.Byte(i + 1) == 0x88 ||
+                                       pe.Byte(i + 1) == 0x89 || pe.Byte(i + 1) == 0x8B ||
+                                       pe.Byte(i + 1) == 0x8E || pe.Byte(i + 1) == 0x8F))
+                disp = pe.ReadU32(i + 2);
+            else if (pe.Byte(i) == 0x81 && (pe.Byte(i + 1) == 0xC1 || pe.Byte(i + 1) == 0xC6))
+                disp = pe.ReadU32(i + 2);
+            if (disp is < 0x80 or > 0x400)
+                continue;
+            if (!found.Contains(disp))
+                found.Add(disp);
+            if (found.Count >= 2)
+                break;
+        }
+
+        var id = found.Count > 0 ? found[0] : 0;
+        var pwd = found.Count > 1 ? found[1] : 0;
+        if (id != 0)
+            evidence.Add($"SetLoginInfo m_stID +0x{id:X}" + (pwd != 0 ? $" m_stPassword +0x{pwd:X}." : "."));
+        else
+            evidence.Add("SetLoginInfo login-string displacements were not recovered.");
+        return (id, pwd);
+    }
+
     private static uint RecoverPhaseDisplacement(ActionPe pe, uint setLoginPhaseRva, List<string> evidence)
     {
         if (setLoginPhaseRva == 0)
@@ -913,10 +1976,11 @@ public static class PlayerActionLayoutRecoverer
         return null;
     }
 
-    private static (uint points, uint name, uint xor) RecoverPlayerHud(ActionPe pe, uint singletonRva, List<string> evidence)
+    private static (uint points, uint name, uint xor) RecoverPlayerHud(
+        ActionPe pe, uint singletonRva, uint getStatusNative, List<string> evidence)
     {
         const uint knownMagic = 0xE73AC1DA;
-        var xor = knownMagic;
+        uint xor = 0;
         uint pointRel = 0;
         uint getPointVa = 0;
         foreach (var site in pe.FindImmediateXrefs(knownMagic))
@@ -932,6 +1996,7 @@ public static class PlayerActionLayoutRecoverer
                 if (pe.Byte(i) == 0x89)
                     continue;
                 pointRel = disp;
+                xor = knownMagic;
                 getPointVa = pe.FileToVa(FunctionStart(pe, i));
                 evidence.Add($"GetPoint/GetStatus xor 0x{knownMagic:X8} loads [ecx+index*4+0x{disp:X}] at VA 0x{pe.FileToVa(i):X}.");
                 break;
@@ -940,6 +2005,11 @@ public static class PlayerActionLayoutRecoverer
             if (pointRel != 0)
                 break;
         }
+
+        if (pointRel == 0)
+            TryFindGetPointXor(pe, getStatusNative, evidence, ref pointRel, ref xor, ref getPointVa);
+        if (pointRel == 0)
+            ScanXorGetPoint(pe, evidence, ref pointRel, ref xor, ref getPointVa);
 
         var points = pointRel;
         uint getStatusVa = 0;
@@ -963,7 +2033,130 @@ public static class PlayerActionLayoutRecoverer
             evidence.Add($"Player HUD RPM: name @ +0x{name:X}, m_alPoint @ +0x{points:X}, xor 0x{xor:X8}.");
         else
             evidence.Add("Player HUD status-point displacement was not recovered.");
-        return (points, name, xor);
+        return (points, name, points == 0 ? 0 : xor);
+    }
+
+    private static void ScanXorGetPoint(
+        ActionPe pe, List<string> evidence, ref uint pointRel, ref uint xor, ref uint getPointVa)
+    {
+        uint bestDisp = 0, bestXor = 0, bestVa = 0;
+        var bestSpan = int.MaxValue;
+        for (var i = 0; i + 12 < pe.Length; i++)
+        {
+            if (!TryScaledIndex(pe, i, out var disp) || pe.Byte(i) == 0x89)
+                continue;
+            if (disp is < 0x80 or > 0x40000)
+                continue;
+            var after = i + (pe.Byte(i + 1) == 0x84 ? 7 : 4);
+            uint foundXor;
+            if (pe.Byte(after) == 0x35)
+                foundXor = pe.ReadU32(after + 1);
+            else if (pe.Byte(after) == 0x81 && pe.Byte(after + 1) == 0xF0)
+                foundXor = pe.ReadU32(after + 2);
+            else
+                continue;
+            if (foundXor is 0 or 0xCCCCCCCC)
+                continue;
+            var retAt = after + (pe.Byte(after) == 0x35 ? 5 : 6);
+            var hasRet = false;
+            for (var r = retAt; r < retAt + 16 && r + 2 < pe.Length; r++)
+            {
+                if (pe.Byte(r) == 0xC3 || (pe.Byte(r) == 0xC2 && pe.Byte(r + 1) == 0x04))
+                {
+                    hasRet = true;
+                    break;
+                }
+            }
+            if (!hasRet)
+                continue;
+            var fnOff = FunctionStart(pe, i);
+            var span = i - fnOff;
+            if (span is < 0 or > 0x30)
+                continue;
+            var fnVa = pe.FileToVa(fnOff);
+            if (!pe.IsCode(fnVa) || span >= bestSpan)
+                continue;
+            bestSpan = span;
+            bestDisp = disp;
+            bestXor = foundXor;
+            bestVa = fnVa;
+        }
+
+        if (bestDisp == 0)
+            return;
+        pointRel = bestDisp;
+        xor = bestXor;
+        getPointVa = bestVa;
+        evidence.Add($"GetPoint/GetStatus xor 0x{xor:X8} loads [ecx+index*4+0x{pointRel:X}] at VA 0x{getPointVa:X} (scanned).");
+    }
+
+    private static (uint item, uint getClose) RecoverItemFromPickClose(
+        ActionPe pe, uint pickNative, uint playerSingletonRva, List<string> evidence)
+    {
+        if (pickNative == 0)
+            return (0, 0);
+        var off = pe.VaToFile(pe.ImageBase + pickNative);
+        if (off < 0)
+            return (0, 0);
+        var playerVa = playerSingletonRva == 0 ? 0 : pe.ImageBase + playerSingletonRva;
+        uint item = 0;
+        uint getClose = 0;
+        for (var i = off; i < off + 0x160 && i + 6 < pe.Length; i++)
+        {
+            uint addr = 0;
+            if (pe.Byte(i) == 0xA1)
+                addr = pe.ReadU32(i + 1);
+            else if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) == 0x0D || pe.Byte(i + 1) == 0x15 ||
+                                           pe.Byte(i + 1) == 0x35 || pe.Byte(i + 1) == 0x3D))
+                addr = pe.ReadU32(i + 2);
+            if (addr != 0 && pe.IsVa(addr) && addr != playerVa)
+            {
+                var rva = addr - pe.ImageBase;
+                if (item == 0 && pe.IsRva(rva))
+                    item = rva;
+            }
+
+            if (pe.Byte(i) != 0xE8 || item == 0 || getClose != 0)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            var destOff = pe.VaToFile(target);
+            if (destOff < 0 || !pe.IsCode(target) || LooksLikePythonStub(pe, destOff))
+                continue;
+            getClose = target - pe.ImageBase;
+        }
+
+        if (item != 0)
+            evidence.Add($"CPythonItem singleton RVA 0x{item:X} GetCloseItem RVA 0x{getClose:X} from PickCloseItem.");
+        else
+            evidence.Add("CPythonItem singleton was not recovered from PickCloseItem.");
+        return (item, getClose);
+    }
+
+    private static void TryFindGetPointXor(
+        ActionPe pe, uint getStatusNative, List<string> evidence,
+        ref uint pointRel, ref uint xor, ref uint getPointVa)
+    {
+        if (getStatusNative == 0)
+            return;
+        var off = pe.VaToFile(pe.ImageBase + getStatusNative);
+        if (off < 0)
+            return;
+        for (var i = off; i < off + 0x80 && i + 12 < pe.Length; i++)
+        {
+            if (!TryScaledIndex(pe, i, out var disp) || pe.Byte(i) == 0x89)
+                continue;
+            var after = i + ((pe.Byte(i + 1) == 0x84) ? 7 : 4);
+            if (pe.Byte(after) != 0x35)
+                continue;
+            var foundXor = pe.ReadU32(after + 1);
+            if (foundXor == 0 || disp is < 0x20 or > 0x40000)
+                continue;
+            pointRel = disp;
+            xor = foundXor;
+            getPointVa = pe.FileToVa(FunctionStart(pe, i));
+            evidence.Add($"GetPoint/GetStatus xor 0x{xor:X8} loads [ecx+index*4+0x{disp:X}] from GetStatus native.");
+            return;
+        }
     }
 
     private static bool TryScaledIndex(ActionPe pe, int off, out uint disp)
@@ -1295,7 +2488,7 @@ public static class PlayerActionLayoutRecoverer
         public bool IsVa(uint va) => va >= ImageBase + 0x1000 && va < ImageBase + SizeOfImage;
         public bool IsRva(uint rva) => rva >= 0x1000 && rva < SizeOfImage;
         public bool IsCode(uint va) => IsVa(va) && VaToFile(va) >= 0;
-        public bool IsData(uint va) => IsVa(va) && VaToFile(va) >= 0;
+        public bool IsData(uint va) => IsVa(va);
 
         public string Hex(uint va, int count)
         {
@@ -1351,6 +2544,26 @@ public static class PlayerActionLayoutRecoverer
                 {
                     if (_bytes[i] == needle[0] && _bytes[i + 1] == needle[1] &&
                         _bytes[i + 2] == needle[2] && _bytes[i + 3] == needle[3])
+                        hits.Add(FileToVa(i));
+                }
+            }
+
+            return hits;
+        }
+
+        public List<uint> FindRelativeCallsTo(uint targetVa)
+        {
+            var hits = new List<uint>();
+            foreach (var section in _sections)
+            {
+                var start = (int)section.Raw;
+                var end = Math.Min(_bytes.Length - 5, start + (int)section.RawSize);
+                for (var i = start; i < end; i++)
+                {
+                    if (_bytes[i] != 0xE8)
+                        continue;
+                    var dest = (uint)(FileToVa(i + 5) + ReadI32(i + 1));
+                    if (dest == targetVa)
                         hits.Add(FileToVa(i));
                 }
             }

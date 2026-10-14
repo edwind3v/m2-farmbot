@@ -16,7 +16,7 @@ public class AutoCombatControllerTests
         var start = controller.Tick(world, config, true, 1_000);
         Assert.Equal(CombatState.Approach, start.State);
         Assert.Equal(11u, start.Target!.Vid);
-        Assert.Equal(NativeActionKind.SetTarget, start.Action!.Kind);
+        Assert.Equal(NativeActionKind.PressActor, start.Action!.Kind);
 
         var stop = controller.Tick(world, config, false, 1_100);
         Assert.Equal(CombatState.Idle, stop.State);
@@ -40,22 +40,56 @@ public class AutoCombatControllerTests
         var far = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 800, 0));
         var acquired = controller.Tick(far, config, true, 5_000);
         Assert.Equal(21u, acquired.Target!.Vid);
-        Assert.Equal(NativeActionKind.SetTarget, acquired.Action!.Kind);
+        Assert.Equal(NativeActionKind.PressActor, acquired.Action!.Kind);
 
         var approach = controller.Tick(far, config, true, 5_200);
         Assert.Equal(CombatState.Approach, approach.State);
         Assert.Equal(NativeActionKind.PressActor, approach.Action!.Kind);
 
         var near = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 80, 0));
-        var face = controller.Tick(near, config, true, 5_400);
-        Assert.Equal(CombatState.FaceTarget, face.State);
-
-        var attack = controller.Tick(near, config, true, 5_500);
+        var attack = controller.Tick(near, config, true, 5_400);
         Assert.Equal(CombatState.Attack, attack.State);
+        Assert.Equal(NativeActionKind.PressActor, attack.Action!.Kind);
+        Assert.NotEqual(NativeActionKind.Attack, attack.Action.Kind);
 
-        var wait = controller.Tick(near, config, true, 5_501);
-        Assert.Equal(CombatState.Wait, wait.State);
-        Assert.Equal(NativeActionKind.Attack, wait.Action!.Kind);
+        var hold = controller.Tick(near, config, true, 5_500);
+        Assert.Equal(CombatState.Attack, hold.State);
+        Assert.Null(hold.Action);
+        Assert.Contains("auto-attack", hold.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void WalksToATargetInsideFarmRangeButOutsideMelee()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.MoveIntervalMs = 100;
+
+        var mid = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 220, 0));
+        controller.Tick(mid, config, true, 5_000);
+        var approach = controller.Tick(mid, config, true, 5_200);
+        Assert.Equal(CombatState.Approach, approach.State);
+        Assert.Equal(NativeActionKind.PressActor, approach.Action!.Kind);
+        Assert.NotEqual(NativeActionKind.Attack, approach.Action.Kind);
+    }
+
+    [Fact]
+    public void DoesNotAttackOnTheSpotWhenOutsideArthionMeleeRange()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.MoveIntervalMs = 50;
+
+        var justOutside = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 160, 0));
+        controller.Tick(justOutside, config, true, 5_000);
+        var tick = controller.Tick(justOutside, config, true, 5_200);
+        Assert.Equal(CombatState.Approach, tick.State);
+        Assert.Equal(NativeActionKind.PressActor, tick.Action!.Kind);
+        Assert.NotEqual(NativeActionKind.Attack, tick.Action.Kind);
     }
 
     [Fact]

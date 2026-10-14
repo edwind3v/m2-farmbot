@@ -7,13 +7,15 @@ public static class PlayerHudDecoder
     public const uint DefaultXor = 0xE73AC1DA;
     public static readonly int XorOfZero = unchecked((int)DefaultXor);
 
-    public static bool LooksLikeHud(int level, int hp, int maxHp, int mp, int maxMp, int exp, int nextExp)
+    public static bool LooksLikeHud(int level, int hp, int maxHp, int mp, int maxMp, int exp, int nextExp, bool allowDead = true)
     {
         if (IsUnset(level) || IsUnset(hp) || IsUnset(maxHp) || IsUnset(mp) || IsUnset(maxMp) || IsUnset(exp) || IsUnset(nextExp))
             return false;
         if (level is < 1 or > 250)
             return false;
-        if (hp < 0 || maxHp < 50 || hp > maxHp)
+        if (hp < 0 || maxHp < 50 || maxHp > 5_000_000 || hp > maxHp)
+            return false;
+        if (!allowDead && hp == 0)
             return false;
         if (mp < 0 || maxMp < 0 || (maxMp > 0 && mp > maxMp))
             return false;

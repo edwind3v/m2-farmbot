@@ -19,7 +19,7 @@ public class PlayerActionLayoutTests
 
         Assert.NotEqual(0u, layout.PreferredImageBase);
         Assert.True(layout.HasSetTarget, dump);
-        Assert.True(layout.PlayerSingletonRva is > 0x1000 and < 0x800000, dump);
+        Assert.True(layout.PlayerSingletonRva is > 0x1000 and < 0x8000000, dump);
         Assert.Equal(4u, layout.SetTargetThisAdjustment);
         Assert.Equal(0x60u, layout.SetTargetVtableSlot);
         Assert.NotEqual(0x4EA2F0u, layout.SetTargetRva);
@@ -199,5 +199,38 @@ public class PlayerActionLayoutTests
         Assert.Equal(0xF9980u, mini.LoadAtlasRva);
         Assert.Equal(0xFB7B0u, mini.ShowAtlasRva);
         Assert.Equal(0xF9960u, mini.HideAtlasRva);
+    }
+
+    [Fact]
+    public void RecoversArthionPlayerWhenPresent()
+    {
+        const string arthion = @"E:\Arthion\game\Arthion.exe";
+        if (!File.Exists(arthion))
+            return;
+
+        var player = PlayerActionLayoutRecoverer.Recover(arthion);
+        var entity = FarmBot.Core.Entities.ClientReleaseLayout.Recover(arthion);
+        var login = PlayerActionLayoutRecoverer.RecoverLogin(arthion);
+        var singleton = player.PlayerSingletonRva != 0 ? player.PlayerSingletonRva : entity.SingletonRva - 4;
+        var dump = $"player=0x{player.PlayerSingletonRva:X} fallback=0x{singleton:X} charMgr=0x{entity.SingletonRva:X} setTarget=0x{player.SetTargetRva:X} setTargetSlot=0x{player.SetTargetVtableSlot:X} thisAdj=0x{player.SetTargetThisAdjustment:X} attackKey=0x{player.SetAttackKeyStateRva:X} newAttack=0x{player.NewAttackRva:X} combo=0x{player.ComboAttackRva:X} sendAttack=0x{player.SendAttackPacketRva:X} sendState=0x{player.SendStatePacketRva:X} setAuto=0x{player.SetAutoRva:X} reserve=0x{player.ReserveClickRva:X} moveTo=0x{player.MoveToDestRva:X} movePixel=0x{player.MoveToPixelRva:X} getMain=0x{player.GetMainActorRva:X} pressActor=0x{player.OnPressActorRva:X} chase=0x{player.ChaseActorRva:X} approachInst=0x{player.ApproachInstRva:X} inRange=0x{player.InRangeRva:X} playerUpdate=0x{player.PlayerUpdateRva:X} map=+0x{entity.MapDisplacement:X} getStatus=0x{player.GetStatusRva:X} sendPickup=0x{player.SendPickupPacketRva:X} item=0x{player.ItemSingletonRva:X} getClose=0x{player.GetCloseItemRva:X} points=+0x{player.StatusPointsDisplacement:X} xor=0x{player.PointXorMask:X} name=+0x{player.PlayerNameDisplacement:X} loginId=+0x{login.LoginIdDisplacement:X}\n" +
+                   string.Join("\n", player.Evidence);
+        Directory.CreateDirectory(@"C:\Temp");
+        File.WriteAllText(@"C:\Temp\arthion-player.txt", dump);
+        Assert.True(singleton is > 0x1000 and < 0x8000000, dump);
+        Assert.True(player.SetTargetVtableSlot == 0 || player.SetTargetThisAdjustment != 0, dump);
+        Assert.NotEqual(0u, player.ComboAttackRva);
+        Assert.NotEqual(0u, player.ReserveClickRva);
+        Assert.NotEqual(0u, player.SendAttackPacketRva);
+        Assert.NotEqual(0u, player.MoveToDestRva);
+        Assert.NotEqual(0u, player.MoveToPixelRva);
+        Assert.NotEqual(0u, player.GetMainActorRva);
+        Assert.NotEqual(0u, player.ChaseActorRva);
+        Assert.NotEqual(0u, player.ApproachInstRva);
+        Assert.NotEqual(0u, player.PlayerUpdateRva);
+        Assert.NotEqual(0u, player.GetPixelRva);
+        Assert.NotEqual(0u, player.InRangeRva);
+        Assert.Equal(0x26F7E0u, player.InRangeRva);
+        Assert.Equal(0x3909F0u, player.OnPressActorRva);
+        Assert.NotEqual(0x608290u, player.MoveToDestRva);
     }
 }

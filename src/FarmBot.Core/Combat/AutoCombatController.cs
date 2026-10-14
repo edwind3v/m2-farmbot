@@ -18,6 +18,7 @@ public sealed class AutoCombatController
     private int _recoveries;
     private bool _stopEmitted;
     private bool _rangedArmed;
+    private uint _armedVid;
 
     public CombatState State => _state;
     public uint TargetVid => _targetVid;
@@ -36,6 +37,7 @@ public sealed class AutoCombatController
         _recoveries = 0;
         _stopEmitted = false;
         _rangedArmed = false;
+        _armedVid = 0;
     }
 
     public CombatTick Tick(WorldSnapshot? snapshot, BotConfig config, bool enabled, long nowMs)
@@ -132,8 +134,10 @@ public sealed class AutoCombatController
         _targetVid = picked.Vid;
         _targetAcquiredMs = nowMs;
         _recoveries = 0;
+        _armedVid = 0;
         NoteMove(snapshot.Player, nowMs);
-        return Enter(CombatState.Approach, nowMs, picked, NativeCombatAction.SetTarget(picked.Vid), $"acquired VID {picked.Vid}");
+        return Enter(CombatState.Approach, nowMs, picked, NativeCombatAction.PressActor(picked.Vid, picked.X, picked.Y),
+            $"acquired VID {picked.Vid}");
     }
 
     private CombatTick OnApproach(WorldSnapshot snapshot, BotConfig config, EntityState? target, long nowMs)
@@ -144,12 +148,18 @@ public sealed class AutoCombatController
             return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
         if (IsStuck(snapshot.Player, config, nowMs) && !InRange(target, config))
             return Enter(CombatState.Recover, nowMs, target, null, "stuck approaching");
-        if (InRange(target, config))
-            return Enter(CombatState.FaceTarget, nowMs, target, NativeCombatAction.Face(target.Vid), "in attack range");
+        if (InMelee(target, config))
+        {
+            _armedVid = target.Vid;
+            _lastAttackMs = nowMs;
+            return Enter(CombatState.Attack, nowMs, target,
+                NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "in melee, keep walking until native range");
+        }
 
         if (ShouldEmit(nowMs, config.MoveIntervalMs))
         {
             _lastActionMs = nowMs;
+            _armedVid = 0;
             return Stay(target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y),
                 $"approach VID {target.Vid} dist {target.Distance:0}");
         }
@@ -168,11 +178,18 @@ public sealed class AutoCombatController
     {
         if (target == null)
             return Enter(CombatState.Verify, nowMs, null, null, "target lost before attack");
-        if (!InRange(target, config))
-            return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "left attack range");
+        if (!InMelee(target, config))
+        {
+            _armedVid = 0;
+            return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "left melee range");
+        }
 
+        if (_armedVid == target.Vid)
+            return Stay(target, null, $"auto-attacking VID {target.Vid}");
+
+        _armedVid = target.Vid;
         _lastAttackMs = nowMs;
-        return Enter(CombatState.Wait, nowMs, target, NativeCombatAction.Attack(target.Vid), $"attack VID {target.Vid}");
+        return Stay(target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), $"auto-attack VID {target.Vid}");
     }
 
     private CombatTick OnWait(BotConfig config, EntityState? target, long nowMs)
@@ -192,7 +209,7 @@ public sealed class AutoCombatController
 
         if (TimedOut(config, nowMs))
             return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
-        if (InRange(target, config))
+        if (InMelee(target, config))
             return Enter(CombatState.Attack, nowMs, target, null, "target still attackable");
         return Enter(CombatState.Approach, nowMs, target, null, "target still alive out of range");
     }
@@ -242,6 +259,9 @@ public sealed class AutoCombatController
 
     private static bool InRange(EntityState target, BotConfig config) =>
         target.Distance <= config.AttackRange;
+
+    private static bool InMelee(EntityState target, BotConfig config) =>
+        target.Distance > 1f && target.Distance <= Math.Min(config.AttackRange, 140f);
 
     private bool TimedOut(BotConfig config, long nowMs) =>
         _targetVid != 0 && _targetAcquiredMs != 0 && nowMs - _targetAcquiredMs >= config.TargetTimeoutMs;

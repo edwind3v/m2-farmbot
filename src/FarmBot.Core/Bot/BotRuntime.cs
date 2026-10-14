@@ -71,8 +71,26 @@ public sealed class BotRuntime : IDisposable
     {
         if (_thread != null)
             return;
-        _cts = new CancellationTokenSource();
-        _thread = new Thread(() => Loop(_cts.Token))
+        var cts = new CancellationTokenSource();
+        _cts = cts;
+        var token = cts.Token;
+        _thread = new Thread(() =>
+        {
+            try
+            {
+                Loop(token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"bot loop failed: {ex.Message}");
+            }
+        })
         {
             IsBackground = true,
             Name = "FarmBot"
@@ -178,7 +196,7 @@ public sealed class BotRuntime : IDisposable
         if (_source is IAdvancingSource advancing)
             advancing.Advance(dtMs);
 
-        var snapshot = _source.GetSnapshot(nowMs);
+        var snapshot = OverlayHud(_source.GetSnapshot(nowMs));
         if (snapshot != null)
         {
             _everReceived = true;
@@ -204,6 +222,8 @@ public sealed class BotRuntime : IDisposable
 
         var corner = enabled && config.StopOnCorner && _cornerProbe();
         SyncLootLoop(config, enabled);
+        if (config.RangedPickupEnabled && snapshot != null)
+            SubmitRangedPickups(snapshot, config);
         var context = new TickContext(enabled, corner, _everReceived, _lastStateAtMs);
         var decision = _nativeCombat
             ? TickNative(snapshot, config, context, nowMs)
@@ -231,8 +251,6 @@ public sealed class BotRuntime : IDisposable
                         status.Contains("not connected", StringComparison.OrdinalIgnoreCase) ||
                         status.Contains("I/O failed", StringComparison.OrdinalIgnoreCase))
                         _log.Warn($"{decision.Command.Describe()} failed: {status}");
-                    else
-                        _log.Info($"{decision.Command.Describe()} {status}");
                 }
             }
             catch (Exception ex)
@@ -276,6 +294,10 @@ public sealed class BotRuntime : IDisposable
             rangedOnly = _rangedOnly;
         var tick = _combat.Tick(snapshot, config, context.Enabled, nowMs);
         _combatState = tick.State;
+        if (tick.Action != null)
+        {
+            _log.Info($"combat {tick.State} {tick.Action.Describe()} dist={tick.Target?.Distance:0} {tick.Reason}");
+        }
         return new BrainDecision(ToPhase(tick.State), tick.Target, tick.Action?.ToCommand(), tick.Reason);
     }
 
@@ -305,6 +327,23 @@ public sealed class BotRuntime : IDisposable
             : "loot loop off");
     }
 
+    private void SubmitRangedPickups(WorldSnapshot snapshot, BotConfig config)
+    {
+        if (_sink == null)
+            return;
+        var radius = LootPolicy.PickupRadius(config);
+        var sent = 0;
+        foreach (var entity in snapshot.Entities)
+        {
+            if (entity.Kind != EntityKind.Drop || entity.Vid == 0 || entity.Distance > radius)
+                continue;
+            if (!_sink.TrySubmit(NativeCombatAction.PickupVid(entity.Vid)))
+                break;
+            if (++sent >= 12)
+                break;
+        }
+    }
+
     private static BotPhase ToPhase(CombatState state) => state switch
     {
         CombatState.Idle => BotPhase.Idle,
@@ -320,10 +359,24 @@ public sealed class BotRuntime : IDisposable
 
     public void Dispose()
     {
-        _cts?.Cancel();
+        var cts = Interlocked.Exchange(ref _cts, null);
+        try
+        {
+            cts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
         _thread?.Join(TimeSpan.FromSeconds(2));
-        _cts?.Dispose();
         _thread = null;
+        try
+        {
+            cts?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     private void Loop(CancellationToken token)
@@ -340,6 +393,14 @@ public sealed class BotRuntime : IDisposable
                 config = _configProvider();
                 TickOnce(config, now, dt);
             }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
             catch (Exception ex)
             {
                 _log.Error(ex.Message);
@@ -354,8 +415,39 @@ public sealed class BotRuntime : IDisposable
                 wait = Math.Max(1, Math.Min(wait, config.RangedAttackDelayMs));
             if (config.FastPickupEnabled || config.RangedPickupEnabled)
                 wait = Math.Max(1, Math.Min(wait, config.FastPickupEnabled ? config.FastPickupDelayMs : 50));
-            if (token.WaitHandle.WaitOne(wait))
+            if (WaitCancelled(token, wait))
                 break;
         }
+    }
+
+    private static bool WaitCancelled(CancellationToken token, int waitMs)
+    {
+        try
+        {
+            return token.IsCancellationRequested || token.WaitHandle.WaitOne(Math.Max(1, waitMs));
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+    }
+
+    private WorldSnapshot? OverlayHud(WorldSnapshot? snapshot)
+    {
+        if (snapshot == null || _sink == null || !_sink.TryReadHud(out var hud))
+            return snapshot;
+        return snapshot with
+        {
+            Player = snapshot.Player with
+            {
+                Level = hud.Level,
+                Exp = hud.Exp,
+                NextExp = hud.NextExp,
+                Hp = hud.Hp,
+                MaxHp = hud.MaxHp,
+                Mp = hud.Mp,
+                MaxMp = hud.MaxMp
+            }
+        };
     }
 }

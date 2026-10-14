@@ -294,8 +294,7 @@ public sealed class LauncherShell : IDisposable
     private void ApplyLiveSession(ClientSession session)
     {
         var info = session.Sink.LastSession;
-        if (string.IsNullOrWhiteSpace(info.Account) &&
-            session.Sink.Available &&
+        if (session.Sink.Available &&
             Environment.TickCount64 - session.LastCredentialProbeAt >= 1500)
         {
             session.LastCredentialProbeAt = Environment.TickCount64;
