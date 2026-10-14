@@ -11,7 +11,7 @@ public class ReleaseLayoutTests
     {
         Assert.True(File.Exists(ReleaseClient), ReleaseClient);
         var layout = ClientReleaseLayout.Recover(ReleaseClient);
-        var dump = $"base=0x{layout.PreferredImageBase:X} create=0x{layout.CreateInstanceRva:X} map=+0x{layout.MapDisplacement:X} singletonRva=0x{layout.SingletonRva:X} main=+0x{layout.MainPointerDisplacement:X} graphic=+0x{layout.GraphicDisplacement:X} race=+0x{layout.RaceDisplacement:X} vnum=+0x{layout.VirtualNumberDisplacement:X} type=+0x{layout.ActorTypeDisplacement:X} vid=+0x{layout.SelfVidDisplacement:X} pos=+0x{layout.PixelXDisplacement:X}/+0x{layout.PixelYDisplacement:X}/+0x{layout.PixelZDisplacement:X} negateY={layout.NegatePixelY} nodeKey=+0x{layout.NodeKey:X} nodeVal=+0x{layout.NodeValue:X} can={layout.CanEnumerate}\n" +
+        var dump = $"base=0x{layout.PreferredImageBase:X} create=0x{layout.CreateInstanceRva:X} map=+0x{layout.MapDisplacement:X} singletonRva=0x{layout.SingletonRva:X} main=+0x{layout.MainPointerDisplacement:X} graphic=+0x{layout.GraphicDisplacement:X} race=+0x{layout.RaceDisplacement:X} vnum=+0x{layout.VirtualNumberDisplacement:X} type=+0x{layout.ActorTypeDisplacement:X} vid=+0x{layout.SelfVidDisplacement:X} pos=+0x{layout.PixelXDisplacement:X}/+0x{layout.PixelYDisplacement:X}/+0x{layout.PixelZDisplacement:X} negateY={layout.NegatePixelY} nodeKey=+0x{layout.NodeKey:X} nodeVal=+0x{layout.NodeValue:X} name=+0x{layout.InstanceNameDisplacement:X} can={layout.CanEnumerate}\n" +
                    string.Join("\n", layout.Evidence);
         Directory.CreateDirectory(@"C:\Temp");
         File.WriteAllText(@"C:\Temp\rellayout.txt", dump);
@@ -33,6 +33,7 @@ public class ReleaseLayoutTests
         Assert.Equal(0x0Du, layout.NodeIsNil);
         Assert.Equal(0x10u, layout.NodeKey);
         Assert.Equal(0x14u, layout.NodeValue);
+        Assert.Equal(0x14u, layout.InstanceNameDisplacement);
         Assert.True(layout.CanEnumerate, dump);
     }
 }

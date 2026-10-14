@@ -1,3 +1,5 @@
+using System.Text;
+using FarmBot.Core.Combat;
 using FarmBot.Core.Entities;
 using FarmBot.Core.Geometry;
 using FarmBot.Core.Logging;
@@ -15,10 +17,18 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
     private readonly object _gate = new();
     private ProcessMemory? _memory;
     private ReleaseLayout? _layout;
+    private PlayerActionLayout? _playerLayout;
     private string _layoutPath = "";
     private bool _loggedRead;
     private bool _loggedEnum;
+    private bool _loggedHud;
+    private uint _resolvedPointsDisp;
+    private uint _resolvedPointsXor;
     private int _attachedPid = -1;
+    private float _lastX;
+    private float _lastY;
+    private float _facingDeg;
+    private bool _hasLastPos;
 
     public LiveGameStateProvider(IBotLog? log = null)
     {
@@ -134,7 +144,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         if (!process.TryReadU32(head + layout.NodeLeft, out var node) || !IsUserPointer(node))
         {
             Status = $"manager 0x{manager:X} map begin is invalid";
-            return Frame(nowMs, process, main, entities);
+            return Frame(nowMs, process, main, entities, ReadPlayerHud(process, main));
         }
 
         var visited = new HashSet<uint>();
@@ -167,6 +177,8 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             ? entities
             : EntityManager.WithDistances(entities, main).ToList();
 
+        var player = ReadPlayerHud(process, main);
+
         Status = $"{process.ProcessName} PID {process.ProcessId} image=0x{process.ImageBase:X}: read {withDistance.Count} live instances from m_kAliveInstMap (manager 0x{manager:X}, reported {reportedSize})";
         if (!_loggedEnum && withDistance.Count > 0)
         {
@@ -174,7 +186,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             Log($"actual entity walk: {Status}");
         }
 
-        return Frame(nowMs, process, main, withDistance);
+        return Frame(nowMs, process, main, withDistance, player);
     }
 
     private bool EnsureLayout(ProcessMemory memory, out string status)
@@ -193,6 +205,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         }
 
         _layout = ClientReleaseLayout.Recover(path);
+        _playerLayout = PlayerActionLayoutRecoverer.Recover(path);
         _layoutPath = path;
         if (!_layout.CanEnumerate)
         {
@@ -264,6 +277,9 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         var distance = originX == 0 && originY == 0 && originZ == 0
             ? 0
             : WorldGeometry.Distance(originX, originY, originZ, x, y, z);
+        var name = "";
+        if (layout.InstanceNameDisplacement != 0)
+            TryReadStdString(memory, instance + layout.InstanceNameDisplacement, out name);
         entity = new Entity
         {
             Vid = vid,
@@ -272,7 +288,8 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             X = x,
             Y = y,
             Z = z,
-            Distance = distance
+            Distance = distance,
+            Name = name
         };
         return true;
     }
@@ -327,15 +344,196 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 
     private static bool IsUserPointer(uint address) => address >= 0x10000 && address < 0x7FFF0000 && (address & 3) == 0;
 
-    private static GameFrame Empty(long nowMs, ProcessMemory process) =>
-        Frame(nowMs, process, null, Array.Empty<Entity>());
+    private PlayerState? ReadPlayerHud(ProcessMemory process, Entity? main)
+    {
+        var layout = _playerLayout;
+        if (layout == null || layout.PlayerSingletonRva == 0)
+            return WithFacing(PlayerFromMain(main), main);
+        if (!process.TryReadU32(process.ImageBase + layout.PlayerSingletonRva, out var player) || !IsUserPointer(player))
+            return WithFacing(PlayerFromMain(main), main);
 
-    private static GameFrame Frame(long nowMs, ProcessMemory process, Entity? main, IReadOnlyList<Entity> entities) =>
+        var name = main?.Name ?? "";
+        if (layout.PlayerNameDisplacement != 0)
+            TryReadStdString(process, player + layout.PlayerNameDisplacement, out name);
+
+        if (!TryReadHudPoints(process, player, layout, out var level, out var exp, out var nextExp, out var hp, out var maxHp, out var mp, out var maxMp))
+        {
+            if (!_loggedHud)
+            {
+                _loggedHud = true;
+                Log($"player HUD: name '{name}' but CPythonPlayer::GetStatus m_alPoint is empty; HP/MP/level stay unknown (not treated as dead)");
+            }
+        }
+        else if (!_loggedHud)
+        {
+            _loggedHud = true;
+            Log($"player HUD RPM: '{name}' lv {level} hp {hp}/{maxHp} mp {mp}/{maxMp} exp {exp}/{nextExp} (points +0x{_resolvedPointsDisp:X} xor 0x{_resolvedPointsXor:X8})");
+        }
+
+        return new PlayerState
+        {
+            Name = name,
+            Hp = hp,
+            MaxHp = maxHp,
+            Mp = mp,
+            MaxMp = maxMp,
+            X = main?.X ?? 0,
+            Y = main?.Y ?? 0,
+            Z = main?.Z ?? 0,
+            Level = level,
+            Exp = exp,
+            NextExp = nextExp,
+            FacingDeg = UpdateFacing(main)
+        };
+    }
+
+    private PlayerState? WithFacing(PlayerState? player, Entity? main) =>
+        player == null ? null : player with { FacingDeg = UpdateFacing(main) };
+
+    private float UpdateFacing(Entity? main)
+    {
+        if (main == null)
+            return _facingDeg;
+        if (_hasLastPos)
+        {
+            var dx = main.X - _lastX;
+            var dy = main.Y - _lastY;
+            if (dx * dx + dy * dy >= 16)
+                _facingDeg = (float)(Math.Atan2(dx, dy) * 180.0 / Math.PI);
+        }
+
+        _lastX = main.X;
+        _lastY = main.Y;
+        _hasLastPos = true;
+        return _facingDeg;
+    }
+
+    private static PlayerState? PlayerFromMain(Entity? main) =>
+        main == null
+            ? null
+            : new PlayerState
+            {
+                Name = main.Name,
+                Hp = main.Hp,
+                MaxHp = Math.Max(main.Hp, 1),
+                X = main.X,
+                Y = main.Y,
+                Z = main.Z
+            };
+
+    private bool TryReadHudPoints(
+        ProcessMemory process,
+        uint player,
+        PlayerActionLayout layout,
+        out int level, out int exp, out int nextExp, out int hp, out int maxHp, out int mp, out int maxMp)
+    {
+        level = exp = nextExp = hp = maxHp = mp = maxMp = 0;
+        var disp = layout.StatusPointsDisplacement;
+        if (disp == 0)
+            return false;
+
+        var magic = layout.PointXorMask != 0 ? layout.PointXorMask : PlayerHudDecoder.DefaultXor;
+        foreach (var xor in new[] { magic, 0u })
+        {
+            if (!TryHudAt(process, player, layout, disp, xor, out level, out exp, out nextExp, out hp, out maxHp, out mp, out maxMp))
+                continue;
+            _resolvedPointsDisp = disp;
+            _resolvedPointsXor = xor;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryHudAt(
+        ProcessMemory process, uint player, PlayerActionLayout layout, uint displacement, uint xor,
+        out int level, out int exp, out int nextExp, out int hp, out int maxHp, out int mp, out int maxMp)
+    {
+        level = Point(process, player, displacement, xor, layout.PointLevel);
+        exp = Point(process, player, displacement, xor, layout.PointExp);
+        nextExp = Point(process, player, displacement, xor, layout.PointNextExp);
+        hp = Point(process, player, displacement, xor, layout.PointHp);
+        maxHp = Point(process, player, displacement, xor, layout.PointMaxHp);
+        mp = Point(process, player, displacement, xor, layout.PointSp);
+        maxMp = Point(process, player, displacement, xor, layout.PointMaxSp);
+        return PlayerHudDecoder.LooksLikeHud(level, hp, maxHp, mp, maxMp, exp, nextExp);
+    }
+
+    private static int Point(ProcessMemory memory, uint player, uint displacement, uint xor, int index)
+    {
+        if (displacement == 0 || index < 0)
+            return 0;
+        if (!memory.TryReadU32(player + displacement + (uint)(index * 4), out var raw))
+            return 0;
+        return unchecked((int)(raw ^ xor));
+    }
+
+    private static bool TryReadStdString(ProcessMemory memory, uint address, out string value)
+    {
+        value = "";
+        if (!memory.TryRead(address, 24, out var raw) || raw.Length < 24)
+            return false;
+
+        var size = BitConverter.ToUInt32(raw, 16);
+        var cap = BitConverter.ToUInt32(raw, 20);
+        if (size <= 64 && cap >= 16 && cap < 0x10000)
+        {
+            var ptr = BitConverter.ToUInt32(raw, 0);
+            if (IsUserPointer(ptr) && TryReadAscii(memory, ptr, (int)size, out value))
+                return true;
+        }
+
+        if (size is > 0 and <= 15 && TryDecode(raw.AsSpan(0, (int)size), out value))
+            return true;
+
+        var oldPtr = BitConverter.ToUInt32(raw, 0);
+        var oldSize = BitConverter.ToUInt32(raw, 4);
+        if (oldSize is > 0 and <= 64 && IsUserPointer(oldPtr) && TryReadAscii(memory, oldPtr, (int)oldSize, out value))
+            return true;
+
+        return TryReadAscii(memory, address, 32, out value) ||
+               (IsUserPointer(oldPtr) && TryReadAscii(memory, oldPtr, 32, out value));
+    }
+
+    private static bool TryReadAscii(ProcessMemory memory, uint address, int count, out string value)
+    {
+        value = "";
+        var n = Math.Clamp(count, 1, 64);
+        if (!memory.TryRead(address, n, out var raw) || raw.Length == 0)
+            return false;
+        var end = 0;
+        while (end < raw.Length && raw[end] != 0)
+            end++;
+        if (end == 0)
+            return false;
+        return TryDecode(raw.AsSpan(0, end), out value);
+    }
+
+    private static bool TryDecode(ReadOnlySpan<byte> bytes, out string value)
+    {
+        value = "";
+        if (bytes.Length == 0)
+            return false;
+        foreach (var b in bytes)
+        {
+            if (b is < 32 or 127)
+                return false;
+        }
+
+        value = Encoding.Latin1.GetString(bytes);
+        return value.Length > 0;
+    }
+
+    private static GameFrame Empty(long nowMs, ProcessMemory process) =>
+        Frame(nowMs, process, null, Array.Empty<Entity>(), null);
+
+    private static GameFrame Frame(long nowMs, ProcessMemory process, Entity? main, IReadOnlyList<Entity> entities, PlayerState? player) =>
         new()
         {
             ReceivedAtMs = nowMs,
             Main = main,
             Entities = entities,
+            Player = player,
             Source = $"{process.ProcessName}:{process.ProcessId}",
             FromLiveClient = true
         };
@@ -346,6 +544,10 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         _memory = null;
         _attachedPid = -1;
         _loggedEnum = false;
+        _loggedHud = false;
+        _resolvedPointsDisp = 0;
+        _resolvedPointsXor = 0;
+        _hasLastPos = false;
         if (!string.IsNullOrEmpty(reason))
             Status = reason;
     }

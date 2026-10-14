@@ -1,0 +1,26 @@
+@page "/log"
+@implements IDisposable
+@inject FarmBotShell Shell
+
+<div class="eyebrow">Diagnostics</div>
+<div class="page-head">
+    <h1>Log</h1>
+    <div class="toolbar">
+        <span class="grid-count">@Shell.LogLines.Count lines</span>
+    </div>
+</div>
+
+<div class="log-list">
+    @foreach (var entry in Shell.LogLines)
+    {
+        <span class="log-line @entry.Level.ToLowerInvariant()">@entry.Time.ToString("HH:mm:ss")  @entry.Level.PadRight(5)  @entry.Message</span>
+    }
+</div>
+
+@code {
+    protected override void OnInitialized() => Shell.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Shell.Changed -= OnChanged;
+}

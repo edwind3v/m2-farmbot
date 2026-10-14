@@ -1,0 +1,123 @@
+@using System.Globalization
+@implements IDisposable
+@inject FarmBotShell Shell
+
+<div class="minimap-wrap">
+    <svg class="minimap" viewBox="0 0 200 200" aria-label="Farm map">
+        <circle cx="100" cy="100" r="99" fill="#0e1016" stroke="rgba(232,228,218,0.12)" />
+        <circle cx="100" cy="100" r="@N(FarmCircle)" fill="none" stroke="rgba(196,120,58,0.55)" stroke-width="1.2" />
+        @foreach (var mark in Marks)
+        {
+            <circle cx="@N(mark.X)" cy="@N(mark.Y)" r="@(mark.Target ? 4 : 2.8)" fill="@mark.Fill">
+                <title>@mark.Label</title>
+            </circle>
+            @if (mark.Target)
+            {
+                <circle cx="@N(mark.X)" cy="@N(mark.Y)" r="7" fill="none" stroke="#d9a06a" stroke-width="1.2" />
+            }
+        }
+        <g transform="rotate(@N(Facing), 100, 100)">
+            <polygon points="100,93 106,107 100,103 94,107" fill="#c4783a" />
+        </g>
+    </svg>
+    <div class="minimap-legend">
+        <span><i class="dot-mob"></i>mobs</span>
+        <span><i class="dot-stone"></i>stones</span>
+        <span><i class="dot-boss"></i>bosses</span>
+    </div>
+    <div class="radius-fields">
+        <label class="slider">
+            <span>Farm radius <b>@Shell.Config.FarmRadius.ToString("0")</b></span>
+            <input type="range" min="1000" max="8000" step="25" value="@Shell.Config.FarmRadius.ToString(CultureInfo.InvariantCulture)" @oninput="OnFarmRadius" />
+        </label>
+        <label class="slider">
+            <span>Zoom <b>@Shell.Config.MapZoom.ToString("0")</b></span>
+            <input type="range" min="20" max="100" step="1" value="@Shell.Config.MapZoom.ToString(CultureInfo.InvariantCulture)" @oninput="OnZoom" />
+        </label>
+    </div>
+</div>
+
+@code {
+    private const float FullView = 8000f;
+    private sealed record Mark(double X, double Y, string Fill, string Label, bool Target);
+
+    private IReadOnlyList<Mark> Marks => BuildMarks();
+
+    private double ViewRadius => FullView * Math.Clamp(Shell.Config.MapZoom, 20, 100) / 100.0;
+
+    private double FarmCircle => Math.Clamp(92.0 * Shell.Config.FarmRadius / ViewRadius, 4, 96);
+
+    private float Facing => Shell.View.Snapshot?.Player.FacingDeg ?? 0;
+
+    protected override void OnInitialized() => Shell.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Shell.Changed -= OnChanged;
+
+    private void OnFarmRadius(ChangeEventArgs e)
+    {
+        if (float.TryParse(Convert.ToString(e.Value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+            Shell.SetFarmRadius(value);
+    }
+
+    private void OnZoom(ChangeEventArgs e)
+    {
+        if (float.TryParse(Convert.ToString(e.Value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+            Shell.SetMapZoom(value);
+    }
+
+    private IReadOnlyList<Mark> BuildMarks()
+    {
+        var view = Shell.View;
+        var snapshot = view.Snapshot;
+        if (snapshot == null)
+            return Array.Empty<Mark>();
+
+        var player = snapshot.Player;
+        var scale = 92.0 / ViewRadius;
+        var bosses = Shell.BossVnums().ToHashSet();
+        var marks = new List<Mark>();
+        foreach (var entity in snapshot.Entities)
+        {
+            if (!TryColor(entity, bosses, out var fill))
+                continue;
+            var dx = (entity.X - player.X) * scale;
+            var dy = (entity.Y - player.Y) * scale;
+            if (dx * dx + dy * dy > 92 * 92)
+                continue;
+            var label = string.IsNullOrWhiteSpace(entity.Name)
+                ? $"{EntityMapping.TypeName(entity.ResolvedType)}  VNUM {entity.Vnum}  {entity.Distance:0}"
+                : $"{entity.Name}  VNUM {entity.Vnum}  {entity.Distance:0}";
+            marks.Add(new Mark(100 + dx, 100 - dy, fill, label, view.Target?.Vid == entity.Vid));
+        }
+
+        return marks;
+    }
+
+    private static string N(double value) => value.ToString("0.0", CultureInfo.InvariantCulture);
+
+    private static bool TryColor(EntityState entity, HashSet<uint> bosses, out string fill)
+    {
+        if (entity.Kind == EntityKind.Boss || bosses.Contains(entity.Vnum))
+        {
+            fill = "#d4a017";
+            return true;
+        }
+
+        if (entity.ResolvedType == ActorType.Stone || entity.Kind == EntityKind.Metin)
+        {
+            fill = "#ece8df";
+            return true;
+        }
+
+        if (entity.ResolvedType == ActorType.Enemy || entity.Kind == EntityKind.Monster)
+        {
+            fill = "#c45c5c";
+            return true;
+        }
+
+        fill = "";
+        return false;
+    }
+}

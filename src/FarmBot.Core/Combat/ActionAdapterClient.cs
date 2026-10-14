@@ -59,7 +59,10 @@ public sealed class ActionAdapterClient : IDisposable
     public ActionResponse SetTarget(uint vid, bool force = true) =>
         Submit(ActionProtocol.SetTarget, vid, force);
 
-    public ActionResponse Submit(string type, uint vid = 0, bool force = true)
+    public ActionResponse Submit(string type, uint vid = 0, bool force = true) =>
+        Submit(type, vid, force, updateStatus: true);
+
+    public ActionResponse Submit(string type, uint vid, bool force, bool updateStatus)
     {
         lock (_gate)
         {
@@ -74,9 +77,13 @@ public sealed class ActionAdapterClient : IDisposable
             }
 
             var response = ActionProtocol.DecodeResponse(payload);
-            Status = response.Ok
-                ? $"{type} ok vid={response.TargetVid}"
-                : type + " rejected: " + response.Reason;
+            if (updateStatus)
+            {
+                Status = response.Ok
+                    ? $"{type} ok vid={response.TargetVid}"
+                    : type + " rejected: " + response.Reason;
+            }
+
             return response;
         }
     }
@@ -151,6 +158,19 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         if (type.Length == 0)
             return false;
         return _client.Submit(type, action.Vid).Ok;
+    }
+
+    public bool TryReadHud(out PlayerHudPoints hud)
+    {
+        hud = default;
+        Ensure();
+        if (!_client.Connected)
+            return false;
+        var response = _client.Submit(ActionProtocol.GetHud, 0, true, updateStatus: false);
+        if (!response.Ok || response.MaxHp <= 0 || response.Level is < 1 or > 250)
+            return false;
+        hud = new PlayerHudPoints(response.Level, response.Exp, response.NextExp, response.Hp, response.MaxHp, response.Mp, response.MaxMp);
+        return true;
     }
 
     public bool TryConnect(int timeoutMs = 800)

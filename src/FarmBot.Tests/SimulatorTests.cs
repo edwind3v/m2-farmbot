@@ -34,4 +34,23 @@ public class SimulatorTests
         Assert.Contains(log.Entries, entry => entry.Message.StartsWith("attack ", StringComparison.OrdinalIgnoreCase) && entry.Message.Contains("vid=1"));
         runtime.Dispose();
     }
+
+    [Fact]
+    public void RepresentativeWorldFillsHudAndColoredMapEntities()
+    {
+        var world = new SimulatedWorld();
+        var snapshot = world.GetSnapshot(0);
+        Assert.NotNull(snapshot);
+        Assert.Equal("Simulator", snapshot!.Player.Name);
+        Assert.Equal(35, snapshot.Player.Level);
+        Assert.Equal(12400, snapshot.Player.Exp);
+        Assert.Equal(18000, snapshot.Player.NextExp);
+        Assert.Equal(800, snapshot.Player.Hp);
+        Assert.Equal(1000, snapshot.Player.MaxHp);
+        Assert.Equal(120, snapshot.Player.Mp);
+        Assert.Equal(200, snapshot.Player.MaxMp);
+        Assert.Contains(snapshot.Entities, item => item.Kind == EntityKind.Monster && item.Name == "Wild Dog");
+        Assert.Contains(snapshot.Entities, item => item.Kind == EntityKind.Metin && item.Vnum == 8001);
+        Assert.Contains(snapshot.Entities, item => item.Kind == EntityKind.Boss && item.Name == "Alpha Wolf");
+    }
 }

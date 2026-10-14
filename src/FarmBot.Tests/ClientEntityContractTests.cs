@@ -1,4 +1,5 @@
 using FarmBot.Core.Entities;
+using FarmBot.Core.Models;
 using FarmBot.Platform.Client;
 
 namespace FarmBot.Tests;
@@ -53,5 +54,56 @@ public class ClientEntityContractTests
         Assert.Null(empty);
         Assert.Null(snapshot);
         Assert.Contains("not found", provider.Status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ToSnapshotKeepsLiveHudFields()
+    {
+        var frame = new GameFrame
+        {
+            Main = new Entity { Name = "Body", X = 10, Y = 20, Hp = 1 },
+            Player = new PlayerState
+            {
+                Name = "Hero",
+                Level = 35,
+                Exp = 12400,
+                NextExp = 18000,
+                Hp = 800,
+                MaxHp = 1000,
+                Mp = 120,
+                MaxMp = 200,
+                FacingDeg = 45
+            },
+            Entities = Array.Empty<Entity>()
+        };
+
+        var snapshot = EntityMapping.ToSnapshot(frame);
+        Assert.Equal("Hero", snapshot.Player.Name);
+        Assert.Equal(35, snapshot.Player.Level);
+        Assert.Equal(12400, snapshot.Player.Exp);
+        Assert.Equal(18000, snapshot.Player.NextExp);
+        Assert.Equal(800, snapshot.Player.Hp);
+        Assert.Equal(1000, snapshot.Player.MaxHp);
+        Assert.Equal(120, snapshot.Player.Mp);
+        Assert.Equal(200, snapshot.Player.MaxMp);
+        Assert.Equal(10, snapshot.Player.X);
+        Assert.Equal(20, snapshot.Player.Y);
+        Assert.Equal(45, snapshot.Player.FacingDeg);
+    }
+
+    [Fact]
+    public void ToSnapshotDoesNotInventHpWhenHudIsUnknown()
+    {
+        var frame = new GameFrame
+        {
+            Main = new Entity { Name = "Hero", Hp = 1, X = 1, Y = 2 },
+            Player = new PlayerState { Name = "Hero", Hp = 0, MaxHp = 0 },
+            Entities = Array.Empty<Entity>()
+        };
+
+        var snapshot = EntityMapping.ToSnapshot(frame);
+        Assert.Equal("Hero", snapshot.Player.Name);
+        Assert.Equal(0, snapshot.Player.Hp);
+        Assert.Equal(0, snapshot.Player.MaxHp);
     }
 }

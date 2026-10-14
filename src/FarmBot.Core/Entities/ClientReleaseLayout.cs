@@ -29,6 +29,7 @@ public sealed record ReleaseLayout(
     uint NodeIsNil,
     uint NodeKey,
     uint NodeValue,
+    uint InstanceNameDisplacement,
     IReadOnlyList<ReleaseMethod> Methods,
     IReadOnlyList<string> Evidence)
 {
@@ -67,9 +68,9 @@ public static class ClientReleaseLayout
         var singleton = FindSingletonRva(pe, methods, evidence);
         var mainDisp = FindMainPointerDisplacement(pe, methods, evidence);
 
-        uint graphic = 0, race = 0, vnum = 0, actorType = 0, selfVid = 0, px = 0, py = 0, pz = 0;
+        uint graphic = 0, race = 0, vnum = 0, actorType = 0, selfVid = 0, px = 0, py = 0, pz = 0, instanceName = 0;
         var negateY = false;
-        RecoverInstanceFields(pe, methods, evidence, ref graphic, ref race, ref vnum, ref actorType, ref selfVid, ref px, ref py, ref pz, ref negateY);
+        RecoverInstanceFields(pe, methods, evidence, ref graphic, ref race, ref vnum, ref actorType, ref selfVid, ref px, ref py, ref pz, ref negateY, ref instanceName);
 
         uint nodeLeft = 0, nodeParent = 4, nodeRight = 8, nodeIsNil = 0, nodeKey = 0, nodeValue = 0;
         RecoverMapNode(pe, create, evidence, ref nodeLeft, ref nodeParent, ref nodeRight, ref nodeIsNil, ref nodeKey, ref nodeValue);
@@ -103,6 +104,7 @@ public static class ClientReleaseLayout
             nodeIsNil,
             nodeKey,
             nodeValue,
+            instanceName,
             methods,
             evidence);
     }
@@ -112,7 +114,8 @@ public static class ClientReleaseLayout
         var names = new[]
         {
             "GetPixelPosition", "GetInstanceType", "GetRace", "GetVirtualNumber",
-            "HasInstance", "GetMainCharacterPosition", "GetMainVID", "GetVID"
+            "HasInstance", "GetMainCharacterPosition", "GetMainVID", "GetVID",
+            "GetNameByVID"
         };
         var list = new List<ReleaseMethod>();
         foreach (var name in names)
@@ -244,7 +247,8 @@ public static class ClientReleaseLayout
         ref uint px,
         ref uint py,
         ref uint pz,
-        ref bool negateY)
+        ref bool negateY,
+        ref uint instanceName)
     {
         var typeWrap = FollowAfterGetInstancePtr(pe, methods, "GetInstanceType", evidence);
         var raceWrap = FollowAfterGetInstancePtr(pe, methods, "GetRace", evidence);
@@ -263,6 +267,7 @@ public static class ClientReleaseLayout
 
         actorType = FollowGraphicMember(pe, typeFn, graphic, evidence, "m_eActorType");
         RecoverPixelFields(pe, posFn, graphic, evidence, ref px, ref py, ref pz, ref negateY);
+        instanceName = RecoverInstanceName(pe, methods, evidence);
     }
 
     private static uint FollowAfterGetInstancePtr(MappedPe pe, IReadOnlyList<ReleaseMethod> methods, string name, List<string> evidence)
@@ -480,6 +485,84 @@ public static class ClientReleaseLayout
         return 0;
     }
 
+    private static uint RecoverInstanceName(MappedPe pe, IReadOnlyList<ReleaseMethod> methods, List<string> evidence)
+    {
+        var method = methods.FirstOrDefault(item => item.Name == "GetNameByVID");
+        if (method == null)
+        {
+            evidence.Add("GetNameByVID Python method was not recovered.");
+            return 0;
+        }
+
+        var off = pe.VaToFile(pe.ImageBase + method.FunctionRva);
+        if (off < 0)
+            return 0;
+        var reserved = new HashSet<uint> { 0x174, 0x178, 0x17C, 0x1EC };
+        for (var i = off; i < off + 0xC0 && i + 6 < pe.Length; i++)
+        {
+            var callOff = i;
+            if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0xC8 && pe.Byte(i + 2) == 0xE8)
+                callOff = i + 2;
+            else if (pe.Byte(i) != 0xE8 && pe.Byte(i) != 0xE9)
+                continue;
+            var target = (uint)(pe.FileToVa(callOff + 5) + pe.ReadI32(callOff + 1));
+            if (target < pe.ImageBase)
+                continue;
+            var body = FollowJmp(pe, SkipInt3(pe, target - pe.ImageBase));
+            var disp = StdStringDisplacement(pe, body);
+            if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0xC8)
+                evidence.Add($"GetNameString RVA 0x{body:X} bytes={pe.Hex(pe.ImageBase + body, 24)} disp=0x{disp:X}.");
+            if (disp == 0 || reserved.Contains(disp) || disp is < 0x10 or > 0x8000)
+                continue;
+            evidence.Add($"CInstanceBase::m_stName at +0x{disp:X} from GetNameByVID call RVA 0x{body:X}.");
+            return disp;
+        }
+
+        evidence.Add("CInstanceBase::m_stName displacement was not recovered; minimap tooltips will use VNUM.");
+        return 0;
+    }
+
+    private static uint FollowJmp(MappedPe pe, uint rva)
+    {
+        if (rva == 0)
+            return 0;
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        if (off < 0)
+            return rva;
+        if (pe.Byte(off) == 0xE9)
+        {
+            var dest = (uint)(pe.FileToVa(off + 5) + pe.ReadI32(off + 1));
+            if (dest > pe.ImageBase)
+                return SkipInt3(pe, dest - pe.ImageBase);
+        }
+
+        return rva;
+    }
+
+    private static uint StdStringDisplacement(MappedPe pe, uint rva)
+    {
+        if (rva == 0)
+            return 0;
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        if (off < 0)
+            return 0;
+        for (var i = off; i < off + 0x30 && i + 6 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0x8D && (pe.Byte(i + 1) == 0x81 || pe.Byte(i + 1) == 0x89))
+                return pe.ReadU32(i + 2);
+            if (pe.Byte(i) == 0x8D && (pe.Byte(i + 1) == 0x41 || pe.Byte(i + 1) == 0x49))
+                return pe.Byte(i + 2);
+            if (pe.Byte(i) == 0x81 && pe.Byte(i + 1) == 0xC1)
+                return pe.ReadU32(i + 2);
+            if (pe.Byte(i) == 0x83 && pe.Byte(i + 1) == 0xC1)
+                return pe.Byte(i + 2);
+            if (pe.Byte(i) == 0x83 && pe.Byte(i + 1) == 0xB9 && pe.Byte(i + 6) == 0x10)
+                return pe.ReadU32(i + 2) - 16;
+        }
+
+        return 0;
+    }
+
     private static uint FirstAddEcX(MappedPe pe, uint rva, List<string> evidence, string label)
     {
         if (rva == 0)
@@ -496,10 +579,31 @@ public static class ClientReleaseLayout
                 return disp;
             }
 
+            if (pe.Byte(i) == 0x8D && pe.Byte(i + 1) == 0x81)
+            {
+                var disp = pe.ReadU32(i + 2);
+                evidence.Add($"{label}: lea ecx,[ecx+0x{disp:X}] at RVA 0x{rva:X}.");
+                return disp;
+            }
+
+            if (pe.Byte(i) == 0x8D && pe.Byte(i + 1) == 0x89)
+            {
+                var disp = pe.ReadU32(i + 2);
+                evidence.Add($"{label}: lea ecx,[ecx+0x{disp:X}] at RVA 0x{rva:X}.");
+                return disp;
+            }
+
             if (pe.Byte(i) == 0x83 && pe.Byte(i + 1) == 0xC1)
             {
                 var disp = pe.Byte(i + 2);
                 evidence.Add($"{label}: add ecx, 0x{disp:X} at RVA 0x{rva:X}.");
+                return disp;
+            }
+
+            if (pe.Byte(i) == 0x8D && pe.Byte(i + 1) == 0x49)
+            {
+                var disp = pe.Byte(i + 2);
+                evidence.Add($"{label}: lea ecx,[ecx+0x{disp:X}] at RVA 0x{rva:X}.");
                 return disp;
             }
         }
@@ -696,6 +800,15 @@ public static class ClientReleaseLayout
             }
 
             return siteVa;
+        }
+
+        public string Hex(uint va, int count)
+        {
+            var off = VaToFile(va);
+            if (off < 0)
+                return "";
+            var n = Math.Min(count, Length - off);
+            return Convert.ToHexString(_bytes, off, n);
         }
 
         public byte Byte(int file) => file >= 0 && file < _bytes.Length ? _bytes[file] : (byte)0;

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="night">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="/" />
+    <title>FarmBot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@400;500;600;650&display=swap" rel="stylesheet" />
+    <link href="admin.css" rel="stylesheet" />
+    <link href="farmbot.css" rel="stylesheet" />
+</head>
+<body>
+    <div id="app">Loading console…</div>
+    <script>
+        window.adminTheme = {
+            apply: function (id) {
+                document.documentElement.setAttribute('data-theme', id || 'night');
+            }
+        };
+    </script>
+    <script src="_framework/blazor.webview.js"></script>
+</body>
+</html>

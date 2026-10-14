@@ -1,0 +1,482 @@
+using FarmBot.Core.Bot;
+using FarmBot.Core.Combat;
+using FarmBot.Core.Configuration;
+using FarmBot.Core.Entities;
+using FarmBot.Core.Input;
+using FarmBot.Core.Ipc;
+using FarmBot.Core.Logging;
+using FarmBot.Core.Models;
+using FarmBot.Core.Perception;
+using FarmBot.Platform.Client;
+using FarmBot.Platform.Input;
+using FarmBot.Platform.Window;
+
+namespace FarmBot;
+
+public sealed class FarmBotShell : IDisposable
+{
+    private readonly string _configPath;
+    private readonly object _configGate = new();
+    private readonly FileBotLog _log;
+    private readonly List<BotLogEntry> _logLines = new();
+    private BotConfig _config;
+    private BotRuntime? _runtime;
+    private PipeHost? _pipe;
+    private IGameStateProvider? _provider;
+    private ActionModuleHost? _actionHost;
+    private AdapterActionSink? _actionSink;
+    private bool _live;
+    private PlayerHudPoints? _hud;
+    private long _hudAt;
+
+    public FarmBotShell()
+    {
+        _configPath = ConfigStore.DefaultPath(AppContext.BaseDirectory);
+        _config = ConfigStore.LoadOrCreate(_configPath);
+        _config.MaxFarmDistance = 8000;
+        SyncTextsFromConfig();
+        _log = new FileBotLog(Path.Combine(AppContext.BaseDirectory, "logs"));
+        _log.Written += OnLogWritten;
+        WireRuntime();
+        _runtime?.StartLoop();
+        View = _runtime?.Capture() ?? new BotView(false, BotPhase.Stopped, "stopped", null, null);
+        _log.Info("FarmBot ready. Live mode: Attach or Launch the local client, then Start.");
+    }
+
+    public event Action? Changed;
+    public Func<string?>? PickClientPath { get; set; }
+
+    public BotConfig Config
+    {
+        get { lock (_configGate) return _config; }
+    }
+
+    public BotView View { get; private set; }
+    public IReadOnlyList<ClientProcessInfo> Clients { get; private set; } = Array.Empty<ClientProcessInfo>();
+    public int SelectedClientPid { get; set; }
+    public bool IsLive => _live;
+    public bool CompanionConnected => _actionSink?.Available == true;
+
+    public int ModeIndex
+    {
+        get => _live ? 1 : 0;
+        set => SetLive(value > 0);
+    }
+
+    public string IncludeVnumsText { get; set; } = "";
+    public string ExcludeVnumsText { get; set; } = "";
+    public string BlacklistText { get; set; } = "";
+    public string WindowTitleText { get; set; } = "";
+    public string InputModeText { get; set; } = "Auto";
+
+    public IReadOnlyList<BotLogEntry> LogLines
+    {
+        get
+        {
+            lock (_logLines)
+                return _logLines.ToArray();
+        }
+    }
+
+    public string CompanionStatus =>
+        !_live ? "simulator"
+        : CompanionConnected ? _actionSink!.Status
+        : _actionHost?.Status ?? "companion not loaded";
+
+    public string StatusLine
+    {
+        get
+        {
+            var view = View;
+            var target = view.Target == null
+                ? "no target"
+                : $"VID {view.Target.Vid}  {EntityMapping.TypeName(view.Target.ResolvedType)}  {view.Target.Distance:0}";
+            return view.Enabled
+                ? $"{view.CombatState}  ·  {target}  ·  {view.Reason}"
+                : $"{view.Phase}  ·  {view.Reason}";
+        }
+    }
+
+    public string StatusKind =>
+        View.Phase == BotPhase.Failsafe ? "fail" : View.Enabled ? "run" : "";
+
+    public void SetFarmRadius(float value)
+    {
+        lock (_configGate)
+            _config.FarmRadius = Math.Clamp(value, 1000, 8000);
+        Notify();
+    }
+
+    public void SetMapZoom(float value)
+    {
+        lock (_configGate)
+            _config.MapZoom = Math.Clamp(value, 20, 100);
+        Notify();
+    }
+
+    public IReadOnlyList<uint> BossVnums()
+    {
+        lock (_configGate)
+            return _config.TargetRules
+                .Where(item => item.Kind == EntityKind.Boss && item.Vnum != 0)
+                .Select(item => item.Vnum)
+                .ToList();
+    }
+
+    public void Tick()
+    {
+        try
+        {
+            if (_live)
+                RefreshClientList();
+            var runtime = _runtime;
+            if (runtime == null)
+                return;
+            View = OverlayHud(runtime.Capture());
+            Notify();
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"ui refresh failed: {ex.Message}");
+        }
+    }
+
+    public void SetLive(bool live)
+    {
+        if (_live == live)
+            return;
+        if (_runtime?.Capture().Enabled == true)
+            _runtime.Stop();
+        PullConfig();
+        _live = live;
+        WireRuntime();
+        _runtime?.StartLoop();
+        _log.Info(live
+            ? "live client mode — Attach or Launch, then Start"
+            : "simulator mode");
+        Tick();
+    }
+
+    public void AttachSelectedClient()
+    {
+        RefreshClientList();
+        if (_actionHost == null || _actionSink == null)
+        {
+            _log.Warn("switch to Live client first");
+            return;
+        }
+
+        var client = Clients.FirstOrDefault(item => item.ProcessId == SelectedClientPid);
+        if (client == null)
+        {
+            _log.Warn("no running Metin2 client to attach");
+            return;
+        }
+
+        if (!_actionHost.TryAttach(client.ProcessId, out var status))
+        {
+            _log.Error(status);
+            return;
+        }
+
+        if (!_actionHost.WaitUntilListening(_actionSink))
+        {
+            _log.Error("companion loaded but pipe did not accept auth: " + _actionSink.Status);
+            return;
+        }
+
+        _log.Info($"companion attached to PID {client.ProcessId}: {_actionSink.Status}");
+        Notify();
+    }
+
+    public void LaunchClient()
+    {
+        if (_actionHost == null || _actionSink == null)
+        {
+            _log.Warn("switch to Live client first");
+            return;
+        }
+
+        var path = _config.ClientPath;
+        if (!File.Exists(path))
+        {
+            path = PickClientPath?.Invoke() ?? "";
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                return;
+            lock (_configGate)
+                _config.ClientPath = path;
+        }
+
+        if (!_actionHost.TryLaunch(path, out var status))
+        {
+            _log.Error(status);
+            return;
+        }
+
+        if (!_actionHost.WaitUntilListening(_actionSink))
+        {
+            _log.Error("client launched but companion pipe did not accept auth: " + _actionSink.Status);
+            return;
+        }
+
+        RefreshClientList();
+        _log.Info($"companion launched {path}: {_actionSink.Status}");
+        Notify();
+    }
+
+    public void StartBot()
+    {
+        PullConfig();
+        var snapshot = _runtime?.Capture().Snapshot;
+        if (_config.LockCenterOnStart && snapshot != null)
+        {
+            lock (_configGate)
+            {
+                _config.FarmCenterX = snapshot.Player.X;
+                _config.FarmCenterY = snapshot.Player.Y;
+            }
+        }
+
+        if (_live && !EnsureCompanion())
+            return;
+
+        ConfigStore.Save(_configPath, _config);
+        _runtime?.SetEnabled(true);
+        _log.Info("bot started");
+        Tick();
+    }
+
+    public void StopBot() => _runtime?.Stop();
+
+    public void ToggleRun()
+    {
+        if (_runtime?.Capture().Enabled == true)
+            _runtime.Stop();
+        else
+            StartBot();
+    }
+
+    public void Panic() => _runtime?.Panic();
+
+    public void SaveSettings()
+    {
+        PullConfig();
+        ConfigStore.Save(_configPath, _config);
+        _log.Info($"settings saved to {_configPath}");
+        Notify();
+    }
+
+    public void PersistOnExit()
+    {
+        try
+        {
+            PullConfig();
+            ConfigStore.Save(_configPath, _config);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"could not save config: {ex.Message}");
+        }
+    }
+
+    public void AddRule()
+    {
+        lock (_configGate)
+            _config.TargetRules.Add(new TargetRule { Kind = EntityKind.Monster, Priority = 10 });
+        Notify();
+    }
+
+    public void RemoveRule(TargetRule rule)
+    {
+        lock (_configGate)
+            _config.TargetRules.Remove(rule);
+        Notify();
+    }
+
+    public void AddSkill()
+    {
+        lock (_configGate)
+            _config.Skills.Add(new SkillSetting());
+        Notify();
+    }
+
+    public void RemoveSkill(SkillSetting skill)
+    {
+        lock (_configGate)
+            _config.Skills.Remove(skill);
+        Notify();
+    }
+
+    public void Dispose()
+    {
+        _log.Written -= OnLogWritten;
+        _runtime?.Stop();
+        _runtime?.Dispose();
+        if (_provider is IDisposable disposable)
+            disposable.Dispose();
+        _pipe?.Dispose();
+        _actionSink?.Dispose();
+    }
+
+    private BotView OverlayHud(BotView view)
+    {
+        if (_actionSink != null && Environment.TickCount64 - _hudAt >= 350)
+        {
+            _hudAt = Environment.TickCount64;
+            if (_actionSink.TryReadHud(out var hud))
+                _hud = hud;
+        }
+
+        if (_hud is not { } cached)
+            return view;
+        var snapshot = view.Snapshot;
+        if (snapshot == null)
+            return view;
+        return view with
+        {
+            Snapshot = snapshot with
+            {
+                Player = snapshot.Player with
+                {
+                    Level = cached.Level,
+                    Exp = cached.Exp,
+                    NextExp = cached.NextExp,
+                    Hp = cached.Hp,
+                    MaxHp = cached.MaxHp,
+                    Mp = cached.Mp,
+                    MaxMp = cached.MaxMp
+                }
+            }
+        };
+    }
+
+    private bool EnsureCompanion()
+    {
+        if (_actionSink?.Available == true)
+            return true;
+        RefreshClientList();
+        if (Clients.Any(item => item.ProcessId == SelectedClientPid))
+        {
+            AttachSelectedClient();
+            if (_actionSink?.Available == true)
+                return true;
+        }
+
+        _log.Error("companion is not connected. Attach a running client or Launch the original exe first.");
+        return false;
+    }
+
+    private void WireRuntime()
+    {
+        _runtime?.Dispose();
+        if (_provider is IDisposable disposable)
+            disposable.Dispose();
+        _provider = null;
+        _actionSink?.Dispose();
+        _actionSink = null;
+        _actionHost = null;
+        _pipe?.Dispose();
+        _pipe = null;
+
+        if (!_live)
+        {
+            var world = new SimulatedWorld();
+            _provider = world;
+            _runtime = new BotRuntime(world, world, _log, CopyConfig, () => false);
+            return;
+        }
+
+        var live = new LiveGameStateProvider(_log);
+        _provider = live;
+        _actionHost = new ActionModuleHost();
+        _actionSink = new AdapterActionSink(_actionHost.PipeName, _actionHost.Token);
+        RefreshClientList();
+        var native = new NativeGameControl(_actionSink, _log);
+        _runtime = new BotRuntime(
+            live,
+            native,
+            _log,
+            CopyConfig,
+            () => CursorProbe.IsInTopLeftCorner(),
+            nativeCombat: true,
+            _actionSink);
+    }
+
+    private void RefreshClientList()
+    {
+        var selected = SelectedClientPid;
+        var clients = ActionModuleHost.ListClients();
+        Clients = clients;
+        if (clients.Count == 0)
+        {
+            SelectedClientPid = 0;
+            return;
+        }
+
+        if (clients.Any(item => item.ProcessId == selected))
+            SelectedClientPid = selected;
+        else
+            SelectedClientPid = clients[0].ProcessId;
+    }
+
+    private void PullConfig()
+    {
+        lock (_configGate)
+        {
+            _config.IncludeVnums = ParseUints(IncludeVnumsText);
+            _config.ExcludeVnums = ParseUints(ExcludeVnumsText);
+            _config.NameBlacklist = Split(BlacklistText);
+            _config.WindowTitleContains = Split(WindowTitleText);
+            _config.InputMode = InputModeText switch
+            {
+                "IPC" => InputMode.Ipc,
+                "SendInput" => InputMode.SendInput,
+                _ => InputMode.Auto
+            };
+            _config.LootBeforeNextTarget = _config.LootEnabled;
+            _config.MaxFarmDistance = 8000;
+            _config.Sanitize();
+        }
+    }
+
+    private BotConfig CopyConfig()
+    {
+        lock (_configGate)
+            return _config.DeepCopy();
+    }
+
+    private void SyncTextsFromConfig()
+    {
+        IncludeVnumsText = string.Join(", ", _config.IncludeVnums);
+        ExcludeVnumsText = string.Join(", ", _config.ExcludeVnums);
+        BlacklistText = string.Join(", ", _config.NameBlacklist);
+        WindowTitleText = string.Join(", ", _config.WindowTitleContains);
+        InputModeText = _config.InputMode switch
+        {
+            InputMode.Ipc => "IPC",
+            InputMode.SendInput => "SendInput",
+            _ => "Auto"
+        };
+    }
+
+    private void OnLogWritten(BotLogEntry entry)
+    {
+        lock (_logLines)
+        {
+            _logLines.Add(entry);
+            if (_logLines.Count > 400)
+                _logLines.RemoveRange(0, _logLines.Count - 300);
+        }
+
+        Notify();
+    }
+
+    private void Notify() => Changed?.Invoke();
+
+    private static List<uint> ParseUints(string text) =>
+        Split(text).Select(item => uint.TryParse(item, out var value) ? value : 0).Where(value => value != 0).ToList();
+
+    private static List<string> Split(string text) =>
+        (text ?? "").Split(new[] { ',', ';', '\n' }, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+}

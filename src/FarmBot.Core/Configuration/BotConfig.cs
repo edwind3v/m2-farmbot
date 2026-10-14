@@ -67,7 +67,8 @@ public sealed class BotConfig
     public bool IgnorePlayers { get; set; } = true;
     public bool HuntMonsters { get; set; } = true;
     public bool HuntStones { get; set; } = true;
-    public float MaxFarmDistance { get; set; } = 1500;
+    public float MaxFarmDistance { get; set; } = 8000;
+    public float MapZoom { get; set; } = 100;
     public List<uint> IncludeVnums { get; set; } = new();
     public List<uint> ExcludeVnums { get; set; } = new();
     public List<string> NameBlacklist { get; set; } = new();
@@ -132,6 +133,7 @@ public sealed class BotConfig
         HealHpPercent = Math.Clamp(HealHpPercent, 0, 100);
         FarmRadius = Math.Max(0, FarmRadius);
         MaxFarmDistance = Math.Max(0, MaxFarmDistance);
+        MapZoom = Math.Clamp(MapZoom <= 0 ? 100 : MapZoom, 20, 100);
         IncludeVnums ??= new List<uint>();
         ExcludeVnums ??= new List<uint>();
         LootRange = Math.Max(0, LootRange);

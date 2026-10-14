@@ -1,3 +1,5 @@
+using FarmBot.Core.Models;
+
 namespace FarmBot.Core.Entities;
 
 public sealed record Entity
@@ -24,6 +26,7 @@ public sealed record GameFrame
     public long ReceivedAtMs { get; init; }
     public Entity? Main { get; init; }
     public IReadOnlyList<Entity> Entities { get; init; } = Array.Empty<Entity>();
+    public PlayerState? Player { get; init; }
     public string Source { get; init; } = "";
     public bool FromLiveClient { get; init; }
 }

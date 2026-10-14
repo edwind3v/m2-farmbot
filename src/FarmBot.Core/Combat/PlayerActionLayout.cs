@@ -13,11 +13,24 @@ public sealed record PlayerActionLayout(
     uint SetTargetThisAdjustment,
     uint SetTargetVtableSlot,
     string SetTargetPrologue,
+    uint StatusPointsDisplacement,
+    uint PlayerNameDisplacement,
+    uint PointXorMask,
     IReadOnlyList<string> Evidence)
 {
     public bool HasSetTarget =>
         PlayerSingletonRva is > 0x1000 and < 0x800000 &&
         (SetTargetVtableSlot != 0 || SetTargetRva is > 0 and < 0x800000);
+
+    public bool HasPlayerHud => StatusPointsDisplacement != 0 || PlayerNameDisplacement != 0;
+
+    public int PointLevel { get; init; } = 1;
+    public int PointExp { get; init; } = 3;
+    public int PointNextExp { get; init; } = 4;
+    public int PointHp { get; init; } = 5;
+    public int PointMaxHp { get; init; } = 6;
+    public int PointSp { get; init; } = 7;
+    public int PointMaxSp { get; init; } = 8;
 }
 
 public static class PlayerActionLayoutRecoverer
@@ -45,6 +58,8 @@ public static class PlayerActionLayoutRecoverer
 
         var setTargetRva = virt.slot == 0 ? setTarget.native : 0;
         var prologue = virt.slot == 0 ? pe.Hex(pe.ImageBase + setTarget.native, 16) : "";
+        var hud = RecoverPlayerHud(pe, singleton, evidence);
+        var points = RecoverPointIds(pe, evidence);
 
         evidence.Add("MSVC x86 thiscall: ecx=CPythonPlayer*, args right-to-left, callee pops.");
         evidence.Add("SetTarget(DWORD vid, BOOL force=TRUE): thiscall, ret 8. Requires main actor, CanChangeTarget, live targetable VID. Sends target packet only.");
@@ -56,7 +71,16 @@ public static class PlayerActionLayoutRecoverer
         evidence.Add("An adapter pipe worker is not that thread. SetTarget must not be thiscall'd from it.");
         evidence.Add("Release RVAs are recovered from METH_VARARGS wrappers. Debug 0x4EA* addresses are not used.");
 
-        return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKey.native, combo.native, targetDisp, virt.thisAdj, virt.slot, prologue, evidence);
+        return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKey.native, combo.native, targetDisp, virt.thisAdj, virt.slot, prologue, hud.points, hud.name, hud.xor, evidence)
+        {
+            PointLevel = points.level,
+            PointExp = points.exp,
+            PointNextExp = points.next,
+            PointHp = points.hp,
+            PointMaxHp = points.maxHp,
+            PointSp = points.sp,
+            PointMaxSp = points.maxSp
+        };
     }
 
     private static uint PreferInImage(ActionPe pe, params uint[] rvas)
@@ -328,6 +352,402 @@ public static class PlayerActionLayoutRecoverer
         }
 
         return rva;
+    }
+
+    private static (int level, int exp, int next, int hp, int maxHp, int sp, int maxSp) RecoverPointIds(ActionPe pe, List<string> evidence)
+    {
+        var next = ReadModuleInt(pe, "NEXT_EXP");
+        var maxHp = ReadModuleInt(pe, "MAX_HP");
+        var maxSp = ReadModuleInt(pe, "MAX_SP");
+        if (next is > 0 and < 64 && maxHp is > 0 and < 64 && maxSp is > 0 and < 64)
+        {
+            var hp = maxHp.Value - 1;
+            var exp = next.Value - 1;
+            var level = next.Value - 3;
+            if (level < 1)
+                level = 1;
+            evidence.Add($"Python player.GetStatus ids: LEVEL={level} EXP={exp} NEXT_EXP={next} HP={hp} MAX_HP={maxHp} SP={maxSp.Value - 1} MAX_SP={maxSp}.");
+            return (level, exp, next.Value, hp, maxHp.Value, maxSp.Value - 1, maxSp.Value);
+        }
+
+        evidence.Add("Python POINT_* module constants were not recovered; using official LEVEL=1 EXP=3 HP=5 SP=7.");
+        return (1, 3, 4, 5, 6, 7, 8);
+    }
+
+    private static int? ReadModuleInt(ActionPe pe, string name)
+    {
+        foreach (var va in pe.FindAsciiZ(name))
+        {
+            foreach (var xref in pe.FindImmediateXrefs(va))
+            {
+                var off = pe.VaToFile(xref);
+                if (off < 0)
+                    continue;
+                for (var k = 1; k <= 24 && off - k >= 1; k++)
+                {
+                    if (pe.Byte(off - k) == 0x6A)
+                        return pe.Byte(off - k + 1);
+                    if (pe.Byte(off - k) == 0x68)
+                    {
+                        var imm = pe.ReadU32(off - k + 1);
+                        if (imm is > 0 and < 64)
+                            return (int)imm;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static (uint points, uint name, uint xor) RecoverPlayerHud(ActionPe pe, uint singletonRva, List<string> evidence)
+    {
+        const uint knownMagic = 0xE73AC1DA;
+        var xor = knownMagic;
+        uint pointRel = 0;
+        uint getPointVa = 0;
+        foreach (var site in pe.FindImmediateXrefs(knownMagic))
+        {
+            var off = pe.VaToFile(site);
+            if (off < 0)
+                continue;
+            var window = Math.Max(0, off - 24);
+            for (var i = window; i < off + 8 && i + 7 < pe.Length; i++)
+            {
+                if (!TryScaledIndex(pe, i, out var disp))
+                    continue;
+                if (pe.Byte(i) == 0x89)
+                    continue;
+                pointRel = disp;
+                getPointVa = pe.FileToVa(FunctionStart(pe, i));
+                evidence.Add($"GetPoint/GetStatus xor 0x{knownMagic:X8} loads [ecx+index*4+0x{disp:X}] at VA 0x{pe.FileToVa(i):X}.");
+                break;
+            }
+
+            if (pointRel != 0)
+                break;
+        }
+
+        var points = pointRel;
+        uint getStatusVa = 0;
+        if (getPointVa != 0)
+        {
+            var status = FindGetStatusThisAdjustment(pe, getPointVa, evidence);
+            if (status.disp != 0)
+            {
+                // IAbstractPlayer is at CPythonPlayer+4; the virtual GetStatus this is already +4.
+                const uint abstractThis = 4;
+                points = abstractThis + status.disp + pointRel;
+                getStatusVa = status.functionVa;
+                evidence.Add($"CPythonPlayer::GetStatus (VA 0x{getStatusVa:X}) adjusts IAbstractPlayer this by +0x{status.disp:X}; m_alPoint is CPythonPlayer+0x{points:X}.");
+            }
+            else
+                evidence.Add($"GetStatus this-adjust was not found; using GetPoint displacement 0x{pointRel:X} as CPythonPlayer-relative.");
+        }
+
+        var name = RecoverPlayerNameDisplacement(pe, singletonRva, getPointVa, getStatusVa, evidence);
+        if (points != 0)
+            evidence.Add($"Player HUD RPM: name @ +0x{name:X}, m_alPoint @ +0x{points:X}, xor 0x{xor:X8}.");
+        else
+            evidence.Add("Player HUD status-point displacement was not recovered.");
+        return (points, name, xor);
+    }
+
+    private static bool TryScaledIndex(ActionPe pe, int off, out uint disp)
+    {
+        disp = 0;
+        // mov r32, [ecx+r32*4+disp32]  8B / 89  84  81/8E/8A/8B/88/89
+        if ((pe.Byte(off) == 0x8B || pe.Byte(off) == 0x89) && pe.Byte(off + 1) == 0x84 &&
+            (pe.Byte(off + 2) & 0xC7) == 0x81)
+        {
+            disp = pe.ReadU32(off + 3);
+            return disp is > 0 and < 0x400000;
+        }
+
+        // mov r32, [ecx+r32*4+disp8]  8B / 89  44  81
+        if ((pe.Byte(off) == 0x8B || pe.Byte(off) == 0x89) && pe.Byte(off + 1) == 0x44 &&
+            (pe.Byte(off + 2) & 0xC7) == 0x81)
+        {
+            disp = pe.Byte(off + 3);
+            return disp != 0;
+        }
+
+        return false;
+    }
+
+    private static int FunctionStart(ActionPe pe, int off)
+    {
+        var start = Math.Max(0, off - 0x80);
+        for (var i = off; i >= start; i--)
+        {
+            if (pe.Byte(i) == 0x55 && pe.Byte(i + 1) == 0x8B && pe.Byte(i + 2) == 0xEC)
+                return i;
+        }
+
+        for (var i = off; i > start; i--)
+        {
+            if (pe.Byte(i) == 0xCC && pe.Byte(i + 1) != 0xCC)
+                return i + 1;
+            if (pe.Byte(i) == 0xC3 || (pe.Byte(i) == 0xC2 && pe.Byte(i + 2) == 0x00))
+                return i + (pe.Byte(i) == 0xC2 ? 3 : 1);
+        }
+
+        return off;
+    }
+
+    private static (uint disp, uint functionVa) FindGetStatusThisAdjustment(ActionPe pe, uint getPointVa, List<string> evidence)
+    {
+        var getPointFile = pe.VaToFile(getPointVa);
+        if (getPointFile < 0)
+            return (0, 0);
+        foreach (var call in FindRelativeTransfersTo(pe, getPointVa))
+        {
+            var off = pe.VaToFile(call);
+            if (off < 0)
+                continue;
+            var start = Math.Max(0, off - 0x30);
+            for (var i = start; i < off && i + 6 < pe.Length; i++)
+            {
+                uint disp = 0;
+                if (pe.Byte(i) == 0x8D && pe.Byte(i + 1) == 0x81)
+                    disp = pe.ReadU32(i + 2);
+                else if (pe.Byte(i) == 0x8D && pe.Byte(i + 1) == 0x49)
+                    disp = pe.Byte(i + 2);
+                else if (pe.Byte(i) == 0x81 && pe.Byte(i + 1) == 0xC1)
+                    disp = pe.ReadU32(i + 2);
+                else if (pe.Byte(i) == 0x83 && pe.Byte(i + 1) == 0xC1)
+                    disp = pe.Byte(i + 2);
+                if (disp == 0)
+                    continue;
+                var functionVa = pe.FileToVa(FunctionStart(pe, i));
+                evidence.Add($"GetStatus +0x{disp:X} before GetPoint at VA 0x{call:X} (fn 0x{functionVa:X}).");
+                return (disp, functionVa);
+            }
+        }
+
+        return (0, 0);
+    }
+
+    private static List<uint> FindRelativeTransfersTo(ActionPe pe, uint targetVa)
+    {
+        var hits = new List<uint>();
+        // Walk a coarse window around GetPoint; callers are nearby in the same TU.
+        var center = pe.VaToFile(targetVa);
+        if (center < 0)
+            return hits;
+        var start = Math.Max(0, center - 0x8000);
+        var end = Math.Min(pe.Length - 5, center + 0x8000);
+        for (var i = start; i < end; i++)
+        {
+            if (pe.Byte(i) != 0xE8 && pe.Byte(i) != 0xE9)
+                continue;
+            var dest = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            if (dest == targetVa)
+                hits.Add(pe.FileToVa(i));
+        }
+
+        if (hits.Count == 0)
+        {
+            // Broader pass from image mapping via xref of the relative encoding is expensive;
+            // try a second window covering typical CPythonPlayer.cpp span.
+            start = Math.Max(0, center - 0x40000);
+            end = Math.Min(pe.Length - 5, center + 0x40000);
+            for (var i = start; i < end; i++)
+            {
+                if (pe.Byte(i) != 0xE8 && pe.Byte(i) != 0xE9)
+                    continue;
+                var dest = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+                if (dest == targetVa)
+                    hits.Add(pe.FileToVa(i));
+            }
+        }
+
+        return hits;
+    }
+
+    private static uint RecoverPlayerNameDisplacement(ActionPe pe, uint singletonRva, uint getPointVa, uint getStatusVa, List<string> evidence)
+    {
+        var name = RecoverNamedNativePrefer(pe, "GetName", singletonRva, evidence);
+        var wrapper = name.wrapper;
+        if (wrapper != 0)
+        {
+            var virt = RecoverVirtualDispatch(pe, wrapper);
+            if (virt.slot != 0)
+                evidence.Add($"player.GetName is virtual: ecx=CPythonPlayer*+0x{virt.thisAdj:X}, call [vtable+0x{virt.slot:X}].");
+            var fromNative = StdStringThis(pe, name.native);
+            if (fromNative != 0)
+            {
+                evidence.Add($"CPythonPlayer::GetName m_stName at +0x{fromNative:X} from native RVA 0x{name.native:X}.");
+                return fromNative;
+            }
+        }
+
+        var fromVtable = NameFromAbstractVtable(pe, getPointVa, getStatusVa, evidence);
+        if (fromVtable != 0)
+            return fromVtable;
+
+        evidence.Add("CPythonPlayer::GetName string displacement was not recovered.");
+        return 0;
+    }
+
+    private static (uint native, uint singleton, uint wrapper) RecoverNamedNativePrefer(
+        ActionPe pe, string name, uint preferSingletonRva, List<string> evidence)
+    {
+        var preferVa = preferSingletonRva == 0 ? 0 : pe.ImageBase + preferSingletonRva;
+        (uint native, uint singleton, uint wrapper) fallback = (0, 0, 0);
+        var foundString = false;
+        foreach (var va in pe.FindAsciiZ(name))
+        {
+            foundString = true;
+            foreach (var site in pe.FindImmediateXrefs(va))
+            {
+                var off = pe.VaToFile(site);
+                if (off < 0 || !TryMethodTable(pe, off, out var fn))
+                    continue;
+                var wrapperRva = fn - pe.ImageBase;
+                var singleton = FirstGlobalLoad(pe, wrapperRva);
+                var native = NativeCallAfterSingleton(pe, wrapperRva, singleton);
+                var singletonRva = singleton == 0 ? 0 : singleton - pe.ImageBase;
+                var candidate = (native, pe.IsRva(singletonRva) ? singletonRva : 0u, wrapperRva);
+                if (preferVa != 0 && singleton == preferVa)
+                {
+                    evidence.Add($"Python {name} (player singleton) wrapper RVA 0x{wrapperRva:X} nativeRVA=0x{native:X}.");
+                    return candidate;
+                }
+
+                if (fallback.wrapper == 0)
+                    fallback = candidate;
+            }
+        }
+
+        if (fallback.wrapper != 0)
+            evidence.Add($"Python {name} wrapper RVA 0x{fallback.wrapper:X} nativeRVA=0x{fallback.native:X} (no singleton filter match).");
+        else
+            evidence.Add(foundString
+                ? $"Python method '{name}' string exists but no METH_VARARGS table entry was accepted."
+                : $"'{name}' string missing.");
+        return fallback;
+    }
+
+    private static uint NameFromAbstractVtable(ActionPe pe, uint getPointVa, uint getStatusVa, List<string> evidence)
+    {
+        var statusCandidates = new HashSet<uint>();
+        if (getStatusVa != 0)
+            statusCandidates.Add(getStatusVa);
+        if (getPointVa != 0)
+        {
+            statusCandidates.Add(getPointVa);
+            foreach (var call in FindRelativeTransfersTo(pe, getPointVa))
+            {
+                var start = pe.FileToVa(FunctionStart(pe, pe.VaToFile(call)));
+                if (pe.IsCode(start))
+                    statusCandidates.Add(start);
+            }
+        }
+
+        foreach (var statusVa in statusCandidates)
+        {
+            if (statusVa != 0)
+                evidence.Add($"GetStatus candidate VA 0x{statusVa:X} bytes={pe.Hex(statusVa, 24)} xrefs={pe.FindImmediateXrefs(statusVa).Count}.");
+            foreach (var target in EnumerateVtableEntries(pe, statusVa))
+            {
+                var nameVa = target.nameVa;
+                if (!pe.IsCode(nameVa))
+                    continue;
+                var disp = StdStringThis(pe, nameVa - pe.ImageBase);
+                if (disp == 0)
+                {
+                    evidence.Add($"IAbstractPlayer GetName VA 0x{nameVa:X} bytes={pe.Hex(nameVa, 32)} had no std::string this.");
+                    continue;
+                }
+
+                // Virtual GetName this is CPythonPlayer+4.
+                var absolute = disp + 4;
+                evidence.Add($"IAbstractPlayer vtable GetStatus VA 0x{target.statusVa:X} GetName VA 0x{nameVa:X} m_stName CPythonPlayer+0x{absolute:X} (IAbstract+0x{disp:X}).");
+                return absolute;
+            }
+        }
+
+        return 0;
+    }
+
+    private static IEnumerable<(uint statusVa, uint nameVa)> EnumerateVtableEntries(ActionPe pe, uint statusVa)
+    {
+        if (statusVa == 0)
+            yield break;
+        var keys = new HashSet<uint> { statusVa };
+        foreach (var site in FindRelativeTransfersTo(pe, statusVa))
+        {
+            var off = pe.VaToFile(site);
+            if (off >= 0 && pe.Byte(off) == 0xE9)
+                keys.Add(site);
+        }
+
+        foreach (var key in keys)
+        {
+            foreach (var xref in pe.FindImmediateXrefs(key))
+            {
+                var off = pe.VaToFile(xref);
+                if (off < 0)
+                    continue;
+                yield return (key, pe.ReadU32(off + 4));
+            }
+        }
+    }
+
+    private static uint StdStringThis(ActionPe pe, uint rva)
+    {
+        if (rva == 0)
+            return 0;
+        rva = SkipInt3(pe, rva);
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        if (off < 0)
+            return 0;
+        if (pe.Byte(off) == 0xE9)
+        {
+            var dest = (uint)(pe.FileToVa(off + 5) + pe.ReadI32(off + 1));
+            if (pe.IsCode(dest))
+            {
+                rva = SkipInt3(pe, dest - pe.ImageBase);
+                off = pe.VaToFile(pe.ImageBase + rva);
+                if (off < 0)
+                    return 0;
+            }
+        }
+
+        for (var i = off; i < off + 0x40 && i + 6 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0x8D && (pe.Byte(i + 1) == 0x81 || pe.Byte(i + 1) == 0x89))
+            {
+                var disp = pe.ReadU32(i + 2);
+                if (disp is > 8 and < 0x400000)
+                    return disp;
+            }
+
+            if (pe.Byte(i) == 0x8D && (pe.Byte(i + 1) == 0x41 || pe.Byte(i + 1) == 0x49))
+            {
+                var disp = pe.Byte(i + 2);
+                if (disp is > 8)
+                    return disp;
+            }
+
+            if (pe.Byte(i) == 0x81 && pe.Byte(i + 1) == 0xC1)
+            {
+                var disp = pe.ReadU32(i + 2);
+                if (disp is > 8 and < 0x400000)
+                    return disp;
+            }
+
+            // cmp dword [ecx+disp], 16  — inlined MSVC std::string::c_str capacity test
+            if (pe.Byte(i) == 0x83 && pe.Byte(i + 1) == 0xB9 && pe.Byte(i + 6) == 0x10)
+            {
+                var capDisp = pe.ReadU32(i + 2);
+                if (capDisp >= 16)
+                    return capDisp - 16;
+            }
+        }
+
+        return 0;
     }
 
     private sealed class ActionPe

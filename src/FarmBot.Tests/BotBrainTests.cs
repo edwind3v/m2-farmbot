@@ -84,6 +84,22 @@ public class BotBrainTests
     }
 
     [Fact]
+    public void UnknownHudDoesNotCountAsDead()
+    {
+        var brain = new BotBrain();
+        var world = Fixtures.World() with
+        {
+            ReceivedAtMs = 8_000,
+            Player = Fixtures.Player(hp: 0, maxHp: 0)
+        };
+
+        var decision = brain.Tick(world, Fixtures.Config(), Running, 8_000);
+
+        Assert.NotEqual(BotPhase.Failsafe, decision.Phase);
+        Assert.NotEqual("player is dead", decision.Reason);
+    }
+
+    [Fact]
     public void FailsafeStopsOnceWhenHpIsLow()
     {
         var brain = new BotBrain();

@@ -21,6 +21,13 @@ public sealed class ActionResponse
     public uint TargetVid { get; set; }
     public string Reason { get; set; } = "";
     public string Convention { get; set; } = "";
+    public int Level { get; set; }
+    public int Exp { get; set; }
+    public int NextExp { get; set; }
+    public int Hp { get; set; }
+    public int MaxHp { get; set; }
+    public int Mp { get; set; }
+    public int MaxMp { get; set; }
 }
 
 public static class ActionProtocol
@@ -33,6 +40,7 @@ public static class ActionProtocol
     public const string AttackKey = "attack_key";
     public const string Face = "face";
     public const string Stop = "stop";
+    public const string GetHud = "get_hud";
     public const int Version = 1;
 
     public static byte[] Encode(object value) => FrameEncode(JsonSerializer.SerializeToUtf8Bytes(value, JsonDefaults.Instance));

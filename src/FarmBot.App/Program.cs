@@ -16,7 +16,32 @@ internal static class Program
 
         ApplicationConfiguration.Initialize();
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-        Application.Run(new MainForm());
+        Application.ThreadException += (_, e) => ShowError(e.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is Exception ex)
+                ShowError(ex);
+        };
+
+        try
+        {
+            Application.Run(new MainForm());
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private static void ShowError(Exception ex)
+    {
+        try
+        {
+            MessageBox.Show(ex.ToString(), "FarmBot failed to start", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        catch
+        {
+        }
     }
 
     private static void RunLiveScan()

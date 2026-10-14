@@ -24,8 +24,17 @@ static const unsigned kTargetDisp = 0x10814;
 static const unsigned kReservedModeDisp = 0x54;
 static const unsigned kVidReservedDisp = 0x10770;
 static const unsigned kPlayerUpdateRva = 0xCF2D0;
+static const unsigned kGetStatusRva = 0xCDBB0;
+static const int kPointLevel = 1;
+static const int kPointExp = 3;
+static const int kPointNextExp = 4;
+static const int kPointHp = 5;
+static const int kPointMaxHp = 6;
+static const int kPointSp = 7;
+static const int kPointMaxSp = 8;
 
 typedef void (__thiscall* FnSetTarget)(void* self, unsigned vid, int force);
+typedef int (__thiscall* FnGetStatus)(void* self, int type);
 typedef void* (__thiscall* FnGetInst)(void* self, unsigned vid);
 typedef void (__thiscall* FnNewAttack)(void* self);
 typedef void (__thiscall* FnAttackKey)(void* self, bool press);
@@ -54,6 +63,15 @@ static unsigned g_lastVid;
 static volatile long g_busy;
 static DWORD g_loopTid;
 static int g_iatHooks;
+static int g_getStatusSlot = -1;
+static int g_hudLevel;
+static int g_hudExp;
+static int g_hudNextExp;
+static int g_hudHp;
+static int g_hudMaxHp;
+static int g_hudMp;
+static int g_hudMaxMp;
+static bool g_hudOk;
 
 static FnPeek g_peekA;
 static FnPeek g_peekW;
@@ -97,6 +115,49 @@ static unsigned ReadTargetVid(void* player)
     if (!player)
         return 0;
     return *(unsigned*)((char*)player + kTargetDisp);
+}
+
+static int FindGetStatusSlot(void** vtbl)
+{
+    if (!g_base || !vtbl)
+        return -1;
+    void* want = g_base + kGetStatusRva;
+    for (int i = 0; i < 32; ++i)
+    {
+        if (vtbl[i] == want)
+            return i;
+    }
+    return -1;
+}
+
+static int CallGetStatus(void* player, int type)
+{
+    void** vtbl = IAbsVtbl(player);
+    if (!vtbl)
+        return 0;
+    if (g_getStatusSlot < 0)
+        g_getStatusSlot = FindGetStatusSlot(vtbl);
+    if (g_getStatusSlot < 0 || !UserPtr(vtbl[g_getStatusSlot]))
+        return 0;
+    void* iabs = (char*)player + kThisAdj;
+    return ((FnGetStatus)vtbl[g_getStatusSlot])(iabs, type);
+}
+
+static void RefreshHud(void* player)
+{
+    if (!player)
+    {
+        g_hudOk = false;
+        return;
+    }
+    g_hudLevel = CallGetStatus(player, kPointLevel);
+    g_hudExp = CallGetStatus(player, kPointExp);
+    g_hudNextExp = CallGetStatus(player, kPointNextExp);
+    g_hudHp = CallGetStatus(player, kPointHp);
+    g_hudMaxHp = CallGetStatus(player, kPointMaxHp);
+    g_hudMp = CallGetStatus(player, kPointSp);
+    g_hudMaxMp = CallGetStatus(player, kPointMaxSp);
+    g_hudOk = g_hudLevel >= 1 && g_hudLevel <= 250 && g_hudMaxHp > 0 && g_hudHp >= 0 && g_hudHp <= g_hudMaxHp;
 }
 
 static bool CallSetTarget(void* player, unsigned vid, int force)
@@ -185,6 +246,14 @@ static void Execute(const Command& cmd)
     if (!player)
     {
         g_lastReason = "player singleton is null";
+        return;
+    }
+
+    if (cmd.type == "get_hud")
+    {
+        RefreshHud(player);
+        g_lastOk = g_hudOk;
+        g_lastReason = g_hudOk ? "hud" : (g_getStatusSlot < 0 ? "GetStatus vtable missing" : "GetStatus empty");
         return;
     }
 
@@ -287,6 +356,7 @@ static void __fastcall HookUpdate(void* self)
     g_loopTid = GetCurrentThreadId();
     Drain();
     g_playerUpdate(self);
+    RefreshHud(Player());
 }
 
 static BYTE* Unwrap(BYTE* p)
@@ -595,15 +665,22 @@ static void Serve()
             g_lastOk = false;
         }
 
-        char reply[640];
+        char reply[768];
         _snprintf_s(
             reply,
             _TRUNCATE,
-            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\"}",
+            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d}",
             g_lastOk ? "true" : "false",
             cmd.type.c_str(),
             g_lastReason.c_str(),
-            g_lastVid);
+            g_lastVid,
+            g_hudLevel,
+            g_hudExp,
+            g_hudNextExp,
+            g_hudHp,
+            g_hudMaxHp,
+            g_hudMp,
+            g_hudMaxMp);
         if (!WriteFrame(reply))
             break;
     }

@@ -29,6 +29,7 @@ public sealed class SimulatedWorld : IGameStateSource, IGameStateProvider, IGame
     private float _y;
     private float _destX;
     private float _destY;
+    private float _facingDeg;
     private bool _moving;
     private int _hp = 800;
     private int _maxHp = 1000;
@@ -58,6 +59,7 @@ public sealed class SimulatedWorld : IGameStateSource, IGameStateProvider, IGame
             _mobs.Add(new Mob { Vid = 5, Name = "OtherPlayer", Kind = EntityKind.Player, Type = ActorType.Player, Vnum = 0, Hp = 800, MaxHp = 800, X = 140, Y = 120 });
             _mobs.Add(new Mob { Vid = 6, Name = "Young Tiger", Kind = EntityKind.Monster, Type = ActorType.Enemy, Vnum = 103, Hp = 150, MaxHp = 150, X = 420, Y = 60 });
             _mobs.Add(new Mob { Vid = 7, Name = "Metin of Greed", Kind = EntityKind.Metin, Type = ActorType.Stone, Vnum = 8002, Hp = 200, MaxHp = 200, X = 520, Y = -40 });
+            _mobs.Add(new Mob { Vid = 8, Name = "Alpha Wolf", Kind = EntityKind.Boss, Type = ActorType.Enemy, Vnum = 1091, Hp = 800, MaxHp = 800, X = 300, Y = 90 });
         }
 
         Rebuild();
@@ -89,6 +91,7 @@ public sealed class SimulatedWorld : IGameStateSource, IGameStateProvider, IGame
                 }
                 else
                 {
+                    _facingDeg = MathF.Atan2(dx, dy) * (180f / MathF.PI);
                     _x += dx / distance * step;
                     _y += dy / distance * step;
                 }
@@ -201,8 +204,11 @@ public sealed class SimulatedWorld : IGameStateSource, IGameStateProvider, IGame
                 X = _x,
                 Y = _y,
                 Level = 35,
+                Exp = 12400,
+                NextExp = 18000,
                 TargetVid = _targetVid,
-                MapName = "simulator"
+                MapName = "simulator",
+                FacingDeg = _facingDeg
             },
             Entities = entities
         };

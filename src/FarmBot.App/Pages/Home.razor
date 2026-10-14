@@ -1,0 +1,101 @@
+@page "/"
+@implements IDisposable
+@inject FarmBotShell Shell
+
+<div class="eyebrow">Operations</div>
+<div class="page-head">
+    <h1>Farm</h1>
+</div>
+
+<div class="dash">
+    <div class="tile">
+        <div class="eyebrow">Player</div>
+        <div class="player-name">@Name</div>
+        <div class="player-meta">Lv @Level · @Position</div>
+        <div class="meter">
+            <span>EXP</span>
+            <div class="track"><div class="fill exp" style="width:@Pct(Player?.Exp ?? 0, Player?.NextExp ?? 0)"></div></div>
+            <b>@Frac(Player?.Exp, Player?.NextExp)</b>
+        </div>
+        <div class="meter">
+            <span>HP</span>
+            <div class="track"><div class="fill hp" style="width:@Pct(Player?.Hp ?? 0, Player?.MaxHp ?? 0)"></div></div>
+            <b>@Frac(Player?.Hp, Player?.MaxHp)</b>
+        </div>
+        <div class="meter">
+            <span>MP</span>
+            <div class="track"><div class="fill mp" style="width:@Pct(Player?.Mp ?? 0, Player?.MaxMp ?? 0)"></div></div>
+            <b>@Frac(Player?.Mp, Player?.MaxMp)</b>
+        </div>
+        <div class="quick">
+            <button class="btn btn-ok" disabled="@(Shell.View.Enabled)" @onclick="Shell.StartBot">Start bot</button>
+            <button class="btn btn-danger" disabled="@(!Shell.View.Enabled)" @onclick="Shell.StopBot">Stop</button>
+        </div>
+    </div>
+    <div class="tile">
+        <div class="eyebrow">Map</div>
+        <h2>@(Shell.IsLive ? "Live client" : "Simulator")</h2>
+        <p>@(string.IsNullOrWhiteSpace(Player?.MapName) ? "Farm area around the player." : Player!.MapName)</p>
+        <Minimap />
+    </div>
+    <div class="tile wide">
+        <div class="eyebrow">Nearby</div>
+        <h2>Entities (@(Shell.View.Snapshot?.Entities.Count ?? 0))</h2>
+        <div class="table-shell" style="margin-top:12px">
+            <div class="table-wrap short">
+                <table class="grid">
+                    <thead>
+                        <tr>
+                            <th>VID</th>
+                            <th>Type</th>
+                            <th>VNUM</th>
+                            <th>Name</th>
+                            <th>Dist</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entity in Entities)
+                        {
+                            <tr class="@(Shell.View.Target?.Vid == entity.Vid ? "tgt" : null)">
+                                <td>@entity.Vid</td>
+                                <td>@EntityMapping.TypeName(entity.ResolvedType)</td>
+                                <td>@entity.Vnum</td>
+                                <td>@(string.IsNullOrWhiteSpace(entity.Name) ? "—" : entity.Name)</td>
+                                <td>@entity.Distance.ToString("0")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private PlayerState? Player => Shell.View.Snapshot?.Player;
+
+    private string Name => string.IsNullOrWhiteSpace(Player?.Name) ? "—" : Player!.Name;
+
+    private string Level => Player is { Level: > 0 } ? Player.Level.ToString() : "—";
+
+    private string Position => Player == null ? "—" : $"{Player.X:0} , {Player.Y:0}";
+
+    private IEnumerable<EntityState> Entities =>
+        (Shell.View.Snapshot?.Entities ?? Array.Empty<EntityState>()).OrderBy(item => item.Distance);
+
+    protected override void OnInitialized() => Shell.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Shell.Changed -= OnChanged;
+
+    private static string Frac(int? current, int? max) =>
+        max is > 0 ? $"{current ?? 0} / {max}" : "—";
+
+    private static string Pct(int current, int max)
+    {
+        if (max <= 0 || current <= 0)
+            return "0%";
+        return $"{Math.Clamp(100.0 * current / max, 0, 100):0}%";
+    }
+}

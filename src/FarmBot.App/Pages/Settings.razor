@@ -1,0 +1,138 @@
+@page "/settings"
+@inject FarmBotShell Shell
+
+<div class="eyebrow">Configuration</div>
+<div class="page-head">
+    <h1>Settings</h1>
+    <div class="toolbar">
+        <button class="btn btn-save" @onclick="Shell.SaveSettings">Save</button>
+    </div>
+</div>
+
+<div class="tabs">
+    <button type="button" class="tab @(_page == 0 ? "active" : null)" @onclick="() => _page = 0">Farm</button>
+    <button type="button" class="tab @(_page == 1 ? "active" : null)" @onclick="() => _page = 1">Combat</button>
+    <button type="button" class="tab @(_page == 2 ? "active" : null)" @onclick="() => _page = 2">Safety</button>
+    <button type="button" class="tab @(_page == 3 ? "active" : null)" @onclick="() => _page = 3">Advanced</button>
+</div>
+
+@if (_page == 0)
+{
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.HuntMonsters" /> Hunt monsters</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.HuntStones" /> Hunt Metin stones</label>
+    <div class="field-grid">
+        <div class="field-row"><label>Center X</label><input type="number" @bind="Shell.Config.FarmCenterX" /></div>
+        <div class="field-row"><label>Center Y</label><input type="number" @bind="Shell.Config.FarmCenterY" /></div>
+        <div class="field-row"><label>Include VNUMs</label><input @bind="Shell.IncludeVnumsText" /></div>
+        <div class="field-row"><label>Exclude VNUMs</label><input @bind="Shell.ExcludeVnumsText" /></div>
+    </div>
+}
+else if (_page == 1)
+{
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.AttackAlsoPaths" /> Attack also paths</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.LootEnabled" /> Loot before next target</label>
+    <div class="field-grid">
+        <div class="field-row"><label>Attack range</label><input type="number" @bind="Shell.Config.AttackRange" /></div>
+        <div class="field-row"><label>Attack interval ms</label><input type="number" @bind="Shell.Config.AttackIntervalMs" /></div>
+        <div class="field-row"><label>Loot range</label><input type="number" @bind="Shell.Config.LootRange" /></div>
+        <div class="field-row"><label>Attack key</label><input @bind="Shell.Config.AttackKey" /></div>
+        <div class="field-row"><label>Pickup key</label><input @bind="Shell.Config.PickupKey" /></div>
+    </div>
+}
+else if (_page == 2)
+{
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.StopOnCorner" /> Stop if cursor is in the corner</label>
+    <label class="check-row"><input type="checkbox" @bind="Shell.Config.HealEnabled" /> Heal when HP is low</label>
+    <div class="field-grid">
+        <div class="field-row"><label>Failsafe HP %</label><input type="number" @bind="Shell.Config.FailsafeHpPercent" /></div>
+        <div class="field-row"><label>Heal below HP %</label><input type="number" @bind="Shell.Config.HealHpPercent" /></div>
+        <div class="field-row"><label>Heal key</label><input @bind="Shell.Config.HealKey" /></div>
+        <div class="field-row"><label>Name blacklist</label><input @bind="Shell.BlacklistText" /></div>
+        <div class="field-row"><label>Start hotkey</label><input @bind="Shell.Config.StartHotkey" /></div>
+        <div class="field-row"><label>Panic hotkey</label><input @bind="Shell.Config.StopHotkey" /></div>
+    </div>
+}
+else
+{
+    <div class="field-grid">
+        <div class="field-row"><label>Window title</label><input @bind="Shell.WindowTitleText" /></div>
+        <div class="field-row"><label>Pipe name</label><input @bind="Shell.Config.PipeName" /></div>
+        <div class="field-row"><label>Client path</label><input @bind="Shell.Config.ClientPath" /></div>
+        <div class="field-row">
+            <label>Input</label>
+            <select @bind="Shell.InputModeText">
+                <option>Auto</option>
+                <option>IPC</option>
+                <option>SendInput</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="child-block">
+        <h3>Target priority</h3>
+        <div class="table-shell">
+            <div class="table-wrap short">
+                <table class="grid">
+                    <thead>
+                        <tr><th>Kind</th><th>VNUM</th><th>Name</th><th>Pri</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var rule in Shell.Config.TargetRules)
+                        {
+                            <tr>
+                                <td>
+                                    <select @bind="rule.Kind">
+                                        @foreach (var kind in Enum.GetValues<EntityKind>())
+                                        {
+                                            <option value="@kind">@kind</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td><input type="number" @bind="rule.Vnum" /></td>
+                                <td><input @bind="rule.NameContains" /></td>
+                                <td><input type="number" @bind="rule.Priority" /></td>
+                                <td><button class="btn btn-ghost" @onclick="() => Shell.RemoveRule(rule)">Remove</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="quick"><button class="btn" @onclick="Shell.AddRule">Add rule</button></div>
+    </div>
+
+    <div class="child-block">
+        <h3>Skill rotation</h3>
+        <div class="table-shell">
+            <div class="table-wrap short">
+                <table class="grid">
+                    <thead>
+                        <tr><th>Slot</th><th>Key</th><th>Cooldown</th><th>MP</th><th>Min</th><th>Max</th><th>Pri</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var skill in Shell.Config.Skills)
+                        {
+                            <tr>
+                                <td><input type="number" @bind="skill.Slot" /></td>
+                                <td><input @bind="skill.Key" /></td>
+                                <td><input type="number" @bind="skill.CooldownMs" /></td>
+                                <td><input type="number" @bind="skill.MpCost" /></td>
+                                <td><input type="number" @bind="skill.MinDistance" /></td>
+                                <td><input type="number" @bind="skill.MaxDistance" /></td>
+                                <td><input type="number" @bind="skill.Priority" /></td>
+                                <td><button class="btn btn-ghost" @onclick="() => Shell.RemoveSkill(skill)">Remove</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="quick"><button class="btn" @onclick="Shell.AddSkill">Add skill</button></div>
+    </div>
+}
+
+<button class="btn btn-save settings-save" @onclick="Shell.SaveSettings">Save settings</button>
+
+@code {
+    private int _page;
+}

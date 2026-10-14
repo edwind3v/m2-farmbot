@@ -87,6 +87,7 @@ public static class EntityMapping
             ReceivedAtMs = snapshot.ReceivedAtMs,
             Main = main,
             Entities = entities,
+            Player = snapshot.Player,
             Source = source,
             FromLiveClient = fromLiveClient
         };
@@ -95,19 +96,31 @@ public static class EntityMapping
     public static WorldSnapshot ToSnapshot(GameFrame frame)
     {
         var main = frame.Main;
+        var player = frame.Player;
         return new WorldSnapshot
         {
             ReceivedAtMs = frame.ReceivedAtMs,
             Player = new PlayerState
             {
-                Name = main?.Name ?? "",
-                Hp = main?.Hp ?? 0,
-                MaxHp = Math.Max(main?.Hp ?? 0, 1),
-                X = main?.X ?? 0,
-                Y = main?.Y ?? 0,
-                Z = main?.Z ?? 0
+                Name = FirstNonEmpty(player?.Name, main?.Name),
+                Hp = player is { MaxHp: > 0 } ? player.Hp : 0,
+                MaxHp = player is { MaxHp: > 0 } ? player.MaxHp : 0,
+                Mp = player is { MaxMp: > 0 } ? player.Mp : 0,
+                MaxMp = player is { MaxMp: > 0 } ? player.MaxMp : 0,
+                X = main?.X ?? player?.X ?? 0,
+                Y = main?.Y ?? player?.Y ?? 0,
+                Z = main?.Z ?? player?.Z ?? 0,
+                Level = player?.Level ?? 0,
+                Exp = player?.Exp ?? 0,
+                NextExp = player?.NextExp ?? 0,
+                TargetVid = player?.TargetVid ?? 0,
+                MapName = player?.MapName ?? "",
+                FacingDeg = player?.FacingDeg ?? 0
             },
             Entities = frame.Entities.Select(ToState).ToList()
         };
     }
+
+    private static string FirstNonEmpty(string? a, string? b) =>
+        !string.IsNullOrWhiteSpace(a) ? a! : b ?? "";
 }

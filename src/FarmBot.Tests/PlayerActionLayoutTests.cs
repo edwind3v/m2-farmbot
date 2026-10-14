@@ -11,7 +11,7 @@ public class PlayerActionLayoutTests
     {
         Assert.True(File.Exists(ReleaseClient), ReleaseClient);
         var layout = PlayerActionLayoutRecoverer.Recover(ReleaseClient);
-        var dump = $"singleton=0x{layout.PlayerSingletonRva:X} setTarget=0x{layout.SetTargetRva:X} getTarget=0x{layout.GetTargetVidRva:X} attackKey=0x{layout.SetAttackKeyStateRva:X} combo=0x{layout.ComboAttackRva:X} targetDisp=0x{layout.TargetVidDisplacement:X} thisAdj=0x{layout.SetTargetThisAdjustment:X} slot=0x{layout.SetTargetVtableSlot:X} prologue={layout.SetTargetPrologue}\n" +
+        var dump = $"singleton=0x{layout.PlayerSingletonRva:X} setTarget=0x{layout.SetTargetRva:X} getTarget=0x{layout.GetTargetVidRva:X} attackKey=0x{layout.SetAttackKeyStateRva:X} combo=0x{layout.ComboAttackRva:X} targetDisp=0x{layout.TargetVidDisplacement:X} thisAdj=0x{layout.SetTargetThisAdjustment:X} slot=0x{layout.SetTargetVtableSlot:X} prologue={layout.SetTargetPrologue} points=+0x{layout.StatusPointsDisplacement:X} name=+0x{layout.PlayerNameDisplacement:X} xor=0x{layout.PointXorMask:X}\n" +
                    string.Join("\n", layout.Evidence);
         Directory.CreateDirectory(@"C:\Temp");
         File.WriteAllText(@"C:\Temp\playeraction.txt", dump);
@@ -23,5 +23,15 @@ public class PlayerActionLayoutTests
         Assert.Equal(0x60u, layout.SetTargetVtableSlot);
         Assert.NotEqual(0x4EA2F0u, layout.SetTargetRva);
         Assert.Contains(layout.Evidence, item => item.Contains("thiscall", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0x1036Cu, layout.StatusPointsDisplacement);
+        Assert.Equal(0x14u, layout.PlayerNameDisplacement);
+        Assert.Equal(0xE73AC1DAu, layout.PointXorMask);
+        Assert.Equal(1, layout.PointLevel);
+        Assert.Equal(3, layout.PointExp);
+        Assert.Equal(4, layout.PointNextExp);
+        Assert.Equal(5, layout.PointHp);
+        Assert.Equal(6, layout.PointMaxHp);
+        Assert.Equal(7, layout.PointSp);
+        Assert.Equal(8, layout.PointMaxSp);
     }
 }
