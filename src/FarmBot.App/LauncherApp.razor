@@ -9,7 +9,16 @@
             <b>FarmBot</b>
             <span>launcher</span>
         </div>
-        <button class="btn btn-save" @onclick="Shell.AddSlot">+ New slot</button>
+        <div class="launch-actions">
+            <label class="profile-label">
+                Mode
+                <select class="profile" value="@Shell.ProfileName" @onchange="OnProfileChanged">
+                    <option value="Arthion">Arthion</option>
+                    <option value="Normal">Normal</option>
+                </select>
+            </label>
+            <button class="btn btn-save" @onclick="Shell.AddSlot">+ New slot</button>
+        </div>
     </header>
 
     <div class="launch-body">
@@ -19,7 +28,7 @@
         </div>
         <p class="launch-status">@Shell.Status</p>
 
-        @foreach (var slot in Shell.State.Slots)
+        @foreach (var slot in Shell.VisibleSlots)
         {
             <div class="slot @(Shell.IsRunning(slot) ? "on" : null)">
                 <div class="slot-main">
@@ -81,6 +90,11 @@
             _themeApplied = true;
             await Themes.SelectAsync(Themes.CurrentId, JS);
         }
+    }
+
+    private void OnProfileChanged(ChangeEventArgs e)
+    {
+        Shell.ProfileName = e.Value?.ToString() ?? Shell.ProfileName;
     }
 
     private void OnChanged() => InvokeAsync(StateHasChanged);

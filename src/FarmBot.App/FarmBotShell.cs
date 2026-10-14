@@ -449,7 +449,7 @@ public sealed class FarmBotShell : IDisposable
 
         var live = new LiveGameStateProvider(_log, BoundClientPid);
         _provider = live;
-        _actionHost ??= new ActionModuleHost();
+        _actionHost ??= new ActionModuleHost { Profile = _config.ClientProfile };
         _actionSink ??= new AdapterActionSink(_actionHost.PipeName, _actionHost.Token);
         if (BoundClientPid > 0)
             SelectedClientPid = BoundClientPid;

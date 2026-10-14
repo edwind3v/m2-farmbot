@@ -305,6 +305,48 @@ public class SlotStoreTests
     }
 
     [Fact]
+    public void MigratesFirstTwoLegacySlotsToNormalAndTheLastToArthion()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "farmbot-slots-migrate-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = SlotStore.DefaultPath(dir);
+            File.WriteAllText(path, """
+                {
+                  "clientPath": "E:\\Arthion\\game\\Arthion.exe",
+                  "slots": [
+                    { "id": "one", "account": "first", "characterName": "scolar" },
+                    { "id": "two", "account": "admin", "characterName": "test2" },
+                    { "id": "three", "account": "edwin01", "characterName": "lockedin" }
+                  ]
+                }
+                """);
+            var loaded = SlotStore.LoadOrCreate(path);
+            Assert.Equal(ClientProfile.Arthion, loaded.SelectedProfile);
+            Assert.Equal(2, loaded.Normal.Slots.Count);
+            Assert.Equal("first", loaded.Normal.Slots[0].Account);
+            Assert.Equal("admin", loaded.Normal.Slots[1].Account);
+            Assert.Single(loaded.Arthion.Slots);
+            Assert.Equal("edwin01", loaded.Arthion.Slots[0].Account);
+            Assert.Equal(@"E:\Arthion\game\Arthion.exe", loaded.Arthion.ClientPath);
+            Assert.Equal(@"E:\Arthion\game\Arthion.exe", loaded.ClientPath);
+            Assert.Equal("edwin01", loaded.Slots[0].Account);
+
+            loaded.Profile = nameof(ClientProfile.Normal);
+            SlotStore.Sanitize(loaded);
+            Assert.Equal(ClientProfile.Normal, loaded.SelectedProfile);
+            Assert.Equal(2, loaded.Slots.Count);
+            Assert.Equal("first", loaded.Slots[0].Account);
+            Assert.Contains("metin2client", loaded.ClientPath, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
     public void ApplyLiveCredentialsKeepsPasswordWhenLoginPacketNoLongerHasIt()
     {
         var slot = new ClientSlot { Account = "player1", PasswordProtected = SlotStore.ProtectPassword("old") };

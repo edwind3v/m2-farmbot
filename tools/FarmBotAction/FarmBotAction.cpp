@@ -256,6 +256,7 @@ static int g_maxLoadSteps;
 static int g_loginSent;
 static int g_selectSent;
 static int g_layoutRecovered;
+static int g_arthion;
 static unsigned g_atlasSeq;
 static volatile long g_atlasCrash;
 
@@ -499,9 +500,12 @@ static void* MapFindVid(unsigned vid)
 
 static void* CallGetInstance(unsigned vid)
 {
-    void* fromMap = MapFindVid(vid);
-    if (fromMap)
-        return fromMap;
+    if (g_arthion)
+    {
+        void* fromMap = MapFindVid(vid);
+        if (fromMap)
+            return fromMap;
+    }
     void* mgr = CharMgr();
     if (!mgr)
         return nullptr;
@@ -2734,8 +2738,8 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         const bool pressed = CallPressActor(player, vid);
         const bool reserved = CallRva(kReserveClickRva, player, vid);
         LogPixels("BOT click-walk", vid);
-        NativeLog("BOT click-walk vid=%u press=%d reserve=%d atkKey=%u pressActor=0x%X reserve=0x%X",
-            vid, pressed ? 1 : 0, reserved ? 1 : 0, atk, kPressActorRva, kReserveClickRva);
+        NativeLog("BOT click-walk vid=%u press=%d reserve=%d atkKey=%u pressActor=0x%X reserve=0x%X arthion=%d",
+            vid, pressed ? 1 : 0, reserved ? 1 : 0, atk, kPressActorRva, kReserveClickRva, g_arthion);
         InterlockedExchange(&g_botCall, 0);
         return false;
     }
@@ -2929,6 +2933,15 @@ static void ChaseTick(void* player)
 static bool StartCombat(void* player, unsigned vid, float x, float y, bool click, bool autoAttack)
 {
     (void)autoAttack;
+    if (!g_arthion)
+    {
+        g_chaseVid = 0;
+        CallAttackKey(player, false);
+        CallSetTarget(player, vid, 1);
+        CallRva(kSetAutoRva, player, vid);
+        CallRva(kReserveClickRva, player, vid);
+        return true;
+    }
     if (!click)
     {
         g_chaseVid = 0;
@@ -3080,6 +3093,8 @@ static void Execute(const Command& cmd)
         for (size_t i = 0; i < hits.size(); ++i)
         {
             const ShotHit& hit = hits[i];
+            if (!g_arthion && !CallGetInstance(hit.vid))
+                continue;
             float sx = hit.x;
             float sy = hit.y;
             if (cmd.avoid)
@@ -3090,7 +3105,8 @@ static void Execute(const Command& cmd)
                 g_lastVid = hit.vid;
                 ++sent;
             }
-            else if (CallSetTarget(player, hit.vid, 1) &&
+            else if (g_arthion &&
+                     CallSetTarget(player, hit.vid, 1) &&
                      (CallNewAttack(player) || CallCombo(player) || CallAttackKey(player, true)))
             {
                 g_lastVid = hit.vid;
@@ -3112,8 +3128,24 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "set_target" || cmd.type == "face" || cmd.type == "press_actor" || cmd.type == "attack")
     {
-        NativeLog("BOT cmd=%s vid=%u xy=%.0f,%.0f", cmd.type.c_str(), cmd.vid, cmd.x, cmd.y);
+        NativeLog("BOT cmd=%s vid=%u xy=%.0f,%.0f arthion=%d", cmd.type.c_str(), cmd.vid, cmd.x, cmd.y, g_arthion);
         const void* inst = CallGetInstance(cmd.vid);
+        if (!g_arthion)
+        {
+            if (!CallSetTarget(player, cmd.vid, 1))
+            {
+                g_lastReason = "SetTarget vtable missing";
+                return;
+            }
+            StartCombat(player, cmd.vid, cmd.x, cmd.y, cmd.type == "attack" || cmd.type == "press_actor", false);
+            g_lastVid = ReadTargetVid(player);
+            g_lastOk = g_lastVid == cmd.vid;
+            if (g_lastOk)
+                g_lastReason = inst ? "target+approach+auto-attack" : "selected (instance lookup missed)";
+            else
+                g_lastReason = inst ? "SetTarget did not stick" : "VID not in live instance map";
+            return;
+        }
         const bool click = cmd.type == "attack" || cmd.type == "press_actor";
         if (!click)
         {
@@ -3274,7 +3306,7 @@ static void __fastcall HookCombo(void* self, void*)
 {
     NativeLog("%s Combo this=%p allowMelee=%d chase=%u",
         g_botCall ? "BOT" : "GAME", self, (int)g_allowMelee, g_chaseVid);
-    if (g_chaseVid && InterlockedCompareExchange(&g_allowMelee, 0, 0) == 0)
+    if (g_arthion && g_chaseVid && InterlockedCompareExchange(&g_allowMelee, 0, 0) == 0)
         return;
     if (g_origCombo)
         g_origCombo(self);
@@ -3282,7 +3314,7 @@ static void __fastcall HookCombo(void* self, void*)
 
 static void __fastcall GuardCombo(void* self, void*)
 {
-    if (g_chaseVid && InterlockedCompareExchange(&g_allowMelee, 0, 0) == 0)
+    if (g_arthion && g_chaseVid && InterlockedCompareExchange(&g_allowMelee, 0, 0) == 0)
         return;
     FnVoid combo = (FnVoid)(g_base + kComboRva);
     if (combo && !IsBadCodePtr((FARPROC)combo))
@@ -3291,7 +3323,7 @@ static void __fastcall GuardCombo(void* self, void*)
 
 static void PatchUpdateComboCall()
 {
-    if (!g_base || !kPlayerUpdateRva || !kComboRva || g_updateComboCall)
+    if (!g_arthion || !g_base || !kPlayerUpdateRva || !kComboRva || g_updateComboCall)
         return;
     BYTE* upd = g_base + kPlayerUpdateRva;
     for (int i = 0; i < 0x280; ++i)
@@ -3526,6 +3558,8 @@ static void InstallLoopHooks(HMODULE client)
             ++g_iatHooks;
         if (kSetLoginInfoRva && Trampoline((BYTE*)client + kSetLoginInfoRva, (void*)HookSetLoginInfo, (void**)&g_setLoginInfo))
             ++g_iatHooks;
+        if (!g_arthion)
+            return;
         NativeLog("hook AttackKey=%d Reserve=%d SetTarget=%d Combo=%d Chase=%d InRange=%d MoveTo=%d Update=%d",
             kAttackKeyRva && Trampoline((BYTE*)client + kAttackKeyRva, (void*)HookAttackKey, (void**)&g_origAttackKey) ? 1 : 0,
             kReserveClickRva && Trampoline((BYTE*)client + kReserveClickRva, (void*)HookReserveClick, (void**)&g_origReserveClick) ? 1 : 0,
@@ -3740,6 +3774,8 @@ static void LoadConfig()
             g_layoutRecovered = 1;
             ClearLoginRvas();
         }
+        else if (strncmp(line, "profile=", 8) == 0)
+            g_arthion = _strnicmp(line + 8, "arthion", 7) == 0 ? 1 : 0;
         else if (strncmp(line, "net=", 4) == 0)
             kNetStreamRva = ParseHex(line + 4);
         else if (strncmp(line, "account=", 8) == 0)
@@ -3866,6 +3902,76 @@ static void LoadConfig()
             kLoginPasswordDisp = ParseHex(line + 9);
     }
     fclose(f);
+    if (!g_arthion)
+    {
+        kSingletonRva = 0x482398;
+        kCharMgrRva = 0x48239C;
+        kNewAttackRva = 0xD0C70;
+        kComboRva = 0;
+        kNetStreamRva = 0x482BA0;
+        kAccountConnectorRva = 0x484D24;
+        kSetLoginInfoRva = 0x11C390;
+        kAccountSetLoginInfoRva = 0x117660;
+        kAccountConnectRva = 0x117510;
+        kConnectGameServerRva = 0x11BD40;
+        kSelectCharacterRva = 0x13DC60;
+        kSetLoginPhaseRva = 0x13D240;
+        kSetGamePhaseRva = 0x1367F0;
+        kStartGameRva = 0x13CD40;
+        kNotifyGamePhaseRva = 0x11C0C0;
+        kDirectEnterModeSetRva = 0x11C800;
+        kOnLogoCloseRva = 0x13F1A0;
+        kAppSingletonRva = 0x484C8C;
+        kPhaseDisp = 0xF8;
+        kLoginIdDisp = 0xB0;
+        kLoginPasswordDisp = 0xC8;
+        kSendAttackRva = 0x134BE0;
+        kSendStateRva = 0x134DA0;
+        kSendPickupRva = 0x13B690;
+        kSendClickRva = 0xCE930;
+        kItemSingletonRva = 0x482CAC;
+        kGetCloseItemRva = 0xBB480;
+        kGetCloseMoneyRva = 0xBB580;
+        kTreeIncRva = 0xBA810;
+        kMoveToDestRva = 0xA6BB0;
+        kMoveToPixelRva = 0;
+        kGetMainActorRva = 0;
+        kPressActorRva = 0;
+        kChaseRva = 0;
+        kApproachInstRva = 0;
+        kGetPixelRva = 0;
+        kInRangeRva = 0;
+        kMainPtrDisp = 0x0C;
+        kMapDisp = 0;
+        kMapHeadOff = 0;
+        kNodeLeft = 0;
+        kNodeParent = 0;
+        kNodeRight = 0;
+        kNodeIsNil = 0;
+        kNodeKey = 0;
+        kNodeValue = 0;
+        kGraphicDisp = 0x1EC;
+        kPixelXDisp = 0x46C;
+        kPixelYDisp = 0x470;
+        kAttackKeyRva = 0xD2030;
+        kReserveClickRva = 0xD1B90;
+        kSetAutoRva = 0xD1DF0;
+        kThisAdj = 4;
+        kSetTargetSlot = 0x60;
+        kSetTargetRva = 0;
+        kGetNameSlot = 0x14;
+        kPlayerNameDisp = 0x14;
+        kTargetDisp = 0x10814;
+        kReservedModeDisp = 0x54;
+        kVidReservedDisp = 0x10770;
+        kPlayerUpdateRva = 0xCF2D0;
+        kPickCloseRva = 0xD1280;
+        kPickCloseMoneyRva = 0xD12F0;
+        kGetStatusRva = 0xCDBB0;
+        kGetStatusSlot = 0;
+        kPointsDisp = 0;
+        kPointXor = 0;
+    }
 }
 
 static HMODULE FindClient()
@@ -4037,8 +4143,8 @@ static DWORD WINAPI InitThread(void*)
     g_base = (BYTE*)client;
     InitAtlasMap();
     InstallLoopHooks(client);
-    NativeLog("loaded base=%p setTarget=0x%X attackKey=0x%X combo=0x%X reserve=0x%X pressActor=0x%X chase=0x%X moveTo=0x%X inRange=0x%X update=0x%X hooks=%d comboPatch=%d",
-        g_base, kSetTargetRva, kAttackKeyRva, kComboRva, kReserveClickRva, kPressActorRva, kChaseRva, kMoveToDestRva, kInRangeRva, kPlayerUpdateRva, g_iatHooks, g_updateComboCall ? 1 : 0);
+    NativeLog("loaded base=%p profile=%s sendAttack=0x%X sendState=0x%X attackKey=0x%X combo=0x%X reserve=0x%X setTarget=0x%X hooks=%d comboPatch=%d",
+        g_base, g_arthion ? "arthion" : "normal", kSendAttackRva, kSendStateRva, kAttackKeyRva, kComboRva, kReserveClickRva, kSetTargetRva, g_iatHooks, g_updateComboCall ? 1 : 0);
     Serve();
     return 0;
 }

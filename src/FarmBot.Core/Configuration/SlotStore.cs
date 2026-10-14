@@ -6,6 +6,12 @@ using FarmBot.Core.Json;
 
 namespace FarmBot.Core.Configuration;
 
+public enum ClientProfile
+{
+    Normal,
+    Arthion
+}
+
 public sealed class ClientSlot
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -29,10 +35,31 @@ public sealed class ClientSlot
     }
 }
 
+public sealed class ProfileLaunchState
+{
+    public string ClientPath { get; set; } = "";
+    public List<ClientSlot> Slots { get; set; } = new();
+}
+
 public sealed class LauncherState
 {
-    public string ClientPath { get; set; } = BotConfig.CreateDefault().ClientPath;
+    public string Profile { get; set; } = nameof(ClientProfile.Arthion);
+    public string ClientPath { get; set; } = "";
     public List<ClientSlot> Slots { get; set; } = new();
+    public ProfileLaunchState Normal { get; set; } = new();
+    public ProfileLaunchState Arthion { get; set; } = new();
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ClientProfile SelectedProfile => SlotStore.ParseProfile(Profile);
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ProfileLaunchState Active =>
+        SelectedProfile == ClientProfile.Arthion ? Arthion : Normal;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IEnumerable<ClientSlot> AllSlots =>
+        (Normal?.Slots ?? Enumerable.Empty<ClientSlot>())
+        .Concat(Arthion?.Slots ?? Enumerable.Empty<ClientSlot>());
 }
 
 public static class SlotStore
@@ -162,21 +189,85 @@ public static class SlotStore
         }
     }
 
+    public static ClientProfile ParseProfile(string? value) =>
+        string.Equals(value, nameof(ClientProfile.Normal), StringComparison.OrdinalIgnoreCase)
+            ? ClientProfile.Normal
+            : ClientProfile.Arthion;
+
+    public static string ProfileName(ClientProfile profile) =>
+        profile == ClientProfile.Normal ? nameof(ClientProfile.Normal) : nameof(ClientProfile.Arthion);
+
+    public static bool IsArthionPath(string? path) =>
+        !string.IsNullOrWhiteSpace(path) &&
+        Path.GetFileName(path).Contains("Arthion", StringComparison.OrdinalIgnoreCase);
+
     public static void Sanitize(LauncherState state)
     {
+        state.Normal ??= new ProfileLaunchState();
+        state.Arthion ??= new ProfileLaunchState();
+        state.Normal.Slots ??= new List<ClientSlot>();
+        state.Arthion.Slots ??= new List<ClientSlot>();
+        state.Normal.ClientPath ??= "";
+        state.Arthion.ClientPath ??= "";
         state.ClientPath ??= "";
         state.Slots ??= new List<ClientSlot>();
-        foreach (var slot in state.Slots)
+        MigrateLegacySlots(state);
+        state.Profile = ProfileName(ParseProfile(state.Profile));
+        if (state.Active.Slots.Count == 0)
         {
-            if (string.IsNullOrWhiteSpace(slot.Id))
-                slot.Id = Guid.NewGuid().ToString("N");
-            slot.Account = (slot.Account ?? "").Trim();
-            slot.PasswordProtected ??= "";
-            slot.CharacterName = (slot.CharacterName ?? "").Trim();
-            slot.ChannelName = (slot.ChannelName ?? "").Trim();
-            slot.CharacterSlot = Math.Clamp(slot.CharacterSlot, 0, 4);
-            slot.ChannelIndex = Math.Max(0, slot.ChannelIndex);
+            if (state.Arthion.Slots.Count > 0)
+                state.Profile = nameof(ClientProfile.Arthion);
+            else if (state.Normal.Slots.Count > 0)
+                state.Profile = nameof(ClientProfile.Normal);
         }
+        if (string.IsNullOrWhiteSpace(state.Normal.ClientPath))
+            state.Normal.ClientPath = BotConfig.CreateDefault().ClientPath;
+        if (string.IsNullOrWhiteSpace(state.Arthion.ClientPath) && IsArthionPath(state.ClientPath))
+            state.Arthion.ClientPath = state.ClientPath;
+        MirrorActive(state);
+        foreach (var slot in state.AllSlots)
+            SanitizeSlot(slot);
+    }
+
+    private static void MigrateLegacySlots(LauncherState state)
+    {
+        if (state.Normal.Slots.Count > 0 || state.Arthion.Slots.Count > 0 || state.Slots.Count == 0)
+            return;
+
+        for (var i = 0; i < state.Slots.Count; i++)
+        {
+            if (i < 2)
+                state.Normal.Slots.Add(state.Slots[i]);
+            else
+                state.Arthion.Slots.Add(state.Slots[i]);
+        }
+
+        if (IsArthionPath(state.ClientPath))
+            state.Arthion.ClientPath = state.ClientPath;
+        else if (!string.IsNullOrWhiteSpace(state.ClientPath))
+            state.Normal.ClientPath = state.ClientPath;
+
+        if (string.IsNullOrWhiteSpace(state.Profile))
+            state.Profile = nameof(ClientProfile.Arthion);
+    }
+
+    private static void MirrorActive(LauncherState state)
+    {
+        var active = state.Active;
+        state.ClientPath = active.ClientPath ?? "";
+        state.Slots = active.Slots;
+    }
+
+    private static void SanitizeSlot(ClientSlot slot)
+    {
+        if (string.IsNullOrWhiteSpace(slot.Id))
+            slot.Id = Guid.NewGuid().ToString("N");
+        slot.Account = (slot.Account ?? "").Trim();
+        slot.PasswordProtected ??= "";
+        slot.CharacterName = (slot.CharacterName ?? "").Trim();
+        slot.ChannelName = (slot.ChannelName ?? "").Trim();
+        slot.CharacterSlot = Math.Clamp(slot.CharacterSlot, 0, 4);
+        slot.ChannelIndex = Math.Max(0, slot.ChannelIndex);
     }
 
     private static bool PhaseLooksInWorld(string phase) =>

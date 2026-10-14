@@ -15,6 +15,7 @@ internal static class Fixtures
         config.FarmCenterY = 0;
         config.FarmRadius = 1500;
         config.AttackRange = 300;
+        config.ClientProfile = ClientProfile.Arthion;
         config.Sanitize();
         return config;
     }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using FarmBot.Core.Combat;
+using FarmBot.Core.Configuration;
 using FarmBot.Core.Entities;
 
 namespace FarmBot.Platform.Client;
@@ -14,6 +15,7 @@ public sealed class ActionModuleHost
 {
     public string Token { get; } = ActionProtocol.NewToken();
     public string PipeName { get; }
+    public ClientProfile Profile { get; set; } = ClientProfile.Normal;
     public int LastProcessId { get; private set; }
     public string Status { get; private set; } = "companion not loaded";
 
@@ -157,14 +159,18 @@ public sealed class ActionModuleHost
     private string LoaderArgs(string extraArgs, string dll, string? clientPath)
     {
         var args = $"{extraArgs} --dll \"{dll}\" --token {Token} --pipe {PipeName}";
+        if (Profile != ClientProfile.Arthion)
+            return args;
         var layout = WriteLayoutFile(clientPath);
         if (layout.Length > 0)
             args += " --layout \"" + layout + "\"";
         return args;
     }
 
-    private static string WriteLayoutFile(string? exePath)
+    private string WriteLayoutFile(string? exePath)
     {
+        if (Profile != ClientProfile.Arthion)
+            return "";
         if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
             return "";
         try
@@ -173,6 +179,7 @@ public sealed class ActionModuleHost
             var player = PlayerActionLayoutRecoverer.Recover(exePath);
             var entity = ClientReleaseLayout.Recover(exePath);
             var text = new StringBuilder(login.ToNativeConfig());
+            text.Append("profile=arthion\n");
             var playerRva = player.PlayerSingletonRva;
             AppendHex(text, "player", playerRva);
             AppendHex(text, "playerName", player.PlayerNameDisplacement);

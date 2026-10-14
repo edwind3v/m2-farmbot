@@ -136,8 +136,10 @@ public sealed class AutoCombatController
         _recoveries = 0;
         _armedVid = 0;
         NoteMove(snapshot.Player, nowMs);
-        return Enter(CombatState.Approach, nowMs, picked, NativeCombatAction.PressActor(picked.Vid, picked.X, picked.Y),
-            $"acquired VID {picked.Vid}");
+        var acquire = UseArthion(config)
+            ? NativeCombatAction.PressActor(picked.Vid, picked.X, picked.Y)
+            : NativeCombatAction.SetTarget(picked.Vid);
+        return Enter(CombatState.Approach, nowMs, picked, acquire, $"acquired VID {picked.Vid}");
     }
 
     private CombatTick OnApproach(WorldSnapshot snapshot, BotConfig config, EntityState? target, long nowMs)
@@ -148,12 +150,19 @@ public sealed class AutoCombatController
             return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
         if (IsStuck(snapshot.Player, config, nowMs) && !InRange(target, config))
             return Enter(CombatState.Recover, nowMs, target, null, "stuck approaching");
-        if (InMelee(target, config))
+        if (UseArthion(config))
         {
-            _armedVid = target.Vid;
-            _lastAttackMs = nowMs;
-            return Enter(CombatState.Attack, nowMs, target,
-                NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "in melee, keep walking until native range");
+            if (InMelee(target, config))
+            {
+                _armedVid = target.Vid;
+                _lastAttackMs = nowMs;
+                return Enter(CombatState.Attack, nowMs, target,
+                    NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "in melee, keep walking until native range");
+            }
+        }
+        else if (InRange(target, config))
+        {
+            return Enter(CombatState.FaceTarget, nowMs, target, NativeCombatAction.Face(target.Vid), "in attack range");
         }
 
         if (ShouldEmit(nowMs, config.MoveIntervalMs))
@@ -178,18 +187,27 @@ public sealed class AutoCombatController
     {
         if (target == null)
             return Enter(CombatState.Verify, nowMs, null, null, "target lost before attack");
-        if (!InMelee(target, config))
+        if (UseArthion(config))
         {
-            _armedVid = 0;
-            return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "left melee range");
+            if (!InMelee(target, config))
+            {
+                _armedVid = 0;
+                return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "left melee range");
+            }
+
+            if (_armedVid == target.Vid)
+                return Stay(target, null, $"auto-attacking VID {target.Vid}");
+
+            _armedVid = target.Vid;
+            _lastAttackMs = nowMs;
+            return Stay(target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), $"auto-attack VID {target.Vid}");
         }
 
-        if (_armedVid == target.Vid)
-            return Stay(target, null, $"auto-attacking VID {target.Vid}");
+        if (!InRange(target, config))
+            return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "left attack range");
 
-        _armedVid = target.Vid;
         _lastAttackMs = nowMs;
-        return Stay(target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), $"auto-attack VID {target.Vid}");
+        return Enter(CombatState.Wait, nowMs, target, NativeCombatAction.Attack(target.Vid), $"attack VID {target.Vid}");
     }
 
     private CombatTick OnWait(BotConfig config, EntityState? target, long nowMs)
@@ -209,7 +227,7 @@ public sealed class AutoCombatController
 
         if (TimedOut(config, nowMs))
             return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
-        if (InMelee(target, config))
+        if (UseArthion(config) ? InMelee(target, config) : InRange(target, config))
             return Enter(CombatState.Attack, nowMs, target, null, "target still attackable");
         return Enter(CombatState.Approach, nowMs, target, null, "target still alive out of range");
     }
@@ -262,6 +280,9 @@ public sealed class AutoCombatController
 
     private static bool InMelee(EntityState target, BotConfig config) =>
         target.Distance > 1f && target.Distance <= Math.Min(config.AttackRange, 140f);
+
+    private static bool UseArthion(BotConfig config) =>
+        config.ClientProfile == ClientProfile.Arthion;
 
     private bool TimedOut(BotConfig config, long nowMs) =>
         _targetVid != 0 && _targetAcquiredMs != 0 && nowMs - _targetAcquiredMs >= config.TargetTimeoutMs;

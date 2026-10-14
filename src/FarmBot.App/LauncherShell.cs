@@ -32,12 +32,35 @@ public sealed class LauncherShell : IDisposable
     public Func<string?>? PickClientPath { get; set; }
 
     public LauncherState State => _state;
+    public IReadOnlyList<ClientSlot> VisibleSlots => _state.Slots;
+    public bool HasRunningSessions
+    {
+        get
+        {
+            lock (_gate)
+                return _sessions.Count > 0;
+        }
+    }
+
+    public string ProfileName
+    {
+        get => _state.Profile;
+        set => SetProfile(SlotStore.ParseProfile(value));
+    }
+
+    public ClientProfile Profile
+    {
+        get => _state.SelectedProfile;
+        set => SetProfile(value);
+    }
+
     public string ClientPath
     {
         get => _state.ClientPath;
         set
         {
-            _state.ClientPath = value ?? "";
+            _state.Active.ClientPath = value ?? "";
+            _state.ClientPath = _state.Active.ClientPath;
             Persist();
             Notify();
         }
@@ -87,6 +110,27 @@ public sealed class LauncherShell : IDisposable
             }
         }
 
+        Notify();
+    }
+
+    public void SetProfile(ClientProfile profile)
+    {
+        var name = SlotStore.ProfileName(profile);
+        if (string.Equals(_state.Profile, name, StringComparison.Ordinal))
+            return;
+        _state.Profile = name;
+        if (Editor != null && !_state.Slots.Contains(Editor))
+        {
+            Editor = null;
+            EditorPassword = "";
+        }
+
+        if (_state.Slots.Count == 0)
+            _state.Slots.Add(new ClientSlot());
+        Status = profile == ClientProfile.Arthion
+            ? "Arthion mode — walk to the target, then attack."
+            : "Normal mode — original Metin2 client loading and combat.";
+        Persist();
         Notify();
     }
 
@@ -193,7 +237,7 @@ public sealed class LauncherShell : IDisposable
 
         slot.ChannelName = channel.Name;
         var pipe = LoaderOutput.UniquePipeName(slot.Id);
-        var host = new ActionModuleHost(pipe);
+        var host = new ActionModuleHost(pipe) { Profile = _state.SelectedProfile };
         if (!host.TryLaunch(path, out var launchStatus, out var pid))
         {
             Status = launchStatus;
@@ -222,6 +266,7 @@ public sealed class LauncherShell : IDisposable
         var configPath = SlotStore.ConfigPath(_baseDirectory, slot.Id);
         var config = SlotStore.LoadBotConfig(_baseDirectory, slot);
         config.ClientPath = path;
+        config.ClientProfile = _state.SelectedProfile;
         ConfigStore.Save(configPath, config);
         var shell = new FarmBotShell(configPath, pid, host, sink);
         var form = new MainForm(shell, WindowTitle(slot));

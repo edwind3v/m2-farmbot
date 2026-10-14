@@ -85,6 +85,7 @@ public sealed class BotConfig
     public string StartHotkey { get; set; } = "F9";
     public string StopHotkey { get; set; } = "F10";
     public string ClientPath { get; set; } = @"E:\TeraBoxDownload\1.Client\1.metin2client.exe";
+    public ClientProfile ClientProfile { get; set; } = ClientProfile.Normal;
 
     public static BotConfig CreateDefault()
     {

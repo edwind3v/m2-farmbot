@@ -1,4 +1,5 @@
 using FarmBot.Core.Combat;
+using FarmBot.Core.Configuration;
 using FarmBot.Core.Models;
 
 namespace FarmBot.Tests;
@@ -237,6 +238,39 @@ public class AutoCombatControllerTests
         Assert.False(sink.Available);
         Assert.False(sink.TrySubmit(action));
         Assert.Contains("no external command interface", sink.Status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NormalModeUsesSetTargetThenAttackLikeTheLastPushedClient()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.ClientProfile = ClientProfile.Normal;
+        config.AttackRange = 300;
+        config.AttackIntervalMs = 400;
+        config.MoveIntervalMs = 100;
+
+        var far = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 800, 0));
+        var acquired = controller.Tick(far, config, true, 5_000);
+        Assert.Equal(NativeActionKind.SetTarget, acquired.Action!.Kind);
+
+        var approach = controller.Tick(far, config, true, 5_200);
+        Assert.Equal(CombatState.Approach, approach.State);
+        Assert.Equal(NativeActionKind.PressActor, approach.Action!.Kind);
+
+        var near = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 80, 0));
+        var face = controller.Tick(near, config, true, 5_400);
+        Assert.Equal(CombatState.FaceTarget, face.State);
+        Assert.Equal(NativeActionKind.Face, face.Action!.Kind);
+
+        var armed = controller.Tick(near, config, true, 5_500);
+        Assert.Equal(CombatState.Attack, armed.State);
+        Assert.Equal(NativeActionKind.Face, armed.Action!.Kind);
+
+        var attack = controller.Tick(near, config, true, 5_600);
+        Assert.Equal(CombatState.Wait, attack.State);
+        Assert.Equal(NativeActionKind.Attack, attack.Action!.Kind);
     }
 
     [Fact]

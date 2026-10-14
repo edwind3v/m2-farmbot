@@ -28,7 +28,7 @@ public sealed class LauncherForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        var running = _shell.State.Slots.Any(_shell.IsRunning);
+        var running = _shell.HasRunningSessions;
         if (running)
         {
             var result = MessageBox.Show(
