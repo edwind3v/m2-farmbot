@@ -312,10 +312,14 @@ public sealed class LauncherShell : IDisposable
         Notify();
 
         var password = SlotStore.UnprotectPassword(slot.PasswordProtected);
-        if (string.IsNullOrWhiteSpace(slot.Account) || string.IsNullOrWhiteSpace(password))
+        if (_state.SelectedProfile == ClientProfile.Baerim ||
+            string.IsNullOrWhiteSpace(slot.Account) ||
+            string.IsNullOrWhiteSpace(password))
         {
-            session.Status = "in-game";
-            Status = "client opened — log in manually, then save the slot";
+            session.Status = "client opened";
+            Status = _state.SelectedProfile == ClientProfile.Baerim
+                ? "client opened — log in in-game, then start the bot"
+                : "client opened — log in manually, then save the slot";
             Notify();
             return;
         }
@@ -449,7 +453,7 @@ public sealed class LauncherShell : IDisposable
             Thread.Sleep(300);
         }
 
-        Thread.Sleep(5000);
+        Thread.Sleep(8000);
     }
 
     private static string WindowTitle(ClientSlot slot)

@@ -54,28 +54,59 @@ public sealed class QuickPlayOrchestrator
         }
 
         Thread.Sleep(2500);
-        _log.Info($"quick play login for {slot.Account} slot {characterSlot + 1} on {channel.Name}");
-        var login = _sink.Login(
-            slot.Account,
-            password,
-            channel.Host,
-            channel.Port,
-            channel.AuthHost,
-            channel.AuthPort,
-            characterSlot);
-        var loginError = login.Ok
-            ? ""
-            : (string.IsNullOrWhiteSpace(login.Reason) ? "login command failed" : login.Reason);
-        if (!WaitFor(deadline, () =>
-            {
-                if (!string.IsNullOrEmpty(loginError))
-                    return true;
-                return IsSelectOrEntering(CurrentPhase()) || Snapshot().InWorld;
-            }) || !string.IsNullOrEmpty(loginError))
+        var phase = CurrentPhase();
+        if (IsHandshake(phase) || IsSelectOrEntering(phase) || Snapshot().InWorld)
         {
-            status = string.IsNullOrEmpty(loginError)
-                ? "timed out waiting for character select: " + CurrentPhase()
-                : loginError;
+            _log.Info("quick play skip login, already " + phase);
+        }
+        else
+        {
+            if (!IsLoginScreen(phase))
+            {
+                if (!WaitFor(deadline, () =>
+                    {
+                        var p = CurrentPhase();
+                        return IsLoginScreen(p) || IsHandshake(p) || IsSelectOrEntering(p) || Snapshot().InWorld;
+                    }))
+                {
+                    status = "timed out waiting for login phase: " + CurrentPhase();
+                    _log.Warn(status);
+                    return false;
+                }
+
+                phase = CurrentPhase();
+            }
+
+            if (IsLoginScreen(phase))
+            {
+                _log.Info($"quick play login for {slot.Account} slot {characterSlot + 1} on {channel.Name}");
+                var login = _sink.Login(
+                    slot.Account,
+                    password,
+                    channel.Host,
+                    channel.Port,
+                    channel.AuthHost,
+                    channel.AuthPort,
+                    characterSlot);
+                var loginError = login.Ok
+                    ? ""
+                    : (string.IsNullOrWhiteSpace(login.Reason) ? "login command failed" : login.Reason);
+                if (!string.IsNullOrEmpty(loginError) &&
+                    !IsHandshake(loginError) &&
+                    !loginError.Contains("waiting", StringComparison.OrdinalIgnoreCase))
+                {
+                    status = loginError;
+                    _log.Warn(status);
+                    return false;
+                }
+            }
+            else
+                _log.Info("quick play skip login, already " + phase);
+        }
+
+        if (!WaitFor(deadline, () => IsSelectOrEntering(CurrentPhase()) || Snapshot().InWorld))
+        {
+            status = "timed out waiting for character select: " + CurrentPhase();
             _log.Warn(status);
             return false;
         }
@@ -187,8 +218,14 @@ public sealed class QuickPlayOrchestrator
         }
     }
 
+    public static bool IsHandshake(string phase) =>
+        ContainsPhase(phase, "Handshake");
+
+    public static bool IsLoginScreen(string phase) =>
+        ContainsPhase(phase, "Login") && !ContainsPhase(phase, "Off") && !IsHandshake(phase);
+
     public static bool IsAtLeastLogin(string phase) =>
-        (ContainsPhase(phase, "Login") && !ContainsPhase(phase, "Off")) || IsSelectOrEntering(phase);
+        IsLoginScreen(phase) || IsHandshake(phase) || IsSelectOrEntering(phase);
 
     public static bool NeedsCharacterSelect(string phase) =>
         ContainsPhase(phase, "Select") && !IsEnteringWorld(phase);

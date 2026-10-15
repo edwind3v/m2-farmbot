@@ -153,20 +153,51 @@ int main(int argc, char** argv)
             : workdir;
         char cmdBuf[1024];
         _snprintf_s(cmdBuf, _TRUNCATE, "%s", cmd.c_str());
-        if (!CreateProcessA(exe.c_str(), cmdBuf, nullptr, nullptr, FALSE, 0, nullptr,
+        bool baerim = false;
+        if (!layout.empty())
+        {
+            FILE* lf = nullptr;
+            if (fopen_s(&lf, layout.c_str(), "r") == 0 && lf)
+            {
+                char line[256];
+                while (fgets(line, sizeof(line), lf))
+                {
+                    if (_strnicmp(line, "profile=baerim", 14) == 0)
+                    {
+                        baerim = true;
+                        break;
+                    }
+                }
+                fclose(lf);
+            }
+        }
+        const DWORD flags = baerim ? CREATE_SUSPENDED : 0;
+        if (!CreateProcessA(exe.c_str(), cmdBuf, nullptr, nullptr, FALSE, flags, nullptr,
                             dir.empty() ? nullptr : dir.c_str(), &si, &pi))
         {
             printf("create process failed %lu\n", GetLastError());
             return 4;
         }
-        CloseHandle(pi.hThread);
         WriteConfig(pipe, token, pi.dwProcessId, layout);
+        if (baerim)
+        {
+            if (!Inject(pi.hProcess, injectDll))
+            {
+                printf("inject failed %lu\n", GetLastError());
+                ResumeThread(pi.hThread);
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+                return 5;
+            }
+            ResumeThread(pi.hThread);
+        }
+        CloseHandle(pi.hThread);
         if (!WaitForWindow(pi.dwProcessId, 30000))
         {
             printf("client window did not appear; injecting anyway\n");
             fflush(stdout);
         }
-        if (!Inject(pi.hProcess, injectDll))
+        if (!baerim && !Inject(pi.hProcess, injectDll))
         {
             printf("inject failed %lu\n", GetLastError());
             CloseHandle(pi.hProcess);

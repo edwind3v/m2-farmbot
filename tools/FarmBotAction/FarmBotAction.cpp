@@ -88,8 +88,11 @@ static unsigned kMoveToDestRva = 0xA6BB0;
 static unsigned kMoveToPixelRva = 0;
 static unsigned kGetMainActorRva = 0;
 static unsigned kPressActorRva = 0;
+static unsigned kMousePressRva = 0;
 static unsigned kChaseRva = 0;
 static unsigned kApproachInstRva = 0;
+static unsigned kAttackDestRva = 0;
+static unsigned kInstAttackRva = 0;
 static unsigned kGetPixelRva = 0;
 static unsigned kInRangeRva = 0;
 static const unsigned kFuncWait = 0;
@@ -183,6 +186,7 @@ typedef int (__thiscall* FnInRange)(void* me, const void* you);
 typedef void* (__thiscall* FnGetMain)(void* self);
 typedef void (__thiscall* FnAttackKey)(void* self, bool press);
 typedef void (__thiscall* FnPressActor)(void* self, void* inst, unsigned vid, int isAuto);
+typedef void (__thiscall* FnMousePress)(void* self, void* inst, int isAuto);
 typedef void (__thiscall* FnVid)(void* self, unsigned vid);
 typedef int (__thiscall* FnLoadAtlas)(void* self);
 typedef void (__thiscall* FnAtlasSize)(void* self, float* x, float* y);
@@ -309,6 +313,7 @@ static int g_loadFinished;
 static int g_loadNearEnd;
 static int g_maxLoadSteps;
 static int g_loginSent;
+static int g_baerimAutoOff;
 static int g_selectSent;
 static int g_layoutRecovered;
 static int g_arthion;
@@ -511,6 +516,8 @@ static void RefreshHud(void* player)
 
 static bool CallSetTarget(void* player, unsigned vid, int force)
 {
+    if (g_baerim)
+        return false;
     void* iabs = (char*)player + kThisAdj;
     __try
     {
@@ -779,6 +786,7 @@ static void* MainInstance();
 static void* CallGetMainActor();
 static bool CallAttackKey(void* player, bool press);
 static bool CallPressActor(void* player, unsigned vid);
+static int SafeReserveClick(void* player, unsigned vid);
 static void ClearReserved(void* player);
 static void CollectGroundItems(std::vector<ShotHit>* out, const char* me);
 static void CollectClosestItem(float x, float y, float radius, std::vector<ShotHit>* out, const char* me);
@@ -2328,6 +2336,17 @@ static bool ExecuteSession(const Command& cmd)
         cmd.type != "login" && cmd.type != "select_character" && cmd.type != "enter_game")
         return false;
 
+    if (g_baerim && (cmd.type == "skip_intro" || cmd.type == "login" ||
+        cmd.type == "select_character" || cmd.type == "enter_game"))
+    {
+        RefreshSession();
+        g_lastOk = true;
+        g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "baerim manual login";
+        NativeLog("baerim skip auto-login cmd=%s phase=%s", cmd.type.c_str(),
+            g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
+        return true;
+    }
+
     if (cmd.type == "get_phase" || cmd.type == "get_session")
     {
         RefreshSession();
@@ -2389,7 +2408,7 @@ static bool ExecuteSession(const Command& cmd)
     if (cmd.type == "login")
     {
         RefreshSession();
-        if (g_loginSent || PhaseHas("Select") || PhaseHas("Load") || PhaseHas("Game"))
+        if (g_loginSent || PhaseHas("Select") || PhaseHas("Load") || PhaseHas("Game") || PhaseHas("Hand"))
         {
             g_lastOk = true;
             g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "login already sent";
@@ -3111,15 +3130,42 @@ static void CollectClosestMoney(float x, float y, float radius, std::vector<Shot
     CollectClosest(kGetCloseMoneyRva, x, y, radius, out, 1, me);
 }
 
+static void* SafeVtblGetMain(void* self)
+{
+    if (!UserPtr(self))
+        return nullptr;
+    void* inst = nullptr;
+    __try
+    {
+        void** vtbl = *(void***)self;
+        if (UserPtr(vtbl) && UserPtr(vtbl[0x88 / 4]))
+            inst = ((FnGetMain)vtbl[0x88 / 4])(self);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        inst = nullptr;
+    }
+    return LooksInstance(inst) ? inst : nullptr;
+}
+
 static void* CallGetMainActor()
 {
     void* fromPtr = MainInstance();
+    void* player = Player();
+    if (g_baerim && player)
+    {
+        void* inst = SafeVtblGetMain((char*)player + kThisAdj);
+        if (inst)
+            return inst;
+        inst = SafeVtblGetMain(player);
+        if (inst)
+            return inst;
+    }
     if (!kGetMainActorRva || !g_base)
         return fromPtr;
     FnGetMain fn = (FnGetMain)(g_base + kGetMainActorRva);
     if (IsBadCodePtr((FARPROC)fn))
         return fromPtr;
-    void* player = Player();
     if (!player)
         return fromPtr;
     void* selves[2] = { (char*)player + kThisAdj, player };
@@ -3148,6 +3194,24 @@ static bool CallInstMove(unsigned rva, void* me, const void* arg)
     __try
     {
         fn(me, arg);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool CallInstVoid(unsigned rva, void* inst)
+{
+    if (!rva || !inst || !g_base)
+        return false;
+    FnVoid fn = (FnVoid)(g_base + rva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    __try
+    {
+        fn(inst);
         return true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -3252,7 +3316,8 @@ static bool PixelInMelee(unsigned vid)
             continue;
         const float dx = mx - tx;
         const float dy = my - ty;
-        if (dx * dx + dy * dy <= 150.f * 150.f)
+        const float reach = g_baerim ? 280.f : 150.f;
+        if (dx * dx + dy * dy <= reach * reach)
             return true;
     }
     return false;
@@ -3282,7 +3347,7 @@ static unsigned AutoAttackVidDisp()
 
 static void SetAutoAttackVid(void* player, unsigned vid)
 {
-    if (!player)
+    if (!player || g_baerim)
         return;
     const unsigned disp = AutoAttackVidDisp();
     __try
@@ -3298,7 +3363,7 @@ static void SetAutoAttackVid(void* player, unsigned vid)
 
 static void HoldAttackKeyOff(void* player)
 {
-    if (!player)
+    if (!player || g_baerim)
         return;
     CallAttackKey(player, false);
 }
@@ -3318,6 +3383,75 @@ static BYTE ReadAtkKey(void* player)
     return v;
 }
 
+static unsigned BaerimReadU32(void* p, unsigned off)
+{
+    unsigned v = 0;
+    if (!p)
+        return 0;
+    __try
+    {
+        v = *(unsigned*)((char*)p + off);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    return v;
+}
+
+static void BaerimClearMode(void* player)
+{
+    if (!player)
+        return;
+    __try
+    {
+        *(unsigned*)((char*)player + 0x54) = 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
+static void BaerimSetTargetVid(void* player, unsigned vid)
+{
+    if (!player)
+        return;
+    __try
+    {
+        *(unsigned*)((char*)player + 0x41A78) = vid;
+        *(unsigned*)((char*)player + 0x419D4) = vid;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
+static bool BaerimSetAttackKey(void* player, bool press)
+{
+    if (!player)
+        return false;
+    __try
+    {
+        *((BYTE*)player + 0x64) = press ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    if (!g_base)
+        return true;
+    FnAttackKey fn = (FnAttackKey)(g_base + 0x1ABC10);
+    if (IsBadCodePtr((FARPROC)fn))
+        return true;
+    __try
+    {
+        fn(player, press);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    return true;
+}
+
 static bool DriveToTarget(void* player, unsigned vid, float x, float y)
 {
     (void)x;
@@ -3330,12 +3464,58 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
     void* live = CallGetInstance(g_clickVid);
     if (!LooksInstance(live))
     {
+        if (g_baerim)
+        {
+            BaerimSetAttackKey(player, false);
+            BaerimSetTargetVid(player, 0);
+            ClearReserved(player);
+        }
         g_chaseVid = 0;
         g_walkVid = 0;
         InterlockedExchange(&g_allowMelee, 0);
         return false;
     }
     InterlockedExchange(&g_botCall, 1);
+
+    if (g_baerim)
+    {
+        void* main = CallGetMainActor();
+        float mx = 0, my = 0, tx = 0, ty = 0;
+        if (LooksInstance(main))
+            ReadActorPixel(main, &mx, &my);
+        ReadActorPixel(live, &tx, &ty);
+        const float dx = mx - tx;
+        const float dy = my - ty;
+        const float dist = sqrtf(dx * dx + dy * dy);
+        const bool inRange = LooksInstance(main) && CallInRange(main, live);
+        InterlockedExchange(&g_allowMelee, inRange ? 1 : 0);
+        g_walkVid = g_clickVid;
+        const DWORD now = GetTickCount();
+        if (!inRange)
+        {
+            BaerimSetAttackKey(player, false);
+            const bool pressed = CallPressActor(player, g_clickVid);
+            if (now - g_lastWalkMs >= 400)
+            {
+                g_lastWalkMs = now;
+                NativeLog("BOT walk vid=%u press=%d dist=%.0f mode=%u me=%p you=%p",
+                    g_clickVid, pressed ? 1 : 0, dist, BaerimReadU32(player, 0x54), main, live);
+            }
+            InterlockedExchange(&g_botCall, 0);
+            return false;
+        }
+        BaerimClearMode(player);
+        BaerimSetTargetVid(player, g_clickVid);
+        const bool keyed = BaerimSetAttackKey(player, true);
+        if (!g_lastAtkMs || now - g_lastAtkMs >= 400)
+        {
+            g_lastAtkMs = now;
+            NativeLog("BOT combo vid=%u key=%d dist=%.0f atkKey=%u me=%p you=%p",
+                g_clickVid, keyed ? 1 : 0, dist, BaerimReadU32(player, 0x64) & 0xFF, main, live);
+        }
+        InterlockedExchange(&g_botCall, 0);
+        return true;
+    }
 
     if (PixelInMelee(g_clickVid))
     {
@@ -3515,6 +3695,39 @@ static bool CallAttackKey(void* player, bool press)
     return false;
 }
 
+static int SafePressActor(FnPressActor fn, void* self, void* target, unsigned vid)
+{
+    if (!fn || !self || !target || IsBadCodePtr((FARPROC)fn))
+        return 0;
+    __try
+    {
+        fn(self, target, vid, g_baerim ? 0 : 1);
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static int SafeReserveClick(void* player, unsigned vid)
+{
+    if (!g_base || !player || !vid || !kReserveClickRva)
+        return 0;
+    FnVid fn = (FnVid)(g_base + kReserveClickRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return 0;
+    __try
+    {
+        fn(player, vid);
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
 static bool CallPressActor(void* player, unsigned vid)
 {
     if (!kPressActorRva || !player || !vid)
@@ -3526,20 +3739,21 @@ static bool CallPressActor(void* player, unsigned vid)
     FnPressActor fn = (FnPressActor)(g_base + kPressActorRva);
     if (!g_base || IsBadCodePtr((FARPROC)fn))
         return false;
+    if (g_baerim)
+    {
+        void* main = CallGetMainActor();
+        if (!LooksInstance(main))
+            return false;
+        return SafePressActor(fn, player, main, g_clickVid) != 0;
+    }
     void* selves[2];
     FillPlayerSelves(player, selves);
     for (int i = 0; i < 2; ++i)
     {
         if (!selves[i] || (i == 1 && selves[1] == selves[0]))
             continue;
-        __try
-        {
-            fn(selves[i], target, g_clickVid, 1);
+        if (SafePressActor(fn, selves[i], target, g_clickVid))
             return true;
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-        }
     }
     return false;
 }
@@ -3566,9 +3780,15 @@ static void StopCombat(void* player)
     g_walkVid = 0;
     g_clickVid = 0;
     InterlockedExchange(&g_allowMelee, 0);
+    ClearReserved(player);
+    if (g_baerim)
+    {
+        BaerimSetAttackKey(player, false);
+        BaerimSetTargetVid(player, 0);
+        return;
+    }
     CallRva(kSetAutoRva, player, 0);
     SetAutoAttackVid(player, 0);
-    ClearReserved(player);
     HoldAttackKeyOff(player);
     CallSetTarget(player, 0, 1);
 }
@@ -3586,7 +3806,17 @@ static void ChaseTick(void* player)
     }
     const DWORD now = GetTickCount();
     const bool holding = g_walkVid == g_chaseVid && InterlockedCompareExchange(&g_allowMelee, 0, 0) != 0;
-    if (g_lastChaseMs && now - g_lastChaseMs < (holding ? 250u : 150u))
+    if (g_baerim && !LooksInstance(CallGetInstance(g_chaseVid)))
+    {
+        BaerimSetAttackKey(player, false);
+        BaerimSetTargetVid(player, 0);
+        ClearReserved(player);
+        g_chaseVid = 0;
+        g_walkVid = 0;
+        InterlockedExchange(&g_allowMelee, 0);
+        return;
+    }
+    if (g_lastChaseMs && now - g_lastChaseMs < (g_baerim ? 50u : (holding ? 250u : 150u)))
         return;
     g_lastChaseMs = now;
     DriveToTarget(player, g_chaseVid, g_chaseX, g_chaseY);
@@ -5871,6 +6101,28 @@ static void SafeDrain()
     }
 }
 
+static void BaerimBlockAutoLogin()
+{
+    if (!g_baerim || g_baerimAutoOff)
+        return;
+    if (!PythonDll())
+        return;
+    RefreshSession();
+    if (PhaseHas("Game") || PhaseHas("Load") || PhaseHas("Select") || PhaseHas("Hand"))
+    {
+        g_baerimAutoOff = 1;
+        return;
+    }
+    void* handler = PythonHandler(NetStream());
+    if (!handler)
+        return;
+    SafePySetInt(handler, "isAutoLogin", 0);
+    SafePySetInt(handler, "isAutoSelect", 0);
+    g_baerimAutoOff = 1;
+    NativeLog("baerim auto-login disabled phase=%s",
+        g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
+}
+
 static void Drain()
 {
     if (InterlockedCompareExchange(&g_busy, 1, 0) != 0)
@@ -5898,6 +6150,8 @@ static void OnLoopPump(HWND hwnd, UINT min, UINT max)
     if (hwnd != nullptr || min != 0 || max != 0)
         return;
     g_loopTid = GetCurrentThreadId();
+    if (g_baerim)
+        BaerimBlockAutoLogin();
     SafeDrain();
     MaybeAutoLoot(Player());
 }
@@ -6184,12 +6438,17 @@ static void InstallLoopHooks(HMODULE client)
             ++g_iatHooks;
         if (SwapIat(client, getW, (void*)HookGetW, (void**)&g_getW))
             ++g_iatHooks;
-        if (kPlayerUpdateRva && Trampoline((BYTE*)client + kPlayerUpdateRva, (void*)HookUpdate, (void**)&g_playerUpdate))
+        if (!g_baerim && kPlayerUpdateRva && Trampoline((BYTE*)client + kPlayerUpdateRva, (void*)HookUpdate, (void**)&g_playerUpdate))
             ++g_iatHooks;
-        if (kSetLoginInfoRva && Trampoline((BYTE*)client + kSetLoginInfoRva, (void*)HookSetLoginInfo, (void**)&g_setLoginInfo))
+        if (!g_baerim && kSetLoginInfoRva && Trampoline((BYTE*)client + kSetLoginInfoRva, (void*)HookSetLoginInfo, (void**)&g_setLoginInfo))
             ++g_iatHooks;
         if (!NativeFarm())
             return;
+        if (g_baerim)
+        {
+            NativeLog("hook AttackKey=0 Reserve=0 SetTarget=0 Combo=0 Chase=0 InRange=0 MoveTo=0 Update=0 baerim click-only");
+            return;
+        }
         NativeLog("hook AttackKey=%d Reserve=%d SetTarget=%d Combo=%d Chase=%d InRange=%d MoveTo=%d Update=%d",
             kAttackKeyRva && Trampoline((BYTE*)client + kAttackKeyRva, (void*)HookAttackKey, (void**)&g_origAttackKey) ? 1 : 0,
             kReserveClickRva && Trampoline((BYTE*)client + kReserveClickRva, (void*)HookReserveClick, (void**)&g_origReserveClick) ? 1 : 0,
@@ -6389,8 +6648,11 @@ static void ClearLoginRvas()
     kMoveToPixelRva = 0;
     kGetMainActorRva = 0;
     kPressActorRva = 0;
+    kMousePressRva = 0;
     kChaseRva = 0;
     kApproachInstRva = 0;
+    kAttackDestRva = 0;
+    kInstAttackRva = 0;
     kGetPixelRva = 0;
     kInRangeRva = 0;
     kSendClickRva = 0;
@@ -6505,10 +6767,16 @@ static void LoadConfig()
             kGetMainActorRva = ParseHex(line + 8);
         else if (strncmp(line, "pressActor=", 11) == 0)
             kPressActorRva = ParseHex(line + 11);
+        else if (strncmp(line, "mousePress=", 11) == 0)
+            kMousePressRva = ParseHex(line + 11);
         else if (strncmp(line, "chase=", 6) == 0)
             kChaseRva = ParseHex(line + 6);
         else if (strncmp(line, "approachInst=", 13) == 0)
             kApproachInstRva = ParseHex(line + 13);
+        else if (strncmp(line, "attackDest=", 11) == 0)
+            kAttackDestRva = ParseHex(line + 11);
+        else if (strncmp(line, "instAttack=", 11) == 0)
+            kInstAttackRva = ParseHex(line + 11);
         else if (strncmp(line, "getPixel=", 9) == 0)
             kGetPixelRva = ParseHex(line + 9);
         else if (strncmp(line, "inRange=", 8) == 0)
@@ -6639,6 +6907,8 @@ static void LoadConfig()
         kGetNameSlot = 0x14;
     if (g_baerim && !kSelfVidDisp)
         kSelfVidDisp = 0x334;
+    if (g_baerim && !kMousePressRva)
+        kMousePressRva = 0x1ADA20;
     if (!NativeFarm())
     {
         kSingletonRva = 0x482398;
@@ -6911,9 +7181,23 @@ static DWORD WINAPI InitThread(void*)
     HMODULE client = FindClient();
     g_base = (BYTE*)client;
     InitAtlasMap();
+    if (g_baerim)
+    {
+        kPressActorRva = 0x1AB240;
+        kReserveClickRva = 0x1AB620;
+        kAttackKeyRva = 0x1ABC10;
+        kComboRva = 0x1AA5B0;
+        kReservedModeDisp = 0x54;
+        kVidReservedDisp = 0x419D4;
+        kMoveToDestRva = 0x1258E0;
+        kAttackDestRva = 0;
+        kInstAttackRva = 0x125C70;
+        kInRangeRva = 0x11E1C0;
+        kGetPixelRva = 0x126030;
+    }
     InstallLoopHooks(client);
-    NativeLog("loaded base=%p profile=%s sendAttack=0x%X sendState=0x%X attackKey=0x%X combo=0x%X reserve=0x%X setTarget=0x%X getItemIndex=0x%X itemMgr=0x%X getSkillIndex=0x%X clickSkill=0x%X sendUseSkill=0x%X skillMgr=0x%X hooks=%d comboPatch=%d",
-        g_base, g_arthion ? "arthion" : g_baerim ? "baerim" : "normal", kSendAttackRva, kSendStateRva, kAttackKeyRva, kComboRva, kReserveClickRva, kSetTargetRva, kGetItemIndexRva, kItemMgrRva, kGetSkillIndexRva, kClickSkillRva, kSendUseSkillRva, kSkillMgrRva, g_iatHooks, g_updateComboCall ? 1 : 0);
+    NativeLog("loaded base=%p profile=%s pressActor=0x%X moveTo=0x%X instAtk=0x%X inRange=0x%X getPixel=0x%X hooks=%d",
+        g_base, g_arthion ? "arthion" : g_baerim ? "baerim" : "normal", kPressActorRva, kMoveToDestRva, kInstAttackRva, kInRangeRva, kGetPixelRva, g_iatHooks);
     Serve();
     return 0;
 }

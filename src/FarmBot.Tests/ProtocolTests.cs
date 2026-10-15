@@ -66,6 +66,11 @@ public class ProtocolTests
         Assert.True(QuickPlayOrchestrator.IsEnteringWorld("Loading"));
         Assert.True(QuickPlayOrchestrator.NeedsCharacterSelect("Select"));
         Assert.False(QuickPlayOrchestrator.NeedsCharacterSelect("Handshake"));
+        Assert.True(QuickPlayOrchestrator.IsHandshake("HandShake"));
+        Assert.False(QuickPlayOrchestrator.IsLoginScreen("HandShake"));
+        Assert.True(QuickPlayOrchestrator.IsAtLeastLogin("HandShake"));
+        Assert.True(QuickPlayOrchestrator.IsLoginScreen("Login"));
+        Assert.False(QuickPlayOrchestrator.IsLoginScreen("OffLine"));
         Assert.False(QuickPlayOrchestrator.IsGame("Loading"));
         Assert.True(QuickPlayOrchestrator.IsGame("Game"));
         Assert.False(QuickPlayOrchestrator.IsGame("GameLoading"));
