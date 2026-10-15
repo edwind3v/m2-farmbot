@@ -1320,6 +1320,7 @@ static int StartGameFlag(void* net);
 static int IsPythonGameWindow();
 static int LoadingStepCount();
 static int WindowClassIs(const char* name);
+static int ComputeInWorld();
 static void* SafePyGetAttr(void* obj, const char* name);
 static int SafePyTypeName(void* obj, char* out, int cap);
 
@@ -1442,7 +1443,22 @@ static void RefreshSession()
             g_openedGameWindow = 1;
     }
     g_startGame = g_loadFinished;
-    g_inWorld = (g_openedGameWindow && g_loadFinished) ? 1 : 0;
+    g_inWorld = ComputeInWorld();
+}
+
+static int ComputeInWorld()
+{
+    if (WindowClassIs("LoadingWindow") || WindowClassIs("LoginWindow") ||
+        WindowClassIs("SelectCharacterWindow") || PhaseHas("Load") ||
+        PhaseHas("Login") || PhaseHas("Select") || PhaseHas("Hand") ||
+        PhaseHas("Logo") || PhaseHas("Intro"))
+        return 0;
+    if (PhaseHas("Game") || WindowClassIs("GameWindow") || HasGameWindow())
+        return 1;
+    if (g_hudOk && g_hudMaxHp > 0 && g_hudLevel >= 1 && g_hudLevel <= 250 &&
+        !g_sessionCharacter.empty())
+        return 1;
+    return g_inWorld;
 }
 
 static int SafePhase(FnPhase fn, void* self)
@@ -2231,6 +2247,7 @@ static bool ExecuteSession(const Command& cmd)
         g_openedGameWindow = 0;
         g_sawLoadSteps = 0;
         g_loadFinished = 0;
+        g_inWorld = 0;
         g_loadNearEnd = 0;
         g_maxLoadSteps = 0;
         g_selectSent = 0;
@@ -4732,6 +4749,13 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "get_pots")
     {
+        if (!g_inWorld)
+        {
+            g_potsJson = "[]";
+            g_lastOk = true;
+            g_lastReason = "not in world";
+            return;
+        }
         ScanPots();
         g_lastOk = true;
         g_lastReason = "pots";
@@ -4740,6 +4764,13 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "get_skills")
     {
+        if (!g_inWorld)
+        {
+            g_skillsJson = "[]";
+            g_lastOk = true;
+            g_lastReason = "not in world";
+            return;
+        }
         ScanSkills();
         g_lastOk = true;
         g_lastReason = "skills";
@@ -4748,6 +4779,12 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "use_item")
     {
+        RefreshSession();
+        if (!g_inWorld)
+        {
+            g_lastReason = "not in world";
+            return;
+        }
         const unsigned cell = cmd.slot >= 0 ? (unsigned)cmd.slot : cmd.vid;
         NativeLog("use_item cell=%u useItem=0x%X sendUse=0x%X", cell, kUseItemRva, kSendItemUseRva);
         const int used = CallSendItemUse(cell) ? 1 : 0;
@@ -4767,6 +4804,12 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "use_skill")
     {
+        RefreshSession();
+        if (!g_inWorld)
+        {
+            g_lastReason = "not in world";
+            return;
+        }
         const unsigned slot = cmd.slot >= 0 ? (unsigned)cmd.slot : 0;
         const unsigned vid = cmd.vid;
         const int index = NativeSkillIndex(slot);
@@ -4819,7 +4862,11 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "get_hud")
     {
+        RefreshSession();
         RefreshHud(player);
+        g_inWorld = ComputeInWorld();
+        if (g_inWorld && g_sessionPhase.empty())
+            g_sessionPhase = "Game";
         g_lastOk = g_hudOk;
         g_lastReason = g_hudOk ? "hud" : (g_getStatusSlot < 0 ? "GetStatus vtable missing" : "GetStatus empty");
         return;
@@ -5931,15 +5978,33 @@ static void Serve()
         DWORD wait = WAIT_OBJECT_0;
         if (cmd.type == "get_pots")
         {
-            ScanPots();
-            g_lastOk = true;
-            g_lastReason = "pots";
+            if (!g_inWorld)
+            {
+                g_potsJson = "[]";
+                g_lastOk = true;
+                g_lastReason = "not in world";
+            }
+            else
+            {
+                ScanPots();
+                g_lastOk = true;
+                g_lastReason = "pots";
+            }
         }
         else if (cmd.type == "get_skills")
         {
-            ScanSkills();
-            g_lastOk = true;
-            g_lastReason = "skills";
+            if (!g_inWorld)
+            {
+                g_skillsJson = "[]";
+                g_lastOk = true;
+                g_lastReason = "not in world";
+            }
+            else
+            {
+                ScanSkills();
+                g_lastOk = true;
+                g_lastReason = "skills";
+            }
         }
         else
         {
@@ -5950,7 +6015,7 @@ static void Serve()
 
             const bool waitReply = cmd.type == "get_phase" || cmd.type == "get_session" ||
                 cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game" ||
-                cmd.type == "skip_intro" || cmd.type == "get_atlas" ||
+                cmd.type == "skip_intro" || cmd.type == "get_atlas" || cmd.type == "get_hud" ||
                 cmd.type == "use_item" || cmd.type == "use_skill";
             if (waitReply)
             {

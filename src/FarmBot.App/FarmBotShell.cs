@@ -109,9 +109,10 @@ public sealed class FarmBotShell : IDisposable
             var target = view.Target == null
                 ? "no target"
                 : $"VID {view.Target.Vid}  {EntityMapping.TypeName(view.Target.ResolvedType)}  {view.Target.Distance:0}";
+            var game = string.IsNullOrWhiteSpace(view.GamePhase) ? "" : $"  ·  {view.GamePhase}";
             return view.Enabled
-                ? $"{view.CombatState}  ·  {target}  ·  {view.Reason}"
-                : $"{view.Phase}  ·  {view.Reason}";
+                ? $"{view.CombatState}  ·  {target}  ·  {view.Reason}{game}"
+                : $"{view.Phase}  ·  {view.Reason}{game}";
         }
     }
 
@@ -575,6 +576,8 @@ public sealed class FarmBotShell : IDisposable
             SelectedClientPid = BoundClientPid;
         RefreshClientList();
         var native = new NativeGameControl(_actionSink, _log);
+        var root = AppContext.BaseDirectory;
+        var (account, character) = CharacterKitStore.IdentityFromConfig(root, _configPath);
         _runtime = new BotRuntime(
             live,
             native,
@@ -582,7 +585,10 @@ public sealed class FarmBotShell : IDisposable
             CopyConfig,
             () => CursorProbe.IsInTopLeftCorner(),
             nativeCombat: true,
-            _actionSink);
+            _actionSink,
+            root,
+            account,
+            character);
     }
 
     private void RefreshClientList()

@@ -71,6 +71,11 @@ public class ProtocolTests
         Assert.False(QuickPlayOrchestrator.IsGame("GameLoading"));
         Assert.False(QuickPlayOrchestrator.IsEnteringWorld("Login"));
         Assert.False(QuickPlayOrchestrator.IsGame("Login"));
+        Assert.True(QuickPlayOrchestrator.LooksInWorld("", false, "lockedin", 21, 2780));
+        Assert.False(QuickPlayOrchestrator.LooksInWorld("", false, "", 21, 2780));
+        Assert.False(QuickPlayOrchestrator.LooksInWorld("Login", false, "lockedin", 21, 2780));
+        Assert.False(QuickPlayOrchestrator.LooksInWorld("Loading", false, "lockedin", 21, 2780));
+        Assert.True(QuickPlayOrchestrator.LooksInWorld("Game", false, "lockedin", 21, 2780));
     }
 
     [Fact]

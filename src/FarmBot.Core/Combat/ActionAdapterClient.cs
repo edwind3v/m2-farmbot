@@ -264,9 +264,36 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         if (!_client.Connected)
             return false;
         var response = _client.Submit(ActionProtocol.GetHud, 0, true, updateStatus: false);
-        if (!response.Ok || response.MaxHp <= 0 || response.Level is < 1 or > 250)
+        if (!_client.Connected)
             return false;
-        hud = new PlayerHudPoints(response.Level, response.Exp, response.NextExp, response.Hp, response.MaxHp, response.Mp, response.MaxMp);
+        var inWorld = QuickPlayOrchestrator.LooksInWorld(
+            response.Phase,
+            response.InWorld,
+            response.Character,
+            response.Level,
+            response.MaxHp);
+        var phase = response.Phase ?? "";
+        var character = response.Character ?? "";
+        var reason = response.Reason ?? "";
+        if (response.MaxHp <= 0 || response.Level is < 1 or > 250)
+        {
+            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame);
+            return true;
+        }
+
+        hud = new PlayerHudPoints(
+            response.Level,
+            response.Exp,
+            response.NextExp,
+            response.Hp,
+            response.MaxHp,
+            response.Mp,
+            response.MaxMp,
+            inWorld,
+            phase,
+            character,
+            reason,
+            response.StartGame);
         return true;
     }
 

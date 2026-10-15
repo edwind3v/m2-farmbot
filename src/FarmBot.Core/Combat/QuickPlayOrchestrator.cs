@@ -198,6 +198,18 @@ public sealed class QuickPlayOrchestrator
     public static bool IsGame(string phase) =>
         ContainsPhase(phase, "Game") && !ContainsPhase(phase, "Loading");
 
+    public static bool LooksInWorld(string? phase, bool inWorld, string? character, int level, int maxHp)
+    {
+        if (IsEnteringWorld(phase ?? "") && !IsGame(phase ?? ""))
+            return false;
+        if (ContainsPhase(phase ?? "", "Login") || ContainsPhase(phase ?? "", "Select") ||
+            ContainsPhase(phase ?? "", "Handshake"))
+            return false;
+        if (inWorld || IsGame(phase ?? ""))
+            return true;
+        return maxHp > 0 && level is >= 1 and <= 250 && !string.IsNullOrWhiteSpace(character);
+    }
+
     private static bool ContainsPhase(string phase, string name) =>
         !string.IsNullOrWhiteSpace(phase) &&
         phase.Contains(name, StringComparison.OrdinalIgnoreCase);

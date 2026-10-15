@@ -21,7 +21,8 @@ public sealed record BotView(
     IReadOnlyList<PotionStack>? Potions = null,
     int GreenRemain = 0,
     int PurpleRemain = 0,
-    IReadOnlyList<LearnedSkill>? Skills = null);
+    IReadOnlyList<LearnedSkill>? Skills = null,
+    string GamePhase = "");
 
 public sealed class BotRuntime : IDisposable
 {
@@ -60,10 +61,20 @@ public sealed class BotRuntime : IDisposable
     private int _purpleRemain;
     private long _potsAtMs;
     private bool _potsInGame;
+    private bool _potsSeenLive;
     private int _potsEmptyTries;
     private long _skillsAtMs;
     private bool _skillsInGame;
+    private bool _skillsSeenLive;
     private int _skillsEmptyTries;
+    private readonly string _cacheRoot;
+    private string _account;
+    private string _character;
+    private string _kitFingerprint = "";
+    private bool _inWorld;
+    private string _gamePhase = "";
+    private string _phaseLog = "";
+    private long _phaseLogAtMs;
 
     public BotRuntime(
         IGameStateSource source,
@@ -72,7 +83,10 @@ public sealed class BotRuntime : IDisposable
         Func<BotConfig> configProvider,
         Func<bool>? cornerProbe = null,
         bool nativeCombat = false,
-        INativeActionSink? sink = null)
+        INativeActionSink? sink = null,
+        string? cacheRoot = null,
+        string account = "",
+        string character = "")
     {
         _source = source;
         _control = control;
@@ -81,6 +95,10 @@ public sealed class BotRuntime : IDisposable
         _cornerProbe = cornerProbe ?? (() => false);
         _nativeCombat = nativeCombat;
         _sink = sink;
+        _cacheRoot = cacheRoot ?? "";
+        _account = account ?? "";
+        _character = character ?? "";
+        LoadKit();
     }
 
     public void StartLoop()
@@ -203,7 +221,7 @@ public sealed class BotRuntime : IDisposable
     public BotView Capture()
     {
         lock (_gate)
-            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface, _rangedOnly, _potionStacks, _greenRemain, _purpleRemain, _learnedSkills);
+            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface, _rangedOnly, _potionStacks, _greenRemain, _purpleRemain, _learnedSkills, _gamePhase);
     }
 
     public void TickOnce(BotConfig config, long nowMs, int dtMs)
@@ -212,7 +230,8 @@ public sealed class BotRuntime : IDisposable
         if (_source is IAdvancingSource advancing)
             advancing.Advance(dtMs);
 
-        var snapshot = OverlayHud(_source.GetSnapshot(nowMs));
+        var snapshot = OverlayHud(_source.GetSnapshot(nowMs), nowMs);
+        MaybeUpdateIdentity(snapshot);
         TickPotions(snapshot, config, nowMs);
         if (snapshot != null)
         {
@@ -377,6 +396,7 @@ public sealed class BotRuntime : IDisposable
 
     public void Dispose()
     {
+        PersistKit();
         var cts = Interlocked.Exchange(ref _cts, null);
         try
         {
@@ -455,50 +475,58 @@ public sealed class BotRuntime : IDisposable
         if (config.ClientProfile != ClientProfile.Arthion || _sink == null)
             return;
         ClientIconStore.ClientPath = config.ClientPath ?? "";
-        if (snapshot == null || snapshot.Player.MaxHp <= 0)
+        if (!_inWorld)
         {
             if (_potsInGame)
             {
                 _potsInGame = false;
+                _potsSeenLive = false;
                 _potsEmptyTries = 0;
                 _potsAtMs = 0;
-                lock (_gate)
-                    _potionStacks = Array.Empty<PotionStack>();
+                PersistKit();
             }
             return;
         }
 
-        int have;
-        lock (_gate)
-            have = _potionStacks.Count;
-        var interval = !_potsInGame ? 0 : (have == 0 && _potsEmptyTries < 12 ? 1000 : 8000);
+        var interval = !_potsInGame ? 0 : CharacterKitStore.PotionPollMs;
         if (nowMs - _potsAtMs >= interval && _sink.TryReadPots(out var scan))
         {
             var first = !_potsInGame;
             _potsAtMs = nowMs;
             _potsInGame = true;
+            IReadOnlyList<PotionStack> previous;
+            lock (_gate)
+                previous = _potionStacks;
             if (scan.Pots.Count > 0)
             {
-                _potsEmptyTries = 12;
+                _potsEmptyTries = 0;
+                _potsSeenLive = true;
+                var merged = CharacterKitStore.MergePots(scan.Pots, previous);
+                lock (_gate)
+                    _potionStacks = merged;
                 if (first)
-                    _log.Info($"pots loaded {scan.Pots.Count} stacks");
+                    _log.Info($"pots loaded {merged.Count} stacks");
             }
-            else if (_potsEmptyTries < 12)
+            else if (_potsSeenLive || _potsEmptyTries++ >= 8)
             {
-                _potsEmptyTries++;
-                if (first)
-                    _log.Info("pots scan empty, will retry after stats");
+                _potsSeenLive = true;
+                lock (_gate)
+                    _potionStacks = Array.Empty<PotionStack>();
             }
+            else if (first)
+                _log.Info("pots scan empty, will retry after stats");
+
             lock (_gate)
             {
-                if (scan.Pots.Count > 0 || have == 0)
-                    _potionStacks = scan.Pots;
                 _greenRemain = scan.GreenRemain;
                 _purpleRemain = scan.PurpleRemain;
             }
             _potions.NoteNativeRemain(scan.GreenRemain, scan.PurpleRemain, nowMs);
+            PersistKit();
         }
 
+        if (!_potsSeenLive)
+            return;
         IReadOnlyList<PotionStack> pots;
         lock (_gate)
             pots = _potionStacks;
@@ -519,46 +547,52 @@ public sealed class BotRuntime : IDisposable
     {
         if (config.ClientProfile != ClientProfile.Arthion || _sink == null)
             return;
-        if (snapshot == null || snapshot.Player.MaxHp <= 0)
+        if (!_inWorld)
         {
             if (_skillsInGame)
             {
                 _skillsInGame = false;
+                _skillsSeenLive = false;
                 _skillsEmptyTries = 0;
                 _skillsAtMs = 0;
-                lock (_gate)
-                    _learnedSkills = Array.Empty<LearnedSkill>();
+                PersistKit();
             }
             return;
         }
 
-        int have;
-        lock (_gate)
-            have = _learnedSkills.Count;
-        var interval = !_skillsInGame ? 0 : (have == 0 && _skillsEmptyTries < 12 ? 1000 : 100);
+        var interval = !_skillsInGame ? 0 : CharacterKitStore.SkillPollMs;
         if (nowMs - _skillsAtMs >= interval && _sink.TryReadSkills(out var scan))
         {
             var first = !_skillsInGame;
             _skillsAtMs = nowMs;
             _skillsInGame = true;
+            IReadOnlyList<LearnedSkill> previous;
+            lock (_gate)
+                previous = _learnedSkills;
             if (scan.Skills.Count > 0)
             {
-                _skillsEmptyTries = 12;
+                _skillsEmptyTries = 0;
+                _skillsSeenLive = true;
+                var merged = CharacterKitStore.MergeSkills(scan.Skills, previous);
+                lock (_gate)
+                    _learnedSkills = merged;
                 if (first)
-                    _log.Info($"skills loaded {scan.Skills.Count}");
+                    _log.Info($"skills loaded {merged.Count}");
             }
-            else if (_skillsEmptyTries < 12)
+            else if (_skillsSeenLive || _skillsEmptyTries++ >= 8)
             {
-                _skillsEmptyTries++;
-                if (first)
-                    _log.Info("skills scan empty, will retry after stats");
+                _skillsSeenLive = true;
+                lock (_gate)
+                    _learnedSkills = Array.Empty<LearnedSkill>();
             }
+            else if (first)
+                _log.Info("skills scan empty, will retry after stats");
+
+            IReadOnlyList<LearnedSkill> noted;
             lock (_gate)
-            {
-                if (scan.Skills.Count > 0 || have == 0)
-                    _learnedSkills = scan.Skills;
-            }
-            _skills.NoteAffectRemain(scan.Skills, nowMs);
+                noted = _learnedSkills;
+            _skills.NoteAffectRemain(noted, nowMs);
+            PersistKit();
         }
 
         bool active;
@@ -570,7 +604,7 @@ public sealed class BotRuntime : IDisposable
             skills = _learnedSkills;
             targetVid = _target?.Vid ?? 0;
         }
-        if (!active)
+        if (!active || !_skillsSeenLive)
             return;
         var next = _skills.Next(skills, config, targetVid != 0, nowMs);
         if (next == null)
@@ -583,9 +617,119 @@ public sealed class BotRuntime : IDisposable
             _log.Info($"use skill slot={next.Slot} index={next.Index} buff={buff}");
     }
 
-    private WorldSnapshot? OverlayHud(WorldSnapshot? snapshot)
+    private void LoadKit()
     {
-        if (snapshot == null || _sink == null || !_sink.TryReadHud(out var hud))
+        if (string.IsNullOrWhiteSpace(_cacheRoot))
+            return;
+        var path = CharacterKitStore.FilePath(_cacheRoot, _account, _character);
+        if (!CharacterKitStore.TryLoad(path, out var kit))
+            return;
+        lock (_gate)
+        {
+            if (kit.Pots.Count > 0)
+                _potionStacks = kit.Pots;
+            if (kit.Skills.Count > 0)
+                _learnedSkills = kit.Skills;
+        }
+
+        _kitFingerprint = CharacterKitStore.Fingerprint(kit.Pots, kit.Skills);
+        _log.Info($"kit cache loaded {_account}/{_character} pots={kit.Pots.Count} skills={kit.Skills.Count}");
+    }
+
+    private void MaybeUpdateIdentity(WorldSnapshot? snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(_cacheRoot))
+            return;
+        var name = snapshot?.Player.Name?.Trim() ?? "";
+        if (name.Length == 0 || string.Equals(_character, name, StringComparison.Ordinal))
+            return;
+        _character = name;
+        if (_potsSeenLive || _skillsSeenLive)
+        {
+            _kitFingerprint = "";
+            PersistKit();
+            return;
+        }
+
+        var path = CharacterKitStore.FilePath(_cacheRoot, _account, _character);
+        if (CharacterKitStore.TryLoad(path, out var kit) && (kit.Pots.Count > 0 || kit.Skills.Count > 0))
+        {
+            lock (_gate)
+            {
+                if (!_potsSeenLive && kit.Pots.Count > 0)
+                    _potionStacks = kit.Pots;
+                if (!_skillsSeenLive && kit.Skills.Count > 0)
+                    _learnedSkills = kit.Skills;
+            }
+
+            _kitFingerprint = CharacterKitStore.Fingerprint(kit.Pots, kit.Skills);
+            _log.Info($"kit cache loaded {_account}/{_character} pots={kit.Pots.Count} skills={kit.Skills.Count}");
+            return;
+        }
+
+        _kitFingerprint = "";
+        PersistKit();
+    }
+
+    private void PersistKit()
+    {
+        if (string.IsNullOrWhiteSpace(_cacheRoot))
+            return;
+        IReadOnlyList<PotionStack> pots;
+        IReadOnlyList<LearnedSkill> skills;
+        string account;
+        string character;
+        bool seen;
+        lock (_gate)
+        {
+            pots = _potionStacks;
+            skills = _learnedSkills;
+            account = _account;
+            character = _character;
+            seen = _potsSeenLive || _skillsSeenLive;
+        }
+
+        if (pots.Count == 0 && skills.Count == 0 && !seen)
+            return;
+        var fingerprint = CharacterKitStore.Fingerprint(pots, skills);
+        lock (_gate)
+        {
+            if (fingerprint == _kitFingerprint)
+                return;
+        }
+
+        try
+        {
+            var path = CharacterKitStore.FilePath(_cacheRoot, account, character);
+            CharacterKitStore.Save(path, new CharacterKit
+            {
+                Account = account,
+                Character = character,
+                Pots = pots.Select(CharacterKitStore.CopyPot).ToList(),
+                Skills = skills.Select(CharacterKitStore.ForCache).ToList()
+            });
+            lock (_gate)
+                _kitFingerprint = fingerprint;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"kit cache save failed: {ex.Message}");
+        }
+    }
+
+    private WorldSnapshot? OverlayHud(WorldSnapshot? snapshot, long nowMs)
+    {
+        if (snapshot == null || _sink == null)
+            return snapshot;
+        if (!_sink.TryReadHud(out var hud))
+        {
+            NoteGamePhase(null, nowMs);
+            return snapshot;
+        }
+
+        _inWorld = hud.InWorld;
+        NoteGamePhase(hud, nowMs);
+        if (!_inWorld || hud.MaxHp <= 0)
             return snapshot;
         return snapshot with
         {
@@ -600,5 +744,34 @@ public sealed class BotRuntime : IDisposable
                 MaxMp = hud.MaxMp
             }
         };
+    }
+
+    private void NoteGamePhase(PlayerHudPoints? hud, long nowMs)
+    {
+        string phase;
+        string line;
+        if (hud == null)
+        {
+            phase = "(unread)";
+            line = "game phase=(unread) inWorld=no pots=off skills=off hud=no";
+        }
+        else
+        {
+            phase = string.IsNullOrWhiteSpace(hud.Value.Phase) ? "(empty)" : hud.Value.Phase.Trim();
+            var character = string.IsNullOrWhiteSpace(hud.Value.Character) ? "-" : hud.Value.Character.Trim();
+            var reason = string.IsNullOrWhiteSpace(hud.Value.Reason) ? "-" : hud.Value.Reason.Trim();
+            var hudText = hud.Value.MaxHp > 0
+                ? $"hp {hud.Value.Hp}/{hud.Value.MaxHp} lv {hud.Value.Level}"
+                : "no";
+            line =
+                $"game phase={phase} inWorld={(hud.Value.InWorld ? "yes" : "no")} startGame={(hud.Value.StartGame ? "yes" : "no")} pots={(hud.Value.InWorld ? "on" : "off")} skills={(hud.Value.InWorld ? "on" : "off")} hud={hudText} character={character} reason={reason}";
+        }
+
+        _gamePhase = phase;
+        if (string.Equals(line, _phaseLog, StringComparison.Ordinal) && nowMs - _phaseLogAtMs < 3000)
+            return;
+        _phaseLog = line;
+        _phaseLogAtMs = nowMs;
+        _log.Info(line);
     }
 }

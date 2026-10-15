@@ -1,6 +1,18 @@
 namespace FarmBot.Core.Combat;
 
-public readonly record struct PlayerHudPoints(int Level, int Exp, int NextExp, int Hp, int MaxHp, int Mp, int MaxMp);
+public readonly record struct PlayerHudPoints(
+    int Level,
+    int Exp,
+    int NextExp,
+    int Hp,
+    int MaxHp,
+    int Mp,
+    int MaxMp,
+    bool InWorld = false,
+    string Phase = "",
+    string Character = "",
+    string Reason = "",
+    bool StartGame = false);
 
 public static class PlayerHudDecoder
 {
