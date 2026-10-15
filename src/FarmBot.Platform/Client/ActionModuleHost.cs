@@ -211,6 +211,17 @@ public sealed class ActionModuleHost
             AppendHex(text, "packMgr", 0x3956A14u);
             AppendHex(text, "packGet", 0x5054A0u);
             AppendHex(text, "useItem", player.UseItemRva);
+            AppendHex(text, "getSkillIndex", player.GetSkillIndexRva);
+            AppendHex(text, "getSkillLevel", player.GetSkillLevelRva);
+            AppendHex(text, "clickSkill", player.ClickSkillSlotRva);
+            AppendHex(text, "getSkillCool", player.GetSkillCoolTimeRva);
+            AppendHex(text, "isSkillCool", player.IsSkillCoolTimeRva);
+            AppendHex(text, "sendUseSkill", player.SendUseSkillPacketRva);
+            AppendHex(text, "skillMgr", player.SkillManagerRva);
+            AppendHex(text, "getSkillData", player.GetSkillDataRva);
+            AppendHex(text, "isStanding", player.IsStandingSkillRva);
+            AppendHex(text, "isNeedTarget", player.IsNeedTargetRva);
+            AppendHex(text, "isAttackSkill", player.IsAttackSkillRva);
             AppendHex(text, "combo", player.ComboAttackRva);
             AppendHex(text, "setAuto", player.SetAutoRva);
             AppendHex(text, "reserve", player.ReserveClickRva);

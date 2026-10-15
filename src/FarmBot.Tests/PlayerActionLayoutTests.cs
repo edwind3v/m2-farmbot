@@ -212,7 +212,7 @@ public class PlayerActionLayoutTests
         var entity = FarmBot.Core.Entities.ClientReleaseLayout.Recover(arthion);
         var login = PlayerActionLayoutRecoverer.RecoverLogin(arthion);
         var singleton = player.PlayerSingletonRva != 0 ? player.PlayerSingletonRva : entity.SingletonRva - 4;
-        var dump = $"player=0x{player.PlayerSingletonRva:X} fallback=0x{singleton:X} charMgr=0x{entity.SingletonRva:X} setTarget=0x{player.SetTargetRva:X} setTargetSlot=0x{player.SetTargetVtableSlot:X} thisAdj=0x{player.SetTargetThisAdjustment:X} attackKey=0x{player.SetAttackKeyStateRva:X} newAttack=0x{player.NewAttackRva:X} combo=0x{player.ComboAttackRva:X} sendAttack=0x{player.SendAttackPacketRva:X} sendState=0x{player.SendStatePacketRva:X} setAuto=0x{player.SetAutoRva:X} reserve=0x{player.ReserveClickRva:X} moveTo=0x{player.MoveToDestRva:X} movePixel=0x{player.MoveToPixelRva:X} getMain=0x{player.GetMainActorRva:X} pressActor=0x{player.OnPressActorRva:X} chase=0x{player.ChaseActorRva:X} approachInst=0x{player.ApproachInstRva:X} inRange=0x{player.InRangeRva:X} playerUpdate=0x{player.PlayerUpdateRva:X} map=+0x{entity.MapDisplacement:X} getStatus=0x{player.GetStatusRva:X} sendPickup=0x{player.SendPickupPacketRva:X} item=0x{player.ItemSingletonRva:X} getClose=0x{player.GetCloseItemRva:X} getItemIndex=0x{player.GetItemIndexRva:X} getItemCount=0x{player.GetItemCountRva:X} selectItem=0x{player.SelectItemRva:X} getItemName=0x{player.GetItemNameRva:X} getItemType=0x{player.GetItemTypeRva:X} getItemSub=0x{player.GetItemSubTypeRva:X} getAffect=0x{player.GetAffectRva:X} getValue=0x{player.GetValueRva:X} points=+0x{player.StatusPointsDisplacement:X} xor=0x{player.PointXorMask:X} name=+0x{player.PlayerNameDisplacement:X} loginId=+0x{login.LoginIdDisplacement:X}\n" +
+        var dump = $"player=0x{player.PlayerSingletonRva:X} fallback=0x{singleton:X} charMgr=0x{entity.SingletonRva:X} setTarget=0x{player.SetTargetRva:X} setTargetSlot=0x{player.SetTargetVtableSlot:X} thisAdj=0x{player.SetTargetThisAdjustment:X} attackKey=0x{player.SetAttackKeyStateRva:X} newAttack=0x{player.NewAttackRva:X} combo=0x{player.ComboAttackRva:X} sendAttack=0x{player.SendAttackPacketRva:X} sendState=0x{player.SendStatePacketRva:X} setAuto=0x{player.SetAutoRva:X} reserve=0x{player.ReserveClickRva:X} moveTo=0x{player.MoveToDestRva:X} movePixel=0x{player.MoveToPixelRva:X} getMain=0x{player.GetMainActorRva:X} pressActor=0x{player.OnPressActorRva:X} chase=0x{player.ChaseActorRva:X} approachInst=0x{player.ApproachInstRva:X} inRange=0x{player.InRangeRva:X} playerUpdate=0x{player.PlayerUpdateRva:X} map=+0x{entity.MapDisplacement:X} getStatus=0x{player.GetStatusRva:X} sendPickup=0x{player.SendPickupPacketRva:X} item=0x{player.ItemSingletonRva:X} getClose=0x{player.GetCloseItemRva:X} getItemIndex=0x{player.GetItemIndexRva:X} getItemCount=0x{player.GetItemCountRva:X} selectItem=0x{player.SelectItemRva:X} getItemName=0x{player.GetItemNameRva:X} getItemType=0x{player.GetItemTypeRva:X} getItemSub=0x{player.GetItemSubTypeRva:X} getAffect=0x{player.GetAffectRva:X} getValue=0x{player.GetValueRva:X} getSkillIndex=0x{player.GetSkillIndexRva:X} getSkillLevel=0x{player.GetSkillLevelRva:X} clickSkill=0x{player.ClickSkillSlotRva:X} getSkillCool=0x{player.GetSkillCoolTimeRva:X} isSkillCool=0x{player.IsSkillCoolTimeRva:X} sendUseSkill=0x{player.SendUseSkillPacketRva:X} skillMgr=0x{player.SkillManagerRva:X} getSkillData=0x{player.GetSkillDataRva:X} standing=0x{player.IsStandingSkillRva:X} points=+0x{player.StatusPointsDisplacement:X} xor=0x{player.PointXorMask:X} name=+0x{player.PlayerNameDisplacement:X} loginId=+0x{login.LoginIdDisplacement:X}\n" +
                    string.Join("\n", player.Evidence);
         Directory.CreateDirectory(@"C:\Temp");
         File.WriteAllText(@"C:\Temp\arthion-player.txt", dump);
@@ -238,5 +238,13 @@ public class PlayerActionLayoutTests
         Assert.NotEqual(0x608290u, player.GetItemNameRva);
         Assert.Equal(0x369550u, player.SendItemUsePacketRva);
         Assert.NotEqual(0x37D360u, player.SendItemUsePacketRva);
+        Assert.NotEqual(0u, player.GetSkillIndexRva);
+        Assert.NotEqual(0u, player.GetSkillLevelRva);
+        Assert.NotEqual(0u, player.ClickSkillSlotRva);
+        Assert.NotEqual(0u, player.GetSkillCoolTimeRva);
+        Assert.NotEqual(0u, player.IsSkillCoolTimeRva);
+        Assert.NotEqual(0u, player.SendUseSkillPacketRva);
+        Assert.NotEqual(0x608290u, player.GetSkillIndexRva);
+        Assert.NotEqual(0x608290u, player.ClickSkillSlotRva);
     }
 }

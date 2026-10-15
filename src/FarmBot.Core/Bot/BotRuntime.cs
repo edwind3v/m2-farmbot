@@ -20,7 +20,8 @@ public sealed record BotView(
     bool RangedOnly = false,
     IReadOnlyList<PotionStack>? Potions = null,
     int GreenRemain = 0,
-    int PurpleRemain = 0);
+    int PurpleRemain = 0,
+    IReadOnlyList<LearnedSkill>? Skills = null);
 
 public sealed class BotRuntime : IDisposable
 {
@@ -52,12 +53,17 @@ public sealed class BotRuntime : IDisposable
     private bool _lootRanged;
     private float _lootRadius;
     private readonly PotionController _potions = new();
+    private readonly SkillController _skills = new();
     private IReadOnlyList<PotionStack> _potionStacks = Array.Empty<PotionStack>();
+    private IReadOnlyList<LearnedSkill> _learnedSkills = Array.Empty<LearnedSkill>();
     private int _greenRemain;
     private int _purpleRemain;
     private long _potsAtMs;
     private bool _potsInGame;
     private int _potsEmptyTries;
+    private long _skillsAtMs;
+    private bool _skillsInGame;
+    private int _skillsEmptyTries;
 
     public BotRuntime(
         IGameStateSource source,
@@ -197,7 +203,7 @@ public sealed class BotRuntime : IDisposable
     public BotView Capture()
     {
         lock (_gate)
-            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface, _rangedOnly, _potionStacks, _greenRemain, _purpleRemain);
+            return new BotView(_enabled, _phase, _reason, _latest, _target, _combatState, _nativeInterface, _rangedOnly, _potionStacks, _greenRemain, _purpleRemain, _learnedSkills);
     }
 
     public void TickOnce(BotConfig config, long nowMs, int dtMs)
@@ -281,6 +287,7 @@ public sealed class BotRuntime : IDisposable
                 _reason = decision.Reason;
             }
         }
+        TickSkills(snapshot, config, nowMs);
     }
 
     private BrainDecision TickNative(WorldSnapshot? snapshot, BotConfig config, TickContext context, long nowMs)
@@ -506,6 +513,74 @@ public sealed class BotRuntime : IDisposable
             _greenRemain = _potions.GreenRemainSec(nowMs);
             _purpleRemain = _potions.PurpleRemainSec(nowMs);
         }
+    }
+
+    private void TickSkills(WorldSnapshot? snapshot, BotConfig config, long nowMs)
+    {
+        if (config.ClientProfile != ClientProfile.Arthion || _sink == null)
+            return;
+        if (snapshot == null || snapshot.Player.MaxHp <= 0)
+        {
+            if (_skillsInGame)
+            {
+                _skillsInGame = false;
+                _skillsEmptyTries = 0;
+                _skillsAtMs = 0;
+                lock (_gate)
+                    _learnedSkills = Array.Empty<LearnedSkill>();
+            }
+            return;
+        }
+
+        int have;
+        lock (_gate)
+            have = _learnedSkills.Count;
+        var interval = !_skillsInGame ? 0 : (have == 0 && _skillsEmptyTries < 12 ? 1000 : 100);
+        if (nowMs - _skillsAtMs >= interval && _sink.TryReadSkills(out var scan))
+        {
+            var first = !_skillsInGame;
+            _skillsAtMs = nowMs;
+            _skillsInGame = true;
+            if (scan.Skills.Count > 0)
+            {
+                _skillsEmptyTries = 12;
+                if (first)
+                    _log.Info($"skills loaded {scan.Skills.Count}");
+            }
+            else if (_skillsEmptyTries < 12)
+            {
+                _skillsEmptyTries++;
+                if (first)
+                    _log.Info("skills scan empty, will retry after stats");
+            }
+            lock (_gate)
+            {
+                if (scan.Skills.Count > 0 || have == 0)
+                    _learnedSkills = scan.Skills;
+            }
+            _skills.NoteAffectRemain(scan.Skills, nowMs);
+        }
+
+        bool active;
+        IReadOnlyList<LearnedSkill> skills;
+        uint targetVid;
+        lock (_gate)
+        {
+            active = _enabled;
+            skills = _learnedSkills;
+            targetVid = _target?.Vid ?? 0;
+        }
+        if (!active)
+            return;
+        var next = _skills.Next(skills, config, targetVid != 0, nowMs);
+        if (next == null)
+            return;
+        var buff = config.SkillBuffIndexes != null && config.SkillBuffIndexes.Contains(next.Index);
+        var vid = buff ? 0u : targetVid;
+        if (!buff && vid == 0)
+            return;
+        if (_sink.TryUseSkill(next.Slot, 0))
+            _log.Info($"use skill slot={next.Slot} index={next.Index} buff={buff}");
     }
 
     private WorldSnapshot? OverlayHud(WorldSnapshot? snapshot)

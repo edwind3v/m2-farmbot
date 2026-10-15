@@ -31,9 +31,30 @@ public sealed class TgaImage
         image = new TgaImage();
         if (bytes.Length >= 2 && bytes[0] == (byte)'B' && bytes[1] == (byte)'M')
             return TryDecodeBmp(bytes, out image);
+        if (bytes.Length >= 4 && bytes[0] == (byte)'D' && bytes[1] == (byte)'D' &&
+            bytes[2] == (byte)'S' && bytes[3] == (byte)' ')
+            return DdsImage.TryDecode(bytes, out image);
         if (bytes.Length >= 8 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G')
             return false;
         return TryDecodeTga(bytes, out image);
+    }
+
+    public TgaImage Crop(int left, int top, int right, int bottom)
+    {
+        if (!HasPixels)
+            return this;
+        left = Math.Clamp(left, 0, Width);
+        top = Math.Clamp(top, 0, Height);
+        right = Math.Clamp(right, left, Width);
+        bottom = Math.Clamp(bottom, top, Height);
+        var w = right - left;
+        var h = bottom - top;
+        if (w <= 0 || h <= 0)
+            return new TgaImage();
+        var pixels = new byte[w * h * 4];
+        for (var y = 0; y < h; y++)
+            Buffer.BlockCopy(Bgra, ((top + y) * Width + left) * 4, pixels, y * w * 4, w * 4);
+        return new TgaImage { Width = w, Height = h, Bgra = pixels };
     }
 
     public string ToPngDataUri()

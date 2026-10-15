@@ -159,6 +159,64 @@ public sealed class FarmBotShell : IDisposable
 
     public IReadOnlyList<PotionStack> Potions => View.Potions ?? Array.Empty<PotionStack>();
 
+    public bool ShowSkills
+    {
+        get
+        {
+            lock (_configGate)
+                return _config.ClientProfile == ClientProfile.Arthion;
+        }
+    }
+
+    public IReadOnlyList<LearnedSkill> Skills => View.Skills ?? Array.Empty<LearnedSkill>();
+
+    public bool SkillEnabled(uint index)
+    {
+        lock (_configGate)
+            return _config.SkillEnabledIndexes.Contains(index);
+    }
+
+    public int SkillDelay(uint index)
+    {
+        lock (_configGate)
+            return _config.SkillDelaySec.TryGetValue(index, out var sec) ? sec : 0;
+    }
+
+    public void ToggleSkill(uint index)
+    {
+        lock (_configGate)
+        {
+            if (!_config.SkillEnabledIndexes.Remove(index))
+                _config.SkillEnabledIndexes.Add(index);
+        }
+
+        SaveSettings();
+    }
+
+    public bool SkillBuff(uint index)
+    {
+        lock (_configGate)
+            return _config.SkillBuffIndexes.Contains(index);
+    }
+
+    public void ToggleSkillBuff(uint index)
+    {
+        lock (_configGate)
+        {
+            if (!_config.SkillBuffIndexes.Remove(index))
+                _config.SkillBuffIndexes.Add(index);
+        }
+
+        SaveSettings();
+    }
+
+    public void SetSkillDelay(uint index, int seconds)
+    {
+        lock (_configGate)
+            _config.SkillDelaySec[index] = Math.Clamp(seconds, 0, 600);
+        SaveSettings();
+    }
+
     public bool PotionEnabled(uint vnum)
     {
         lock (_configGate)

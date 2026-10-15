@@ -359,6 +359,33 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }, updateStatus: false).Ok;
     }
 
+    public bool TryReadSkills(out SkillScan scan)
+    {
+        scan = new SkillScan();
+        Ensure();
+        if (!_client.Connected)
+            return false;
+        var response = _client.Submit(ActionProtocol.GetSkills, 0, true, updateStatus: false);
+        if (!response.Ok)
+            return false;
+        scan = new SkillScan { Skills = ParseSkills(response.Skills) };
+        return true;
+    }
+
+    public bool TryUseSkill(int slot, uint targetVid)
+    {
+        Ensure();
+        if (!_client.Connected || slot < 0)
+            return false;
+        return _client.Submit(new ActionRequest
+        {
+            Type = ActionProtocol.UseSkill,
+            Slot = slot,
+            Vid = targetVid,
+            Force = true
+        }, updateStatus: false).Ok;
+    }
+
     private static IReadOnlyList<PotionStack> ParsePots(System.Text.Json.JsonElement pots)
     {
         string json;
@@ -423,6 +450,62 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }
 
         return false;
+    }
+
+    private static IReadOnlyList<LearnedSkill> ParseSkills(System.Text.Json.JsonElement skills)
+    {
+        string json;
+        if (skills.ValueKind == System.Text.Json.JsonValueKind.Array)
+            json = skills.GetRawText();
+        else if (skills.ValueKind == System.Text.Json.JsonValueKind.String)
+            json = skills.GetString() ?? "";
+        else
+            return Array.Empty<LearnedSkill>();
+        if (string.IsNullOrWhiteSpace(json))
+            return Array.Empty<LearnedSkill>();
+        try
+        {
+            var rows = System.Text.Json.JsonSerializer.Deserialize<List<SkillWire>>(json, FarmBot.Core.Json.JsonDefaults.Instance);
+            if (rows == null)
+                return Array.Empty<LearnedSkill>();
+            var list = new List<LearnedSkill>(rows.Count);
+            foreach (var row in rows)
+            {
+                if (row.X == 0)
+                    continue;
+                list.Add(new LearnedSkill
+                {
+                    Index = row.X,
+                    Slot = row.S,
+                    Name = row.N ?? "",
+                    Kind = string.Equals(row.K, "buff", StringComparison.OrdinalIgnoreCase) ? "buff" : "attack",
+                    Level = row.L,
+                    CoolRemain = row.C,
+                    AffectRemain = row.R,
+                    DurationSec = row.D,
+                    Icon = ClientIconStore.DataUri(row.I, row.X)
+                });
+            }
+
+            return list;
+        }
+        catch
+        {
+            return Array.Empty<LearnedSkill>();
+        }
+    }
+
+    private sealed class SkillWire
+    {
+        public uint X { get; set; }
+        public int S { get; set; }
+        public string? N { get; set; }
+        public string? K { get; set; }
+        public int L { get; set; }
+        public int C { get; set; }
+        public int R { get; set; }
+        public int D { get; set; }
+        public string? I { get; set; }
     }
 
     private sealed class PotionWire

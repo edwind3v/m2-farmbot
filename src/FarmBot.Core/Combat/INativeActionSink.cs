@@ -18,4 +18,12 @@ public interface INativeActionSink
     }
 
     bool TryUseItem(int slot) => false;
+
+    bool TryReadSkills(out SkillScan scan)
+    {
+        scan = new SkillScan();
+        return false;
+    }
+
+    bool TryUseSkill(int slot, uint targetVid) => false;
 }

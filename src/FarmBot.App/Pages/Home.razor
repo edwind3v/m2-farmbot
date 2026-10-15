@@ -127,6 +127,42 @@
         <p>@(string.IsNullOrWhiteSpace(Player?.MapName) ? "Farm area around the player." : Player!.MapName)</p>
         <Minimap />
     </div>
+    @if (Shell.ShowSkills)
+    {
+        <div class="tile wide">
+            <div class="eyebrow">Skills</div>
+            <h2>Learned</h2>
+            @if (Shell.Skills.Count == 0)
+            {
+                <p class="pot-empty">@(InGame ? "no skills learned" : "waiting for game")</p>
+            }
+            else
+            {
+                <div class="skill-row">
+                    @foreach (var skill in Shell.Skills)
+                    {
+                        <div class="skill">
+                            <input type="checkbox" checked="@Shell.SkillEnabled(skill.Index)" title="Use @skill.Name" @onchange="() => Shell.ToggleSkill(skill.Index)" />
+                            @if (HasSkillIcon(skill))
+                            {
+                                <img src="@skill.Icon" alt="@skill.Name" title="@skill.Name" />
+                            }
+                            else
+                            {
+                                <span class="pot-face @(Shell.SkillBuff(skill.Index) ? "green" : "hp")" title="@skill.Name">@skill.Level</span>
+                            }
+                            <label class="skill-buff" title="Buff: use on self">
+                                <input type="checkbox" checked="@Shell.SkillBuff(skill.Index)" @onchange="() => Shell.ToggleSkillBuff(skill.Index)" />
+                                buff
+                            </label>
+                            <span class="skill-name" title="@skill.Name">@skill.Name</span>
+                            <input type="number" class="skill-delay" min="0" max="600" step="1" value="@Shell.SkillDelay(skill.Index)" title="Delay seconds" @onchange="e => OnSkillDelay(skill.Index, e)" />
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
     <div class="tile wide">
         <div class="eyebrow">Nearby</div>
         <h2>Entities (@(Shell.View.Snapshot?.Entities.Count ?? 0))</h2>
@@ -237,5 +273,14 @@
     {
         if (double.TryParse(Convert.ToString(e.Value), out var value))
             Shell.SetPotionMpPercent(value);
+    }
+
+    private static bool HasSkillIcon(LearnedSkill skill) =>
+        !string.IsNullOrWhiteSpace(skill.Icon) && skill.Icon.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
+
+    private void OnSkillDelay(uint index, ChangeEventArgs e)
+    {
+        if (int.TryParse(Convert.ToString(e.Value), out var value))
+            Shell.SetSkillDelay(index, value);
     }
 }

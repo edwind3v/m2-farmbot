@@ -421,3 +421,71 @@ tr.tgt td { color: var(--accent-2); }
     font-size: 11px;
     color: var(--muted);
 }
+
+.skill-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 10px;
+}
+
+.skill {
+    width: 52px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.skill img,
+.skill .pot-face {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    object-fit: contain;
+    background: #141414;
+}
+
+.skill .pot-face.hp { background: #c45c5c; }
+.skill .pot-face.green { background: #4aa05c; }
+
+.skill-buff {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+}
+
+.skill-buff input {
+    margin: 0;
+}
+
+.skill-name {
+    max-width: 52px;
+    font-size: 9px;
+    line-height: 1.15;
+    text-align: center;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.skill-delay {
+    width: 48px;
+    background: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 3px 4px;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 11px;
+}

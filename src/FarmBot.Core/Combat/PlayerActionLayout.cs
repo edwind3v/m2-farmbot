@@ -66,6 +66,17 @@ public sealed record PlayerActionLayout(
     public uint PlayerUpdateRva { get; init; }
     public uint GetPixelRva { get; init; }
     public uint InRangeRva { get; init; }
+    public uint GetSkillIndexRva { get; init; }
+    public uint GetSkillLevelRva { get; init; }
+    public uint ClickSkillSlotRva { get; init; }
+    public uint GetSkillCoolTimeRva { get; init; }
+    public uint IsSkillCoolTimeRva { get; init; }
+    public uint SendUseSkillPacketRva { get; init; }
+    public uint SkillManagerRva { get; init; }
+    public uint GetSkillDataRva { get; init; }
+    public uint IsStandingSkillRva { get; init; }
+    public uint IsNeedTargetRva { get; init; }
+    public uint IsAttackSkillRva { get; init; }
 }
 
 public sealed record LoginNativeLayout(
@@ -312,6 +323,25 @@ public static class PlayerActionLayoutRecoverer
         if (getIconOnItem != 0)
             getIcon = (getIconOnItem, getIcon.singleton, getIcon.wrapper);
         evidence.Add($"itemMgr=0x{selectItem.singleton:X} getSelected=0x{getSelected:X} getName=0x{getItemName.native:X} getType=0x{getItemType.native:X} getSub=0x{getItemSubType.native:X} getIcon=0x{getIcon.native:X} useItem=0x{useItem.native:X}.");
+        var getSkillIndex = RecoverItemMethod(pe, "GetSkillIndex", singleton, evidence);
+        var getSkillLevel = RecoverItemMethod(pe, "GetSkillLevel", singleton, evidence);
+        var clickSkill = RecoverItemMethod(pe, "ClickSkillSlot", singleton, evidence);
+        var getSkillCool = RecoverItemMethod(pe, "GetSkillCoolTime", singleton, evidence);
+        var isSkillCool = RecoverItemMethod(pe, "IsSkillCoolTime", singleton, evidence);
+        var sendUseSkill = RecoverLoginExport(pe, "SendUseSkillPacket", evidence);
+        if (sendUseSkill.native == 0)
+        {
+            var native = RecoverUseSkillFromClick(pe, clickSkill.native, sendUse.singleton, evidence);
+            sendUseSkill = (native, sendUse.singleton, 0);
+        }
+        var getSkillName = RecoverItemMethod(pe, "GetSkillName", 0, evidence);
+        var isStanding = RecoverItemMethod(pe, "IsStandingSkill", getSkillName.singleton, evidence);
+        var isNeedTarget = RecoverItemMethod(pe, "IsNeedTarget", getSkillName.singleton, evidence);
+        var isAttackSkill = RecoverItemMethod(pe, "IsAttackSkill", getSkillName.singleton, evidence);
+        var standingFn = CallOnLocalEcx(pe, isStanding.wrapper, evidence, "IsStandingSkill");
+        var needTargetFn = CallOnLocalEcx(pe, isNeedTarget.wrapper, evidence, "IsNeedTarget");
+        var attackSkillFn = CallOnLocalEcx(pe, isAttackSkill.wrapper, evidence, "IsAttackSkill");
+        evidence.Add($"skills getIndex=0x{getSkillIndex.native:X} getLevel=0x{getSkillLevel.native:X} click=0x{clickSkill.native:X} cool=0x{getSkillCool.native:X} isCool=0x{isSkillCool.native:X} sendUse=0x{sendUseSkill.native:X} skillMgr=0x{getSkillName.singleton:X} getData=0x{getSkillName.native:X} standing=0x{standingFn:X}.");
 
         return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKeyRva, combo.native, pickClose.native, targetDisp, virt.thisAdj != 0 ? virt.thisAdj : attackVirt.thisAdj, setTargetSlot, prologue, hud.points, hud.name != 0 ? hud.name : 0x14, hud.xor, evidence)
         {
@@ -355,7 +385,18 @@ public static class PlayerActionLayoutRecoverer
             ApproachInstRva = approachInst,
             PlayerUpdateRva = playerUpdate,
             GetPixelRva = getPixel,
-            InRangeRva = inRange
+            InRangeRva = inRange,
+            GetSkillIndexRva = getSkillIndex.native,
+            GetSkillLevelRva = getSkillLevel.native,
+            ClickSkillSlotRva = clickSkill.native,
+            GetSkillCoolTimeRva = getSkillCool.native,
+            IsSkillCoolTimeRva = isSkillCool.native,
+            SendUseSkillPacketRva = sendUseSkill.native,
+            SkillManagerRva = getSkillName.singleton,
+            GetSkillDataRva = getSkillName.native,
+            IsStandingSkillRva = standingFn,
+            IsNeedTargetRva = needTargetFn,
+            IsAttackSkillRva = attackSkillFn
         };
     }
 
@@ -2455,6 +2496,100 @@ public static class PlayerActionLayoutRecoverer
         }
 
         return 0;
+    }
+
+    private static uint CallOnLocalEcx(ActionPe pe, uint wrapperRva, List<string> evidence, string name)
+    {
+        if (wrapperRva == 0)
+            return 0;
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0)
+            return 0;
+        for (var i = off; i + 8 < off + 0xC0 && i + 8 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0x8B || pe.Byte(i + 1) != 0x4D || pe.Byte(i + 3) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 8) + pe.ReadI32(i + 4));
+            if (!pe.IsCode(target))
+                continue;
+            var rva = target - pe.ImageBase;
+            if (rva is 0x608290 or 0x608470 or 0x6081F0)
+                continue;
+            evidence.Add($"Skill flag {name} thiscall RVA 0x{rva:X}.");
+            return rva;
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverUseSkillFromClick(ActionPe pe, uint clickRva, uint netSingletonRva, List<string> evidence)
+    {
+        if (clickRva == 0)
+            return 0;
+        var netVa = netSingletonRva == 0 ? 0 : pe.ImageBase + netSingletonRva;
+        var seen = new HashSet<uint>();
+        var queue = new Queue<(uint rva, int depth)>();
+        queue.Enqueue((clickRva, 0));
+        uint nearby = 0;
+        while (queue.Count > 0)
+        {
+            var (rva, depth) = queue.Dequeue();
+            if (!seen.Add(rva) || depth > 2)
+                continue;
+            var off = pe.VaToFile(pe.ImageBase + rva);
+            if (off < 0)
+                continue;
+            var end = Math.Min(off + 0x500, pe.Length);
+            var loadsNet = false;
+            var calls = new List<uint>();
+            for (var i = off; i + 5 < end; i++)
+            {
+                if (pe.Byte(i) == 0xC3)
+                    break;
+                if (pe.Byte(i) == 0xC2)
+                    break;
+                if (netVa != 0 &&
+                    ((pe.Byte(i) == 0xA1 && pe.ReadU32(i + 1) == netVa) ||
+                     (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x0D && pe.ReadU32(i + 2) == netVa)))
+                    loadsNet = true;
+                if (pe.Byte(i) != 0xE8)
+                    continue;
+                var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+                if (!pe.IsCode(target))
+                    continue;
+                var trva = target - pe.ImageBase;
+                if (trva is 0x608290 or 0x608470 or 0x6081F0)
+                    continue;
+                calls.Add(trva);
+            }
+
+            if (loadsNet)
+            {
+                foreach (var trva in calls)
+                {
+                    if (trva is > 0x360000 and < 0x37A000)
+                    {
+                        evidence.Add($"SendUseSkillPacket via ClickSkillSlot RVA 0x{trva:X} (net load in 0x{rva:X}).");
+                        return trva;
+                    }
+
+                    if (nearby == 0)
+                        nearby = trva;
+                }
+            }
+
+            if (depth < 2)
+            {
+                foreach (var trva in calls)
+                    queue.Enqueue((trva, depth + 1));
+            }
+        }
+
+        if (nearby != 0)
+            evidence.Add($"SendUseSkillPacket nearby fallback RVA 0x{nearby:X}.");
+        else
+            evidence.Add("SendUseSkillPacket was not recovered from ClickSkillSlot.");
+        return nearby;
     }
 
     private static (uint native, uint singleton, uint wrapper) RecoverItemMethod(

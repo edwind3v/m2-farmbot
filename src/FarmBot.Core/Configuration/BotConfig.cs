@@ -89,6 +89,9 @@ public sealed class BotConfig
     public double PotionHpPercent { get; set; } = 75;
     public double PotionMpPercent { get; set; } = 75;
     public List<uint> PotionEnabledVnums { get; set; } = new();
+    public List<uint> SkillEnabledIndexes { get; set; } = new();
+    public List<uint> SkillBuffIndexes { get; set; } = new();
+    public Dictionary<uint, int> SkillDelaySec { get; set; } = new();
 
     public static BotConfig CreateDefault()
     {
@@ -153,6 +156,11 @@ public sealed class BotConfig
         PotionHpPercent = Math.Clamp(PotionHpPercent, 0, 100);
         PotionMpPercent = Math.Clamp(PotionMpPercent, 0, 100);
         PotionEnabledVnums ??= new List<uint>();
+        SkillEnabledIndexes ??= new List<uint>();
+        SkillBuffIndexes ??= new List<uint>();
+        SkillDelaySec ??= new Dictionary<uint, int>();
+        foreach (var key in SkillDelaySec.Keys.ToList())
+            SkillDelaySec[key] = Math.Clamp(SkillDelaySec[key], 0, 600);
         FarmRadius = Math.Max(0, FarmRadius);
         MaxFarmDistance = Math.Max(0, MaxFarmDistance);
         MapZoom = Math.Clamp(MapZoom <= 0 ? 100 : MapZoom, 20, 100);

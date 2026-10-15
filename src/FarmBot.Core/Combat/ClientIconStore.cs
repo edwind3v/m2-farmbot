@@ -10,17 +10,24 @@ public static class ClientIconStore
     public static string DataUri(string? extractedPath, uint vnum = 0, string? clientPath = null)
     {
         clientPath ??= ClientPath;
-        if (TryNice(extractedPath, out var uri))
+        if (TrySub(extractedPath, out var uri))
+            return uri;
+        if (TryNice(extractedPath, out uri))
             return uri;
         if (vnum != 0)
         {
-            var cached = Path.Combine(Path.GetTempPath(), "farmbot-icons", $"{vnum}.tga");
-            if (!string.Equals(cached, extractedPath, StringComparison.OrdinalIgnoreCase) &&
-                TryNice(cached, out uri))
-                return uri;
+            var dir = Path.Combine(Path.GetTempPath(), "farmbot-icons");
+            foreach (var name in new[] { $"skill-{vnum}.sub", $"{vnum}.sub", $"skill-{vnum}.tga", $"{vnum}.tga" })
+            {
+                var cached = Path.Combine(dir, name);
+                if (string.Equals(cached, extractedPath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (TrySub(cached, out uri) || TryNice(cached, out uri))
+                    return uri;
+            }
         }
 
-        return TgaImage.DataUriFromFile(extractedPath);
+        return "";
     }
 
     public static bool TryLoadFromPack(string? clientPath, string virtualPath, out TgaImage image)
@@ -42,6 +49,17 @@ public static class ClientIconStore
             return null;
         var pack = Path.Combine(root, "pack", "icon.art");
         return File.Exists(pack) ? pack : null;
+    }
+
+    private static bool TrySub(string? path, out string uri)
+    {
+        uri = "";
+        if (path == null || !path.EndsWith(".sub", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!SubIcon.TryLoad(path, out var sub) || !sub.HasPixels || IsFlatPlaceholder(sub))
+            return false;
+        uri = sub.ToPngDataUri();
+        return true;
     }
 
     private static bool TryNice(string? path, out string uri)

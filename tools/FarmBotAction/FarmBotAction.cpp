@@ -66,6 +66,17 @@ static unsigned kGetIconImageRva = 0;
 static unsigned kPackMgrRva = 0;
 static unsigned kPackGetRva = 0;
 static unsigned kUseItemRva = 0;
+static unsigned kGetSkillIndexRva = 0;
+static unsigned kGetSkillLevelRva = 0;
+static unsigned kClickSkillRva = 0;
+static unsigned kGetSkillCoolRva = 0;
+static unsigned kIsSkillCoolRva = 0;
+static unsigned kSendUseSkillRva = 0;
+static unsigned kSkillMgrRva = 0;
+static unsigned kGetSkillDataRva = 0;
+static unsigned kIsStandingRva = 0;
+static unsigned kIsNeedTargetRva = 0;
+static unsigned kIsAttackSkillRva = 0;
 static unsigned kSendClickRva = 0xCE930;
 static unsigned kItemSingletonRva = 0x482CAC;
 static unsigned kGetCloseItemRva = 0xBB480;
@@ -226,6 +237,7 @@ static std::queue<Command> g_queue;
 static bool g_lastOk;
 static std::string g_lastReason;
 static std::string g_potsJson = "[]";
+static std::string g_skillsJson = "[]";
 static int g_greenRemain;
 static int g_purpleRemain;
 static unsigned g_lastVid;
@@ -2705,7 +2717,7 @@ static bool ReadStdString(void* str, char* out, int cap)
         out[0] = 0;
         return true;
     }
-    if (size > 96)
+    if (size > 240)
         return false;
     const unsigned n = size < (unsigned)(cap - 1) ? size : (unsigned)(cap - 1);
     memcpy(out, p, n);
@@ -3443,9 +3455,15 @@ static const char* ClassifyPot(int type, int sub, int apply, unsigned vnum, cons
     return nullptr;
 }
 
+static bool DataAddr(const void* p)
+{
+    const uintptr_t a = (uintptr_t)p;
+    return a >= 0x10000 && a < 0x7FFF0000;
+}
+
 static int LooksLikeTga(const unsigned char* p)
 {
-    if (!UserPtr((void*)p))
+    if (!DataAddr(p))
         return 0;
     const unsigned char type = p[2];
     if (type != 2 && type != 10)
@@ -3522,6 +3540,353 @@ static bool ExtractPackFile(const char* virt, const char* dest)
     if (!data)
         return false;
     return WriteBytes(dest, data, bytes);
+}
+
+static bool PackGet(const char* virt, unsigned char* mapped, int mappedBytes)
+{
+    if (!virt || !virt[0] || !mapped || mappedBytes < 64 || !g_base || !kPackGetRva || !kPackMgrRva)
+        return false;
+    void* mgr = nullptr;
+    __try { mgr = *(void**)(g_base + kPackMgrRva); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { mgr = nullptr; }
+    if (!UserPtr(mgr))
+        return false;
+    typedef int (__thiscall* FnPackGet)(void* self, const char* name, unsigned len, void* mappedOut, int tryDisk);
+    FnPackGet get = (FnPackGet)(g_base + kPackGetRva);
+    if (IsBadCodePtr((FARPROC)get))
+        return false;
+    memset(mapped, 0, mappedBytes);
+    int ok = 0;
+    __try { ok = get(mgr, virt, (unsigned)strlen(virt), mapped, 0); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { ok = 0; }
+    return ok != 0;
+}
+
+static int TextSpan(const unsigned char* p, int maxN)
+{
+    if (!DataAddr(p) || maxN < 12)
+        return 0;
+    int n = 0;
+    __try
+    {
+        for (; n < maxN; ++n)
+        {
+            const unsigned char c = p[n];
+            if (c == 0)
+                break;
+            if (c < 9 || (c > 13 && c < 32))
+                break;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+    return n;
+}
+
+static bool LooksLikeSubText(const unsigned char* p, int n)
+{
+    if (!p || n < 12)
+        return false;
+    char buf[220];
+    const int take = n < 219 ? n : 219;
+    memcpy(buf, p, (size_t)take);
+    buf[take] = 0;
+    for (int i = 0; buf[i]; ++i)
+        buf[i] = (char)tolower((unsigned char)buf[i]);
+    return strstr(buf, "subimage") != nullptr ||
+        (strstr(buf, "title") && strstr(buf, "image"));
+}
+
+static int NearbySize(const unsigned char* mapped, int mappedBytes, const unsigned char* data)
+{
+    if (!mapped || !data)
+        return 0;
+    for (int i = 0; i + 4 <= mappedBytes; i += 4)
+    {
+        if (*(const unsigned char**)(mapped + i) != data)
+            continue;
+        const unsigned next = i + 8 <= mappedBytes ? *(unsigned*)(mapped + i + 4) : 0;
+        const unsigned prev = i >= 4 ? *(unsigned*)(mapped + i - 4) : 0;
+        if (next >= 12 && next <= 4u * 1024u * 1024u)
+            return (int)next;
+        if (prev >= 12 && prev <= 4u * 1024u * 1024u)
+            return (int)prev;
+    }
+    return 0;
+}
+
+static bool ParseSubField(const char* text, const char* key, char* value, int cap)
+{
+    if (!text || !key || !value || cap < 2)
+        return false;
+    value[0] = 0;
+    const char* p = text;
+    const int keyLen = (int)strlen(key);
+    while (*p)
+    {
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+            ++p;
+        if (_strnicmp(p, key, keyLen) == 0 && (p[keyLen] == ' ' || p[keyLen] == '\t' || p[keyLen] == '\r' || p[keyLen] == '\n' || p[keyLen] == 0))
+        {
+            p += keyLen;
+            while (*p == ' ' || *p == '\t')
+                ++p;
+            if (*p == '"' || *p == '\'')
+                ++p;
+            int n = 0;
+            while (*p && *p != '\r' && *p != '\n' && *p != '"' && n < cap - 1)
+                value[n++] = (char)tolower((unsigned char)*p++);
+            while (n > 0 && (value[n - 1] == ' ' || value[n - 1] == '\t'))
+                --n;
+            value[n] = 0;
+            return value[0] != 0;
+        }
+        while (*p && *p != '\n')
+            ++p;
+        if (*p == '\n')
+            ++p;
+    }
+    return false;
+}
+
+static bool ParseSubImagePath(const char* text, char* image, int cap)
+{
+    if (!ParseSubField(text, "image", image, cap))
+        return false;
+    return strstr(image, ".tga") || strstr(image, ".dds") || strstr(image, ".sub");
+}
+
+static void JoinSearchPath(const char* subVirt, const char* image, char* out, int cap)
+{
+    if (!out || cap < 8)
+        return;
+    out[0] = 0;
+    if (!image || !image[0])
+        return;
+    if (strchr(image, ':') || (image[0] == 'd' && image[1] == ':'))
+    {
+        strncpy_s(out, cap, image, _TRUNCATE);
+        return;
+    }
+    if (image[0] == '/' || (image[0] == 'i' && image[1] == 'c'))
+    {
+        strncpy_s(out, cap, image, _TRUNCATE);
+        return;
+    }
+    const char* slash = subVirt ? strrchr(subVirt, '/') : nullptr;
+    if (!slash)
+        slash = subVirt ? strrchr(subVirt, '\\') : nullptr;
+    if (slash && subVirt)
+    {
+        int n = (int)(slash - subVirt + 1);
+        if (n > 0 && n < cap - 1)
+        {
+            memcpy(out, subVirt, (size_t)n);
+            out[n] = 0;
+            strncat_s(out, cap, image, _TRUNCATE);
+            return;
+        }
+    }
+    _snprintf_s(out, cap, _TRUNCATE, "d:/ymir work/ui/%s", image);
+}
+
+static int DdsByteSize(const unsigned char* p)
+{
+    if (!DataAddr(p) || p[0] != 'D' || p[1] != 'D' || p[2] != 'S' || p[3] != ' ')
+        return 0;
+    const unsigned header = *(unsigned*)(p + 4);
+    if (header != 124)
+        return 0;
+    const unsigned h = *(unsigned*)(p + 12);
+    const unsigned w = *(unsigned*)(p + 16);
+    if (w < 4 || w > 4096 || h < 4 || h > 4096)
+        return 0;
+    const unsigned pfFlags = *(unsigned*)(p + 80);
+    const unsigned four = *(unsigned*)(p + 84);
+    const unsigned bits = *(unsigned*)(p + 88);
+    unsigned dataOff = 128;
+    if (four == 0x30315844)
+        dataOff = 148;
+    const unsigned bx = (w + 3) / 4;
+    const unsigned by = (h + 3) / 4;
+    unsigned data = 0;
+    if (pfFlags & 4)
+        data = bx * by * (four == 0x31545844 ? 8u : 16u);
+    else
+    {
+        const unsigned step = bits ? (bits + 7) / 8 : 4;
+        data = w * h * step;
+    }
+    const unsigned total = dataOff + data;
+    if (total < 128 || total > 8u * 1024u * 1024u)
+        return 0;
+    return (int)total;
+}
+
+static bool PackExtractBlob(const char* virt, const char* dest)
+{
+    if (!virt || !virt[0] || !dest)
+        return false;
+    unsigned char mapped[400];
+    if (!PackGet(virt, mapped, 400))
+        return false;
+    const unsigned char* best = nullptr;
+    int bestN = 0;
+    int bestScore = 0;
+    for (int i = 0; i + 4 <= 400; i += 4)
+    {
+        const unsigned char* p = *(const unsigned char**)(mapped + i);
+        if (!DataAddr(p))
+            continue;
+        const int nTga = LooksLikeTga(p);
+        const int nDds = DdsByteSize(p);
+        const int nNear = NearbySize(mapped, 400, p);
+        const int spanCap = nNear > 12 ? (nNear < 4096 ? nNear : 4096) : 800;
+        const int nTxt = TextSpan(p, spanCap);
+        int n = 0;
+        int score = 0;
+        if (nTga > 0)
+        {
+            n = nTga;
+            score = 4;
+        }
+        else if (nDds > 0)
+        {
+            n = nNear >= nDds && nNear <= nDds * 2 ? nNear : nDds;
+            score = 4;
+        }
+        else if (LooksLikeSubText(p, nTxt > 0 ? nTxt : nNear))
+        {
+            n = nNear >= 16 ? nNear : (nTxt >= 12 ? nTxt : 0);
+            score = 3;
+        }
+        else if (nNear >= 16 && nNear <= 4 * 1024 * 1024 && nTxt >= 12)
+        {
+            n = nNear;
+            score = 1;
+        }
+        if (score > bestScore || (score == bestScore && n > bestN))
+        {
+            best = p;
+            bestN = n;
+            bestScore = score;
+            if (score >= 4)
+                break;
+        }
+    }
+    if (!best || bestN < 12)
+        return false;
+    return WriteBytes(dest, best, bestN);
+}
+
+static bool ExtractPackText(const char* virt, char* text, int cap)
+{
+    if (!text || cap < 16)
+        return false;
+    text[0] = 0;
+    unsigned char mapped[400];
+    if (!PackGet(virt, mapped, 400))
+        return false;
+    for (int i = 0; i + 4 <= 400; i += 4)
+    {
+        const unsigned char* p = *(const unsigned char**)(mapped + i);
+        const int nNear = NearbySize(mapped, 400, p);
+        const int n = TextSpan(p, nNear > 12 ? (nNear < cap - 1 ? nNear : cap - 1) : (cap - 1 < 800 ? cap - 1 : 800));
+        if (n < 12)
+            continue;
+        const int take = n < cap - 1 ? n : cap - 1;
+        memcpy(text, p, (size_t)take);
+        text[take] = 0;
+        return true;
+    }
+    return false;
+}
+
+static void AtlasDestPath(const char* dest, const char* image, char* atlasFile, int cap)
+{
+    if (!atlasFile || cap < 8)
+        return;
+    atlasFile[0] = 0;
+    if (!dest || !image)
+        return;
+    strncpy_s(atlasFile, cap, dest, _TRUNCATE);
+    char* slash = strrchr(atlasFile, '\\');
+    if (!slash)
+        slash = strrchr(atlasFile, '/');
+    if (!slash)
+        return;
+    slash[1] = 0;
+    const char* base = strrchr(image, '/');
+    if (!base)
+        base = strrchr(image, '\\');
+    base = base ? base + 1 : image;
+    strncat_s(atlasFile, cap, base, _TRUNCATE);
+}
+
+static bool ExtractAtlasBeside(const char* subVirt, const char* image, const char* dest)
+{
+    if (!image || !image[0] || !dest)
+        return false;
+    char atlasFile[MAX_PATH];
+    AtlasDestPath(dest, image, atlasFile, MAX_PATH);
+    if (!atlasFile[0])
+        return false;
+    if (FileBigEnough(atlasFile, 128) && (strstr(atlasFile, ".dds") || strstr(atlasFile, ".tga")))
+        return true;
+    char joined[260];
+    JoinSearchPath(subVirt, image, joined, 260);
+    char ui[260];
+    _snprintf_s(ui, _TRUNCATE, "d:/ymir work/ui/%s", image);
+    char uiSkill[260];
+    _snprintf_s(uiSkill, _TRUNCATE, "d:/ymir work/ui/skill/%s", image);
+    const char* tries[] = { joined, ui, uiSkill, image };
+    for (int i = 0; i < 4; ++i)
+    {
+        if (!tries[i] || !tries[i][0])
+            continue;
+        if (PackExtractBlob(tries[i], atlasFile))
+            return true;
+        char low[260];
+        int n = 0;
+        for (; tries[i][n] && n < 259; ++n)
+            low[n] = (char)tolower((unsigned char)tries[i][n]);
+        low[n] = 0;
+        if (PackExtractBlob(low, atlasFile))
+            return true;
+    }
+    return false;
+}
+
+static bool ExtractSkillGraphic(const char* virt, const char* dest)
+{
+    if (!virt || !virt[0] || !dest)
+        return false;
+    char lower[260];
+    int n = 0;
+    for (; virt[n] && n < 259; ++n)
+        lower[n] = (char)tolower((unsigned char)virt[n]);
+    lower[n] = 0;
+    DeleteFileA(dest);
+    if (!PackExtractBlob(virt, dest) && !PackExtractBlob(lower, dest))
+        return ExtractPackFile(virt, dest) || ExtractPackFile(lower, dest);
+    char text[800];
+    text[0] = 0;
+    FILE* f = nullptr;
+    if (fopen_s(&f, dest, "rb") == 0 && f)
+    {
+        const size_t got = fread(text, 1, 799, f);
+        fclose(f);
+        text[got] = 0;
+    }
+    if (LooksLikeTga((const unsigned char*)text) || DdsByteSize((const unsigned char*)text) > 0)
+        return true;
+    char image[260];
+    if (!ParseSubImagePath(text, image, 260))
+        return false;
+    NativeLog("skill sub %s -> %s", virt, image);
+    return ExtractAtlasBeside(virt, image, dest);
 }
 
 static void ReadItemIconPath(void* data, unsigned vnum, char* icon, int cap)
@@ -3729,6 +4094,592 @@ static void ScanPots()
         py, nativeInv, playerMod ? 1 : 0, seen, kept, (unsigned)g_potsJson.size());
 }
 
+typedef int (__thiscall* FnSkillSlotI)(void* self, unsigned slot);
+typedef float (__thiscall* FnSkillCool)(void* self, unsigned slot);
+typedef void (__thiscall* FnClickSkill)(void* self, unsigned slot);
+typedef int (__thiscall* FnSendUseSkill)(void* self, unsigned index, unsigned vid);
+typedef int (__thiscall* FnGetSkillData)(void* self, unsigned index, void** out);
+typedef int (__thiscall* FnSkillPred)(void* data);
+
+static void* SkillMgr()
+{
+    if (!g_base || !kSkillMgrRva)
+        return nullptr;
+    void* p = nullptr;
+    __try { p = *(void**)(g_base + kSkillMgrRva); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { p = nullptr; }
+    return UserPtr(p) ? p : nullptr;
+}
+
+static int NativeSkillIndex(unsigned slot)
+{
+    void* player = Player();
+    if (!player || !kGetSkillIndexRva || !g_base)
+        return 0;
+    FnSkillSlotI fn = (FnSkillSlotI)(g_base + kGetSkillIndexRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return 0;
+    int v = 0;
+    __try { v = fn(player, slot); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    return v;
+}
+
+static int NativeSkillLevel(unsigned slot)
+{
+    void* player = Player();
+    if (!player || !kGetSkillLevelRva || !g_base)
+        return 0;
+    FnSkillSlotI fn = (FnSkillSlotI)(g_base + kGetSkillLevelRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return 0;
+    int v = 0;
+    __try { v = fn(player, slot); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    return v;
+}
+
+static int NativeIsSkillCool(unsigned slot)
+{
+    void* player = Player();
+    if (!player || !kIsSkillCoolRva || !g_base)
+        return 0;
+    FnSkillSlotI fn = (FnSkillSlotI)(g_base + kIsSkillCoolRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return 0;
+    int v = 0;
+    __try { v = fn(player, slot); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    return v;
+}
+
+static int NativeSkillCoolSec(unsigned slot)
+{
+    void* player = Player();
+    if (!player || !kGetSkillCoolRva || !g_base)
+        return 0;
+    FnSkillCool fn = (FnSkillCool)(g_base + kGetSkillCoolRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return 0;
+    float v = 0;
+    __try { v = fn(player, slot); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    if (v <= 0 || v > 3600)
+        return 0;
+    return (int)(v + 0.5f);
+}
+
+static void* NativeSkillData(unsigned index)
+{
+    void* mgr = SkillMgr();
+    if (!mgr || !kGetSkillDataRva || !g_base)
+        return nullptr;
+    FnGetSkillData fn = (FnGetSkillData)(g_base + kGetSkillDataRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return nullptr;
+    void* data = nullptr;
+    int ok = 0;
+    __try { ok = fn(mgr, index, &data); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { ok = 0; data = nullptr; }
+    return ok && UserPtr(data) ? data : nullptr;
+}
+
+static int NativeSkillPred(unsigned rva, void* data)
+{
+    if (!rva || !data || !g_base)
+        return -1;
+    FnSkillPred fn = (FnSkillPred)(g_base + rva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return -1;
+    int v = 0;
+    __try { v = fn(data); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    return v ? 1 : 0;
+}
+
+static int SafeByte(void* p)
+{
+    int v = 0;
+    if (!UserPtr(p))
+        return 0;
+    __try { v = *(unsigned char*)p; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
+    return v;
+}
+
+static bool SafeStdString(void* str, char* out, int cap)
+{
+    bool ok = false;
+    if (!out || cap < 2)
+        return false;
+    out[0] = 0;
+    __try { ok = ReadStdString(str, out, cap); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { ok = false; out[0] = 0; }
+    return ok;
+}
+
+static void SanitizeName(char* name)
+{
+    if (!name)
+        return;
+    int n = 0;
+    for (char* p = name; *p; ++p, ++n)
+    {
+        const unsigned char c = (unsigned char)*p;
+        if (c < 32)
+        {
+            *p = 0;
+            break;
+        }
+    }
+    if (n < 1)
+        name[0] = 0;
+}
+
+static bool LooksLikeSkillPath(const char* s)
+{
+    if (!s || !s[0])
+        return false;
+    char low[260];
+    int i = 0;
+    for (; s[i] && i < 259; ++i)
+        low[i] = (char)tolower((unsigned char)s[i]);
+    low[i] = 0;
+    const int graphic = strstr(low, ".sub") || strstr(low, ".dds") || strstr(low, ".tga");
+    if (!graphic)
+        return false;
+    return strstr(low, "skill") || strstr(low, "icon") || strstr(low, "ymir") ||
+        strstr(low, "ui/") || strstr(low, "ui\\");
+}
+
+static bool ReadImageFileName(void* img, char* out, int cap)
+{
+    if (!UserPtr(img) || !out || cap < 8)
+        return false;
+    out[0] = 0;
+    static const int kOff[] = { 8, 12, 16, 20, 24, 28, 32, 36, 48, 64 };
+    for (int i = 0; i < (int)(sizeof(kOff) / sizeof(kOff[0])); ++i)
+    {
+        if (SafeStdString((char*)img + kOff[i], out, cap) && LooksLikeSkillPath(out))
+            return true;
+        out[0] = 0;
+    }
+    return false;
+}
+
+static void* ReadPtr(void* base, int off)
+{
+    void* p = nullptr;
+    if (!UserPtr(base))
+        return nullptr;
+    __try { p = *(void**)((char*)base + off); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { p = nullptr; }
+    return UserPtr(p) ? p : nullptr;
+}
+
+static const char* JobFolder(const char* job)
+{
+    if (!job || !job[0])
+        return "";
+    if (_stricmp(job, "WARRIOR") == 0) return "warrior";
+    if (_stricmp(job, "ASSASSIN") == 0) return "assassin";
+    if (_stricmp(job, "SURA") == 0) return "sura";
+    if (_stricmp(job, "SHAMAN") == 0) return "shaman";
+    if (_stricmp(job, "WOLFMAN") == 0) return "wolfman";
+    if (_stricmp(job, "PASSIVE") == 0) return "passive";
+    if (_stricmp(job, "78SKILL") == 0) return "78skill";
+    if (_stricmp(job, "SUPPORT") == 0) return "common/support";
+    if (_stricmp(job, "GUILD") == 0) return "common/guild";
+    if (_stricmp(job, "HORSE") == 0) return "common/horse";
+    return job;
+}
+
+struct SkillDescIcon
+{
+    unsigned index;
+    char job[32];
+    char name[64];
+};
+
+static SkillDescIcon g_desc[384];
+static int g_descN;
+static int g_descTried;
+
+static void ParseSkillDescFile(const char* path)
+{
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "rb") != 0 || !f)
+        return;
+    char line[1024];
+    while (fgets(line, (int)sizeof(line), f) && g_descN < 384)
+    {
+        char* p = line;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || (unsigned char)*p == 0xEF ||
+            (unsigned char)*p == 0xBB || (unsigned char)*p == 0xBF)
+            ++p;
+        if (*p == '#' || *p == 0)
+            continue;
+        char* tok[16];
+        int n = 0;
+        tok[n++] = p;
+        for (char* c = p; *c && n < 16; ++c)
+        {
+            if (*c == '\t')
+            {
+                *c = 0;
+                tok[n++] = c + 1;
+            }
+            else if (*c == '\r' || *c == '\n')
+            {
+                *c = 0;
+                break;
+            }
+        }
+        if (n <= 12)
+            continue;
+        const unsigned index = (unsigned)atoi(tok[0]);
+        if (index == 0 || !tok[1][0] || !tok[12][0])
+            continue;
+        SkillDescIcon& row = g_desc[g_descN++];
+        row.index = index;
+        strncpy_s(row.job, tok[1], _TRUNCATE);
+        strncpy_s(row.name, tok[12], _TRUNCATE);
+        for (char* c = row.job; *c; ++c)
+            if (*c == '\r' || *c == '\n')
+                *c = 0;
+        for (char* c = row.name; *c; ++c)
+        {
+            *c = (char)tolower((unsigned char)*c);
+            if (*c == '\r' || *c == '\n' || *c == '.')
+                *c = 0;
+        }
+    }
+    fclose(f);
+}
+
+static void LoadSkillDescOnce()
+{
+    if (g_descTried)
+        return;
+    g_descTried = 1;
+    char dir[MAX_PATH];
+    GetTempPathA(MAX_PATH, dir);
+    char iconDir[MAX_PATH];
+    _snprintf_s(iconDir, _TRUNCATE, "%sfarmbot-icons", dir);
+    CreateDirectoryA(iconDir, nullptr);
+    char path[MAX_PATH];
+    _snprintf_s(path, _TRUNCATE, "%s\\skilldesc.txt", iconDir);
+    static const char* kFiles[] = {
+        "locale/en/SkillDesc.txt", "locale/ae/SkillDesc.txt", "locale/ro/SkillDesc.txt",
+        "locale/de/SkillDesc.txt", "locale/tr/SkillDesc.txt", "locale/pt/SkillDesc.txt",
+        "locale/pl/SkillDesc.txt", "locale/hu/SkillDesc.txt", "locale/cz/SkillDesc.txt",
+        "locale/es/SkillDesc.txt", "locale/it/SkillDesc.txt", "locale/fr/SkillDesc.txt",
+        "locale/nl/SkillDesc.txt", "locale/gr/SkillDesc.txt", "locale/ru/SkillDesc.txt",
+        "locale/en/skilldesc.txt", "locale/ae/skilldesc.txt", "SkillDesc.txt"
+    };
+    for (int i = 0; i < (int)(sizeof(kFiles) / sizeof(kFiles[0])); ++i)
+    {
+        DeleteFileA(path);
+        if (!PackExtractBlob(kFiles[i], path) || !FileBigEnough(path, 64))
+            continue;
+        ParseSkillDescFile(path);
+        NativeLog("skilldesc %s rows=%d", kFiles[i], g_descN);
+        if (g_descN > 0)
+            return;
+    }
+}
+
+static bool SkillDescVirt(unsigned index, int variant, char* out, int cap)
+{
+    LoadSkillDescOnce();
+    for (int i = 0; i < g_descN; ++i)
+    {
+        if (g_desc[i].index != index || !g_desc[i].name[0])
+            continue;
+        const char* folder = JobFolder(g_desc[i].job);
+        if (!folder || !folder[0])
+            folder = "shaman";
+        if (variant == 0)
+            _snprintf_s(out, cap, _TRUNCATE, "d:/ymir work/ui/skill/%s/%s_01.sub", folder, g_desc[i].name);
+        else
+            _snprintf_s(out, cap, _TRUNCATE, "d:/ymir work/ui/skill/%s/%s.sub", folder, g_desc[i].name);
+        return true;
+    }
+    return false;
+}
+
+static int PathRank(const char* s)
+{
+    if (!s || !s[0])
+        return 0;
+    char low[260];
+    int i = 0;
+    for (; s[i] && i < 259; ++i)
+        low[i] = (char)tolower((unsigned char)s[i]);
+    low[i] = 0;
+    if (strstr(low, ".sub"))
+        return 3;
+    if (strstr(low, ".dds"))
+        return 2;
+    if (strstr(low, ".tga") && (strstr(low, "skill") || strstr(low, "icon")))
+        return 1;
+    return 0;
+}
+
+static void CollectSkillIcon(void* data, unsigned index, char* icon, int cap)
+{
+    if (!icon || cap < 8)
+        return;
+    icon[0] = 0;
+    int rank = 0;
+    static int dumped;
+    if (data)
+    {
+        for (int off = 0x10; off <= 0x800; off += 4)
+        {
+            char s[260];
+            if (SafeStdString((char*)data + off, s, 260) && LooksLikeSkillPath(s))
+            {
+                const int r = PathRank(s);
+                if (r > rank)
+                {
+                    strncpy_s(icon, cap, s, _TRUNCATE);
+                    rank = r;
+                    if (r >= 3)
+                        break;
+                }
+            }
+        }
+        if (rank < 3)
+        {
+            for (int off = 0x20; off <= 0x800; off += 4)
+            {
+                void* img = ReadPtr(data, off);
+                char s[260];
+                if (!ReadImageFileName(img, s, 260))
+                    continue;
+                const int r = PathRank(s);
+                if (r > rank)
+                {
+                    strncpy_s(icon, cap, s, _TRUNCATE);
+                    rank = r;
+                    if (r >= 3)
+                        break;
+                }
+            }
+        }
+        if (dumped < 2)
+        {
+            NativeLog("skill icon src index=%u data=%p path=%s", index, data, icon);
+            for (int off = 0x10; off <= 0x400; off += 4)
+            {
+                char s[260];
+                if (SafeStdString((char*)data + off, s, 260) && s[0])
+                    NativeLog("skill str +0x%X %s", off, s);
+            }
+            ++dumped;
+        }
+    }
+    if (rank < 3)
+    {
+        char fromDesc[260];
+        if (SkillDescVirt(index, 0, fromDesc, 260))
+            strncpy_s(icon, cap, fromDesc, _TRUNCATE);
+    }
+}
+
+static void StemFromPath(const char* virt, char* stem, int cap)
+{
+    if (!stem || cap < 2)
+        return;
+    stem[0] = 0;
+    if (!virt || !virt[0])
+        return;
+    const char* slash = strrchr(virt, '/');
+    const char* bslash = strrchr(virt, '\\');
+    const char* file = virt;
+    if (slash && slash + 1 > file)
+        file = slash + 1;
+    if (bslash && bslash + 1 > file)
+        file = bslash + 1;
+    strncpy_s(stem, cap, file, _TRUNCATE);
+    char* dot = strrchr(stem, '.');
+    if (dot)
+        *dot = 0;
+    const int n = (int)strlen(stem);
+    if (n > 3 && stem[n - 3] == '_' && stem[n - 2] >= '0' && stem[n - 2] <= '9' &&
+        stem[n - 1] >= '0' && stem[n - 1] <= '9')
+        stem[n - 3] = 0;
+}
+
+static bool TryExtractSkillIcon(const char* virt, unsigned index, const char* dest)
+{
+    if (virt && virt[0] && ExtractSkillGraphic(virt, dest))
+        return true;
+    char alt[260];
+    for (int v = 0; v < 2; ++v)
+    {
+        if (SkillDescVirt(index, v, alt, 260) && ExtractSkillGraphic(alt, dest))
+            return true;
+    }
+    static const char* kJobs[] = {
+        "warrior", "assassin", "sura", "shaman", "wolfman", "passive",
+        "common", "common/support", "common/guild", "common/horse", "78skill"
+    };
+    char stem[64];
+    StemFromPath(virt, stem, 64);
+    if (stem[0] && ((stem[0] >= 'a' && stem[0] <= 'z') || (stem[0] >= 'A' && stem[0] <= 'Z')))
+    {
+        for (int j = 0; j < (int)(sizeof(kJobs) / sizeof(kJobs[0])); ++j)
+        {
+            _snprintf_s(alt, _TRUNCATE, "d:/ymir work/ui/skill/%s/%s_01.sub", kJobs[j], stem);
+            if (ExtractSkillGraphic(alt, dest))
+                return true;
+            _snprintf_s(alt, _TRUNCATE, "d:/ymir work/ui/skill/%s/%s.sub", kJobs[j], stem);
+            if (ExtractSkillGraphic(alt, dest))
+                return true;
+        }
+    }
+    _snprintf_s(alt, _TRUNCATE, "icon/skill/%05u.tga", index);
+    if ((!virt || _stricmp(virt, alt) != 0) && ExtractSkillGraphic(alt, dest))
+        return true;
+    return false;
+}
+
+static bool SkillJunk(unsigned idx, const char* name, int type)
+{
+    if (type == 3)
+        return true;
+    if (idx >= 121 && idx <= 124)
+        return true;
+    if (!name || !name[0])
+        return false;
+    char low[160];
+    int i = 0;
+    for (; name[i] && i < 159; ++i)
+        low[i] = (char)tolower((unsigned char)name[i]);
+    low[i] = 0;
+    return strstr(low, "mining") || strstr(low, "language") || strstr(low, "combo") ||
+        strstr(low, "fishing") || strstr(low, "farming") || strstr(low, "leadership");
+}
+
+static bool CallClickSkill(unsigned slot)
+{
+    void* player = Player();
+    if (!player || !kClickSkillRva || !g_base)
+        return false;
+    FnClickSkill fn = (FnClickSkill)(g_base + kClickSkillRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    __try
+    {
+        fn(player, slot);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool CallSendUseSkill(unsigned index, unsigned vid)
+{
+    void* net = NetStream();
+    if (!net || !kSendUseSkillRva || !g_base)
+        return false;
+    FnSendUseSkill fn = (FnSendUseSkill)(g_base + kSendUseSkillRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    __try
+    {
+        fn(net, index, vid);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static void ScanSkills()
+{
+    g_skillsJson = "[]";
+    NativeLog("skills scan begin getIndex=0x%X getLevel=0x%X skillMgr=0x%X getData=0x%X",
+        kGetSkillIndexRva, kGetSkillLevelRva, kSkillMgrRva, kGetSkillDataRva);
+    if (!kGetSkillIndexRva)
+        return;
+    char dir[MAX_PATH];
+    GetTempPathA(MAX_PATH, dir);
+    char iconDir[MAX_PATH];
+    _snprintf_s(iconDir, _TRUNCATE, "%sfarmbot-icons", dir);
+    CreateDirectoryA(iconDir, nullptr);
+    std::string json = "[";
+    bool first = true;
+    int seen = 0;
+    int kept = 0;
+    for (unsigned slot = 0; slot < 255; ++slot)
+    {
+        const int index = NativeSkillIndex(slot);
+        const int level = NativeSkillLevel(slot);
+        if (index <= 0 || level <= 0)
+            continue;
+        ++seen;
+        void* data = NativeSkillData((unsigned)index);
+        char name[160] = { 0 };
+        char icon[260] = { 0 };
+        const int type = data ? SafeByte(data) : 0;
+        if (data)
+        {
+            for (int off = 0x10; off <= 0x40; off += 4)
+            {
+                if (SafeStdString((char*)data + off, name, 160) && name[0] && !LooksLikeSkillPath(name))
+                    break;
+                name[0] = 0;
+            }
+        }
+        SanitizeName(name);
+        if (SkillJunk((unsigned)index, name, type))
+            continue;
+        const char* kind = "skill";
+        if (!name[0])
+            _snprintf_s(name, _TRUNCATE, "skill %d", index);
+        CollectSkillIcon(data, (unsigned)index, icon, 260);
+        const int coolDur = NativeSkillCoolSec(slot);
+        int cool = 0;
+        if (NativeIsSkillCool(slot))
+            cool = coolDur > 0 ? coolDur : 1;
+        const int duration = coolDur > 0 ? coolDur : 0;
+        char tga[MAX_PATH];
+        _snprintf_s(tga, _TRUNCATE, "%s\\skill-%u.sub", iconDir, (unsigned)index);
+        char iconPath[MAX_PATH];
+        iconPath[0] = 0;
+        if (TryExtractSkillIcon(icon, (unsigned)index, tga))
+        {
+            strncpy_s(iconPath, tga, _TRUNCATE);
+            NativeLog("skill icon pack index=%d path=%s dest=%s", index, icon, tga);
+        }
+        else
+            NativeLog("skill icon miss index=%d path=%s", index, icon);
+        char nameEsc[192];
+        char iconEsc[MAX_PATH * 2];
+        JsonEscape(name, nameEsc, 192);
+        JsonEscape(iconPath, iconEsc, (int)sizeof(iconEsc));
+        char item[900];
+        _snprintf_s(item, _TRUNCATE,
+            "%s{\"x\":%d,\"s\":%u,\"n\":\"%s\",\"k\":\"%s\",\"l\":%d,\"c\":%d,\"r\":0,\"d\":%d,\"i\":\"%s\"}",
+            first ? "" : ",",
+            index, slot, nameEsc, kind, level, cool, duration, iconEsc);
+        json += item;
+        first = false;
+        ++kept;
+        NativeLog("skill slot=%u index=%d level=%d type=%d name=%s",
+            slot, index, level, type, name);
+    }
+    json += "]";
+    g_skillsJson = json;
+    NativeLog("skills scan seen=%d kept=%d json=%u", seen, kept, (unsigned)g_skillsJson.size());
+}
+
 static bool PyUseItem(unsigned cell)
 {
     char code[96];
@@ -3787,6 +4738,14 @@ static void Execute(const Command& cmd)
         return;
     }
 
+    if (cmd.type == "get_skills")
+    {
+        ScanSkills();
+        g_lastOk = true;
+        g_lastReason = "skills";
+        return;
+    }
+
     if (cmd.type == "use_item")
     {
         const unsigned cell = cmd.slot >= 0 ? (unsigned)cmd.slot : cmd.vid;
@@ -3803,6 +4762,26 @@ static void Execute(const Command& cmd)
         }
         else
             g_lastReason = "SendItemUsePacket missing";
+        return;
+    }
+
+    if (cmd.type == "use_skill")
+    {
+        const unsigned slot = cmd.slot >= 0 ? (unsigned)cmd.slot : 0;
+        const unsigned vid = cmd.vid;
+        const int index = NativeSkillIndex(slot);
+        NativeLog("use_skill slot=%u index=%d vid=%u click=0x%X send=0x%X",
+            slot, index, vid, kClickSkillRva, kSendUseSkillRva);
+        const int clicked = CallClickSkill(slot) ? 1 : 0;
+        NativeLog("use_skill slot=%u click=%d", slot, clicked);
+        if (clicked)
+        {
+            g_lastOk = true;
+            g_lastReason = "ClickSkillSlot";
+            g_lastVid = vid ? vid : (unsigned)index;
+        }
+        else
+            g_lastReason = "skill use missing";
         return;
     }
 
@@ -4537,6 +5516,17 @@ static void ClearLoginRvas()
     kPackMgrRva = 0;
     kPackGetRva = 0;
     kUseItemRva = 0;
+    kGetSkillIndexRva = 0;
+    kGetSkillLevelRva = 0;
+    kClickSkillRva = 0;
+    kGetSkillCoolRva = 0;
+    kIsSkillCoolRva = 0;
+    kSendUseSkillRva = 0;
+    kSkillMgrRva = 0;
+    kGetSkillDataRva = 0;
+    kIsStandingRva = 0;
+    kIsNeedTargetRva = 0;
+    kIsAttackSkillRva = 0;
     kGetStatusRva = 0;
     kGetStatusSlot = 0;
     kPointsDisp = 0;
@@ -4725,6 +5715,28 @@ static void LoadConfig()
             kPackGetRva = ParseHex(line + 8);
         else if (strncmp(line, "useItem=", 8) == 0)
             kUseItemRva = ParseHex(line + 8);
+        else if (strncmp(line, "getSkillIndex=", 14) == 0)
+            kGetSkillIndexRva = ParseHex(line + 14);
+        else if (strncmp(line, "getSkillLevel=", 14) == 0)
+            kGetSkillLevelRva = ParseHex(line + 14);
+        else if (strncmp(line, "clickSkill=", 11) == 0)
+            kClickSkillRva = ParseHex(line + 11);
+        else if (strncmp(line, "getSkillCool=", 13) == 0)
+            kGetSkillCoolRva = ParseHex(line + 13);
+        else if (strncmp(line, "isSkillCool=", 12) == 0)
+            kIsSkillCoolRva = ParseHex(line + 12);
+        else if (strncmp(line, "sendUseSkill=", 13) == 0)
+            kSendUseSkillRva = ParseHex(line + 13);
+        else if (strncmp(line, "skillMgr=", 9) == 0)
+            kSkillMgrRva = ParseHex(line + 9);
+        else if (strncmp(line, "getSkillData=", 13) == 0)
+            kGetSkillDataRva = ParseHex(line + 13);
+        else if (strncmp(line, "isStanding=", 11) == 0)
+            kIsStandingRva = ParseHex(line + 11);
+        else if (strncmp(line, "isNeedTarget=", 13) == 0)
+            kIsNeedTargetRva = ParseHex(line + 13);
+        else if (strncmp(line, "isAttackSkill=", 14) == 0)
+            kIsAttackSkillRva = ParseHex(line + 14);
         else if (strncmp(line, "mainPtr=", 8) == 0)
             kMainPtrDisp = ParseHex(line + 8);
         else if (strncmp(line, "mapDisp=", 8) == 0)
@@ -4923,6 +5935,12 @@ static void Serve()
             g_lastOk = true;
             g_lastReason = "pots";
         }
+        else if (cmd.type == "get_skills")
+        {
+            ScanSkills();
+            g_lastOk = true;
+            g_lastReason = "skills";
+        }
         else
         {
             ResetEvent(g_done);
@@ -4933,7 +5951,7 @@ static void Serve()
             const bool waitReply = cmd.type == "get_phase" || cmd.type == "get_session" ||
                 cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game" ||
                 cmd.type == "skip_intro" || cmd.type == "get_atlas" ||
-                cmd.type == "use_item";
+                cmd.type == "use_item" || cmd.type == "use_skill";
             if (waitReply)
             {
                 const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
@@ -4999,6 +6017,8 @@ static void Serve()
         std::string reply = head;
         reply += ",\"pots\":";
         reply += (cmd.type == "get_pots" && !g_potsJson.empty()) ? g_potsJson : "[]";
+        reply += ",\"skills\":";
+        reply += (cmd.type == "get_skills" && !g_skillsJson.empty()) ? g_skillsJson : "[]";
         char extra[96];
         _snprintf_s(extra, _TRUNCATE, ",\"greenRemain\":%d,\"purpleRemain\":%d}", g_greenRemain, g_purpleRemain);
         reply += extra;
@@ -5015,8 +6035,8 @@ static DWORD WINAPI InitThread(void*)
     g_base = (BYTE*)client;
     InitAtlasMap();
     InstallLoopHooks(client);
-    NativeLog("loaded base=%p profile=%s sendAttack=0x%X sendState=0x%X attackKey=0x%X combo=0x%X reserve=0x%X setTarget=0x%X getItemIndex=0x%X itemMgr=0x%X hooks=%d comboPatch=%d",
-        g_base, g_arthion ? "arthion" : "normal", kSendAttackRva, kSendStateRva, kAttackKeyRva, kComboRva, kReserveClickRva, kSetTargetRva, kGetItemIndexRva, kItemMgrRva, g_iatHooks, g_updateComboCall ? 1 : 0);
+    NativeLog("loaded base=%p profile=%s sendAttack=0x%X sendState=0x%X attackKey=0x%X combo=0x%X reserve=0x%X setTarget=0x%X getItemIndex=0x%X itemMgr=0x%X getSkillIndex=0x%X clickSkill=0x%X sendUseSkill=0x%X skillMgr=0x%X hooks=%d comboPatch=%d",
+        g_base, g_arthion ? "arthion" : "normal", kSendAttackRva, kSendStateRva, kAttackKeyRva, kComboRva, kReserveClickRva, kSetTargetRva, kGetItemIndexRva, kItemMgrRva, kGetSkillIndexRva, kClickSkillRva, kSendUseSkillRva, kSkillMgrRva, g_iatHooks, g_updateComboCall ? 1 : 0);
     Serve();
     return 0;
 }
