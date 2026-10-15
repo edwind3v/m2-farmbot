@@ -84,6 +84,7 @@ public static class ActionProtocol
     public const string GetSkills = "get_skills";
     public const string GetEntities = "get_entities";
     public const string UseSkill = "use_skill";
+    public const string DumpCaptchaBg = "dump_captcha_bg";
     public const int Version = 1;
 
     public static byte[] Encode(object value) => FrameEncode(JsonSerializer.SerializeToUtf8Bytes(value, JsonDefaults.Instance));

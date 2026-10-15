@@ -260,7 +260,7 @@ public class PlayerActionLayoutTests
         var entity = recovered.Entity;
         var login = recovered.Login;
         var rawEntity = FarmBot.Core.Entities.ClientReleaseLayout.Recover(baerim);
-        var dump = $"player=0x{player.PlayerSingletonRva:X} charMgr=0x{entity.SingletonRva:X} map=+0x{entity.MapDisplacement:X} rawMap=+0x{rawEntity.MapDisplacement:X} graphic=+0x{entity.GraphicDisplacement:X} race=+0x{entity.RaceDisplacement:X} vnum=+0x{entity.VirtualNumberDisplacement:X} type=+0x{entity.ActorTypeDisplacement:X} pos=+0x{entity.PixelXDisplacement:X}/+0x{entity.PixelYDisplacement:X}/+0x{entity.PixelZDisplacement:X} name=+0x{entity.InstanceNameDisplacement:X} main=+0x{entity.MainPointerDisplacement:X} can={entity.CanEnumerate} negateY={entity.NegatePixelY} setTargetSlot=0x{player.SetTargetVtableSlot:X} getStatusSlot=0x{player.GetStatusVtableSlot:X} clickSkill=0x{player.ClickSkillSlotRva:X} combo=0x{player.ComboAttackRva:X} getItemIndexSlot=0x{recovered.GetItemIndexVtableSlot:X} getItemCountSlot=0x{recovered.GetItemCountVtableSlot:X} isSkillCool=0x{recovered.IsSkillCoolTimeRva:X} packMgr=0x{recovered.PackMgrRva:X} packGet=0x{recovered.PackGetRva:X} net=0x{login.NetStreamRva:X} loginCan={login.CanLogin}\n" +
+        var dump = $"player=0x{player.PlayerSingletonRva:X} charMgr=0x{entity.SingletonRva:X} map=+0x{entity.MapDisplacement:X} rawMap=+0x{rawEntity.MapDisplacement:X} graphic=+0x{entity.GraphicDisplacement:X} race=+0x{entity.RaceDisplacement:X} vnum=+0x{entity.VirtualNumberDisplacement:X} type=+0x{entity.ActorTypeDisplacement:X} pos=+0x{entity.PixelXDisplacement:X}/+0x{entity.PixelYDisplacement:X}/+0x{entity.PixelZDisplacement:X} name=+0x{entity.InstanceNameDisplacement:X} main=+0x{entity.MainPointerDisplacement:X} can={entity.CanEnumerate} negateY={entity.NegatePixelY} setTargetSlot=0x{player.SetTargetVtableSlot:X} getStatusSlot=0x{player.GetStatusVtableSlot:X} clickSkill=0x{player.ClickSkillSlotRva:X} combo=0x{player.ComboAttackRva:X} getItemIndexSlot=0x{recovered.GetItemIndexVtableSlot:X} getItemCountSlot=0x{recovered.GetItemCountVtableSlot:X} isSkillCool=0x{recovered.IsSkillCoolTimeRva:X} packMgr=0x{recovered.PackMgrRva:X} packGet=0x{recovered.PackGetRva:X} packCtor=0x{recovered.PackMappedCtorRva:X} packExist=0x{recovered.PackExistRva:X} net=0x{login.NetStreamRva:X} loginCan={login.CanLogin}\n" +
                    string.Join("\n", recovered.Evidence) + "\n--- entity ---\n" +
                    string.Join("\n", entity.Evidence);
         Directory.CreateDirectory(@"C:\Temp");
@@ -275,7 +275,9 @@ public class PlayerActionLayoutTests
         Assert.Equal(0x1B8A50u, player.ClickSkillSlotRva);
         Assert.Equal(0x1AA5B0u, player.ComboAttackRva);
         Assert.True(login.CanLogin, dump);
-        Assert.NotEqual(0x3956A14u, recovered.PackMgrRva);
-        Assert.NotEqual(0x5054A0u, recovered.PackGetRva);
+        Assert.Equal(0x3B73F2Cu, recovered.PackMgrRva);
+        Assert.Equal(0x36E280u, recovered.PackGetRva);
+        Assert.Equal(0x317DE0u, recovered.PackMappedCtorRva);
+        Assert.Equal(0x371040u, recovered.PackExistRva);
     }
 }

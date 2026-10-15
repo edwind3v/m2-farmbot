@@ -14,8 +14,16 @@ public sealed class QuickPlayOrchestrator
         _log = log;
     }
 
-    public bool TryEnter(ClientSlot slot, GameChannel channel, string password, int timeoutMs, out string status)
+    public bool TryEnter(
+        ClientSlot slot,
+        GameChannel channel,
+        string password,
+        int timeoutMs,
+        out string status,
+        Action<string>? progress = null)
     {
+        void Report(string message) => progress?.Invoke(message);
+
         if (string.IsNullOrWhiteSpace(slot.Account) || string.IsNullOrWhiteSpace(password))
         {
             status = "account and password are required for Quick Play";
@@ -31,6 +39,7 @@ public sealed class QuickPlayOrchestrator
 
         var characterSlot = Math.Clamp(slot.CharacterSlot, 0, 4);
         var deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(timeoutMs, 30000));
+        Report("waiting for login...");
         Thread.Sleep(2000);
         var started = DateTime.UtcNow;
         var lastSkip = DateTime.MinValue;
@@ -79,6 +88,7 @@ public sealed class QuickPlayOrchestrator
 
             if (IsLoginScreen(phase))
             {
+                Report("logging in...");
                 _log.Info($"quick play login for {slot.Account} slot {characterSlot + 1} on {channel.Name}");
                 var login = _sink.Login(
                     slot.Account,
@@ -104,6 +114,7 @@ public sealed class QuickPlayOrchestrator
                 _log.Info("quick play skip login, already " + phase);
         }
 
+        Report("waiting for character select...");
         if (!WaitFor(deadline, () => IsSelectOrEntering(CurrentPhase()) || Snapshot().InWorld))
         {
             status = "timed out waiting for character select: " + CurrentPhase();
@@ -119,6 +130,7 @@ public sealed class QuickPlayOrchestrator
 
         if (NeedsCharacterSelect(CurrentPhase()) && !Snapshot().InWorld)
         {
+            Report("selecting character...");
             _log.Info("quick play skipping character select slot " + (characterSlot + 1) + " from " + CurrentPhase());
             var select = _sink.SelectCharacter(characterSlot);
             if (!select.Ok)
@@ -129,6 +141,7 @@ public sealed class QuickPlayOrchestrator
             }
         }
 
+        Report("entering the world...");
         if (!WaitFor(deadline, () => IsEnteringWorld(CurrentPhase()) || Snapshot().InWorld))
         {
             status = "timed out waiting for loading: " + CurrentPhase();

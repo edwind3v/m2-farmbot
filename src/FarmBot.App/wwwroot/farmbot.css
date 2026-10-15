@@ -285,6 +285,7 @@ tr.tgt td { color: var(--accent-2); }
 }
 
 .slot.on { border-color: var(--ok-border); }
+.slot.busy { border-color: var(--accent-border); }
 
 .slot-main {
     display: flex;
@@ -294,11 +295,39 @@ tr.tgt td { color: var(--accent-2); }
 }
 
 .slot-main b { font-size: 13px; }
-.slot-main span {
+.slot-state {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    max-width: 62%;
     color: var(--muted);
     font-size: 11px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+    text-align: right;
+}
+
+.slot.busy .slot-state { color: var(--accent-2); }
+
+.spinner {
+    width: 11px;
+    height: 11px;
+    box-sizing: border-box;
+    border: 1.5px solid var(--line-strong);
+    border-top-color: var(--accent-2);
+    border-radius: 50%;
+    display: inline-block;
+    flex: none;
+    animation: slot-spin 0.7s linear infinite;
+}
+
+@keyframes slot-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
 }
 
 .slot-cmd {
@@ -344,6 +373,12 @@ tr.tgt td { color: var(--accent-2); }
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    align-items: center;
+}
+
+.pot-row .btn {
+    font-size: 11px;
+    padding: 6px 10px;
 }
 
 .pot {

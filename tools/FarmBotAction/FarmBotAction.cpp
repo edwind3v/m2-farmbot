@@ -67,6 +67,10 @@ static unsigned kGetValueRva = 0;
 static unsigned kGetIconImageRva = 0;
 static unsigned kPackMgrRva = 0;
 static unsigned kPackGetRva = 0;
+static unsigned kPackCtorRva = 0;
+static unsigned kPackExistRva = 0;
+static unsigned kResMgrRva = 0;
+static unsigned kGetResRva = 0;
 static unsigned kUseItemRva = 0;
 static unsigned kGetSkillIndexRva = 0;
 static unsigned kGetSkillLevelRva = 0;
@@ -269,6 +273,17 @@ static void* g_mainInst;
 static char g_mainName[64];
 static volatile long g_allowMelee;
 static int g_captchaShown;
+static volatile long g_captchaDumpBusy;
+static volatile long g_captchaDumpStep;
+static DWORD g_captchaDumpLastMs;
+static int g_captchaDumpGot;
+static char g_dumpVirt[260];
+static char g_dumpDest[260];
+static int g_dumpCaptured;
+static BYTE* g_getTramp;
+static BYTE g_getStolen[8];
+static DWORD g_getProt;
+static volatile long g_getHooked;
 static DWORD g_scanUnstableMs;
 static BYTE* g_updateComboCall;
 static volatile long g_busy;
@@ -1814,9 +1829,28 @@ static HMODULE PythonDll()
     return py;
 }
 
+static void* PyThreadStateCurrent()
+{
+    HMODULE py = PythonDll();
+    if (!py)
+        return nullptr;
+    void* const* slot = (void* const*)GetProcAddress(py, "_PyThreadState_Current");
+    if (!slot)
+        return nullptr;
+    void* tstate = nullptr;
+    __try { tstate = *slot; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { tstate = nullptr; }
+    return tstate;
+}
+
+static int PyCanRun()
+{
+    return PyThreadStateCurrent() != nullptr;
+}
+
 static void PyDec(void* obj)
 {
-    if (!obj)
+    if (!obj || !PyCanRun())
         return;
     HMODULE py = PythonDll();
     typedef void (__cdecl* FnDec)(void*);
@@ -1832,7 +1866,7 @@ static void PyDec(void* obj)
 static void* PyMod(const char* name)
 {
     HMODULE py = PythonDll();
-    if (!py || !name)
+    if (!py || !name || !PyCanRun())
         return nullptr;
     typedef void* (__cdecl* FnImport)(const char*);
     FnImport imp = (FnImport)GetProcAddress(py, "PyImport_ImportModule");
@@ -1855,7 +1889,7 @@ static void* PyMod(const char* name)
 static void* PyCall(void* obj, const char* name, const char* fmt, int a = 0, int b = 0)
 {
     HMODULE py = PythonDll();
-    if (!obj || !py || !name)
+    if (!obj || !py || !name || !PyCanRun())
         return nullptr;
     FnPyCallMethod call = (FnPyCallMethod)GetProcAddress(py, "PyObject_CallMethod");
     FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
@@ -1891,6 +1925,11 @@ static long PyAsInt(void* obj)
 {
     if (!obj)
         return 0;
+    if (!PyCanRun())
+    {
+        PyDec(obj);
+        return 0;
+    }
     HMODULE py = PythonDll();
     typedef long (__cdecl* FnAsLong)(void*);
     FnAsLong asLong = py ? (FnAsLong)GetProcAddress(py, "PyInt_AsLong") : nullptr;
@@ -1908,6 +1947,11 @@ static void PyAsStr(void* obj, char* out, int cap)
     if (out && cap > 0)
         out[0] = 0;
     if (!obj || !out || cap < 2)
+    {
+        PyDec(obj);
+        return;
+    }
+    if (!PyCanRun())
     {
         PyDec(obj);
         return;
@@ -1960,36 +2004,20 @@ static void PySlotName(void* player, int slot, char* out, int cap)
 
 static int GilEnter(int* state)
 {
-    HMODULE py = PythonDll();
-    FnPyGilEnsure gilEnsure = py ? (FnPyGilEnsure)GetProcAddress(py, "PyGILState_Ensure") : nullptr;
-    if (!py || !gilEnsure || !state)
-        return 0;
-    __try
-    {
-        *state = gilEnsure();
-        return 1;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-        return 0;
-    }
+    if (state)
+        *state = 0;
+    return PyCanRun();
 }
 
 static void GilLeave(int have, int state)
 {
-    if (!have)
-        return;
-    HMODULE py = PythonDll();
-    FnPyGilRelease gilRelease = py ? (FnPyGilRelease)GetProcAddress(py, "PyGILState_Release") : nullptr;
-    if (!gilRelease)
-        return;
-    __try { gilRelease(state); }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    (void)have;
+    (void)state;
 }
 
 static int ParseAffectPair(void* aff, int* apply, int* aval)
 {
-    if (!aff || !apply || !aval)
+    if (!aff || !apply || !aval || !PyCanRun())
         return 0;
     HMODULE py = PythonDll();
     typedef int (__cdecl* FnParse)(void*, const char*, ...);
@@ -2003,7 +2031,7 @@ static int ParseAffectPair(void* aff, int* apply, int* aval)
 static int SafePySetInt(void* obj, const char* name, long value)
 {
     HMODULE py = PythonDll();
-    if (!obj || !py || !name)
+    if (!obj || !py || !name || !PyCanRun())
         return 0;
     FnPyIntFromLong fromLong = (FnPyIntFromLong)GetProcAddress(py, "PyInt_FromLong");
     FnPySetAttrString setAttr = (FnPySetAttrString)GetProcAddress(py, "PyObject_SetAttrString");
@@ -2029,7 +2057,7 @@ static int SafePySetInt(void* obj, const char* name, long value)
 static int SafePySetString(void* obj, const char* name, const char* value)
 {
     HMODULE py = PythonDll();
-    if (!obj || !py || !name || !value)
+    if (!obj || !py || !name || !value || !PyCanRun())
         return 0;
     FnPyStringFromString fromString = (FnPyStringFromString)GetProcAddress(py, "PyString_FromString");
     if (!fromString)
@@ -2057,7 +2085,7 @@ static int SafePySetString(void* obj, const char* name, const char* value)
 static int SafePyCallMethod(void* obj, const char* name, const char* format, int arg)
 {
     HMODULE py = PythonDll();
-    if (!obj || !py || !name)
+    if (!obj || !py || !name || !PyCanRun())
         return 0;
     FnPyCallMethod call = (FnPyCallMethod)GetProcAddress(py, "PyObject_CallMethod");
     FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
@@ -2117,7 +2145,7 @@ static int SafePyClickStart(void* net)
     HMODULE py = PythonDll();
     FnPyGetAttrString getAttr = py ? (FnPyGetAttrString)GetProcAddress(py, "PyObject_GetAttrString") : nullptr;
     FnPyErrClear errClear = py ? (FnPyErrClear)GetProcAddress(py, "PyErr_Clear") : nullptr;
-    if (!getAttr)
+    if (!getAttr || !PyCanRun())
         return 0;
     void* wnd = nullptr;
     __try
@@ -2138,7 +2166,7 @@ static int SafePyClickStart(void* net)
 static void* SafePyGetAttr(void* obj, const char* name)
 {
     HMODULE py = PythonDll();
-    if (!obj || !py || !name)
+    if (!obj || !py || !name || !PyCanRun())
         return nullptr;
     FnPyGetAttrString getAttr = (FnPyGetAttrString)GetProcAddress(py, "PyObject_GetAttrString");
     FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
@@ -2160,7 +2188,7 @@ static void* SafePyGetAttr(void* obj, const char* name)
 static int SafePyTypeName(void* obj, char* out, int cap)
 {
     HMODULE py = PythonDll();
-    if (!obj || !out || cap <= 1 || !py)
+    if (!obj || !out || cap <= 1 || !py || !PyCanRun())
         return 0;
     out[0] = 0;
     FnPyGetAttrString getAttr = (FnPyGetAttrString)GetProcAddress(py, "PyObject_GetAttrString");
@@ -2227,7 +2255,7 @@ static int LoadingStepCount()
     if (!size)
         size = py ? (FnPyListSize)GetProcAddress(py, "PyObject_Size") : nullptr;
     FnPyErrClear errClear = py ? (FnPyErrClear)GetProcAddress(py, "PyErr_Clear") : nullptr;
-    if (!size)
+    if (!size || !PyCanRun())
         return -1;
     __try
     {
@@ -2245,28 +2273,12 @@ static int LoadingStepCount()
 static int SafePyRun(const char* code)
 {
     HMODULE py = PythonDll();
-    if (!py || !code)
+    if (!py || !code || !PyCanRun())
         return 0;
     typedef int (__cdecl* FnPyRun)(const char*);
     FnPyRun run = (FnPyRun)GetProcAddress(py, "PyRun_SimpleString");
-    FnPyGilEnsure gilEnsure = (FnPyGilEnsure)GetProcAddress(py, "PyGILState_Ensure");
-    FnPyGilRelease gilRelease = (FnPyGilRelease)GetProcAddress(py, "PyGILState_Release");
     if (!run)
         return 0;
-    int gil = 0;
-    int haveGil = 0;
-    if (gilEnsure && gilRelease)
-    {
-        __try
-        {
-            gil = gilEnsure();
-            haveGil = 1;
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            haveGil = 0;
-        }
-    }
     int ok = 0;
     __try
     {
@@ -2276,8 +2288,6 @@ static int SafePyRun(const char* code)
     {
         ok = 0;
     }
-    if (haveGil)
-        gilRelease(gil);
     return ok;
 }
 
@@ -3823,30 +3833,306 @@ static void ChaseTick(void* player)
     DriveToTarget(player, g_chaseVid, g_chaseX, g_chaseY);
 }
 
+static bool ExtractPackBlob(const char* virt, const char* dest);
+static int PackExists(const char* virt);
+static void* PackMgrPtr();
+static int PngFileBytes(const unsigned char* p);
+static bool WriteBytes(const char* path, const void* data, int bytes);
+static bool DataAddr(const void* p);
+static int LooksLikeTga(const unsigned char* p);
+
+static int GuessMappedSize(void* mapped)
+{
+    if (!mapped)
+        return 0;
+    unsigned char* m = (unsigned char*)mapped;
+    for (int off = 4; off <= 0x80; off += 4)
+    {
+        unsigned sz = 0;
+        __try { sz = *(unsigned*)(m + off); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { sz = 0; }
+        if (sz >= 64 && sz <= 2 * 1024 * 1024)
+            return (int)sz;
+    }
+    return 0;
+}
+
+static void Head4(const unsigned char* p, unsigned* o)
+{
+    o[0] = o[1] = o[2] = o[3] = 0;
+    if (!p)
+        return;
+    __try
+    {
+        o[0] = p[0];
+        o[1] = p[1];
+        o[2] = p[2];
+        o[3] = p[3];
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+static int __stdcall HookPackGetImpl(void* self, void* mapped, const char* name, const void** dataOut)
+{
+    typedef int (__thiscall* FnGet)(void* self, void* mapped, const char* name, const void** dataOut);
+    int ok = 0;
+    if (g_getTramp)
+        ok = ((FnGet)g_getTramp)(self, mapped, name, dataOut);
+    if (!name || !strstr(name, "captcha"))
+        return ok;
+    const unsigned char* p = (ok && dataOut) ? (const unsigned char*)*dataOut : nullptr;
+    int n = PngFileBytes(p);
+    if (n < 32)
+        n = LooksLikeTga(p);
+    if (n < 32)
+        n = GuessMappedSize(mapped);
+    unsigned h[4];
+    Head4(p, h);
+    NativeLog("dump bg hooked get %s ok=%d bytes=%d ptr=%p head=%02X%02X%02X%02X dest=%d",
+        name, ok, n, p, h[0], h[1], h[2], h[3], g_dumpDest[0] ? 1 : 0);
+    if (n >= 32 && p && g_dumpDest[0] && WriteBytes(g_dumpDest, p, n))
+        g_dumpCaptured = n;
+    return ok;
+}
+
+static __declspec(naked) int HookPackGet()
+{
+    __asm {
+        push ebp
+        mov ebp, esp
+        push dword ptr [ebp+16]
+        push dword ptr [ebp+12]
+        push dword ptr [ebp+8]
+        push ecx
+        call HookPackGetImpl
+        pop ebp
+        ret 12
+    }
+}
+
+static void RemoveGetCaptureHook()
+{
+    if (!g_getHooked || !g_base || !kPackGetRva)
+        return;
+    BYTE* get = g_base + kPackGetRva;
+    DWORD old = 0;
+    if (VirtualProtect(get, 8, PAGE_EXECUTE_READWRITE, &old))
+    {
+        memcpy(get, g_getStolen, 6);
+        VirtualProtect(get, 8, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), get, 8);
+    }
+    if (g_getTramp)
+    {
+        VirtualFree(g_getTramp, 0, MEM_RELEASE);
+        g_getTramp = nullptr;
+    }
+    g_getHooked = 0;
+    NativeLog("dump bg get hook removed");
+}
+
+static int InstallGetCaptureHook()
+{
+    if (g_getHooked)
+        return 1;
+    if (!g_base || !kPackGetRva)
+        return 0;
+    BYTE* get = g_base + kPackGetRva;
+    NativeLog("dump bg get bytes %02X %02X %02X %02X %02X %02X %02X %02X at %p",
+        get[0], get[1], get[2], get[3], get[4], get[5], get[6], get[7], get);
+    if (get[0] != 0x55 || get[1] != 0x8B || get[2] != 0xEC)
+    {
+        NativeLog("dump bg get prologue mismatch");
+        return 0;
+    }
+    g_getTramp = (BYTE*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!g_getTramp)
+        return 0;
+    memcpy(g_getStolen, get, 6);
+    memcpy(g_getTramp, get, 6);
+    g_getTramp[6] = 0xE9;
+    *(DWORD*)(g_getTramp + 7) = (DWORD)(get + 6) - (DWORD)(g_getTramp + 11);
+    DWORD old = 0;
+    if (!VirtualProtect(get, 8, PAGE_EXECUTE_READWRITE, &old))
+    {
+        VirtualFree(g_getTramp, 0, MEM_RELEASE);
+        g_getTramp = nullptr;
+        return 0;
+    }
+    g_getProt = old;
+    const DWORD rel = (DWORD)(BYTE*)HookPackGet - (DWORD)(get + 5);
+    get[0] = 0xE9;
+    *(DWORD*)(get + 1) = rel;
+    get[5] = 0x90;
+    VirtualProtect(get, 8, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), get, 8);
+    g_getHooked = 1;
+    NativeLog("dump bg get hook installed at %p tramp=%p", get, g_getTramp);
+    return 1;
+}
+
+static void* ClientGetResource(const char* virt)
+{
+    if (!g_base || !kResMgrRva || !kGetResRva || !virt || !virt[0])
+        return nullptr;
+    void* mgr = nullptr;
+    __try { mgr = *(void**)(g_base + kResMgrRva); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { mgr = nullptr; }
+    if (!UserPtr(mgr))
+        return nullptr;
+    typedef void* (__thiscall* FnGetRes)(void* self, const char* name);
+    FnGetRes getRes = (FnGetRes)(g_base + kGetResRva);
+    if (IsBadCodePtr((FARPROC)getRes))
+        return nullptr;
+    void* img = nullptr;
+    __try { img = getRes(mgr, virt); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { img = nullptr; }
+    return img;
+}
+
+static int DumpViaClientLoad(const char* virt, const char* dest)
+{
+    NativeLog("dump bg client-load %s exist=%d hooked=%d", virt, PackExists(virt), (int)g_getHooked);
+    g_dumpCaptured = 0;
+    _snprintf_s(g_dumpVirt, _TRUNCATE, "%s", virt);
+    _snprintf_s(g_dumpDest, _TRUNCATE, "%s", dest);
+    NativeLog("dump bg getRes start");
+    void* img = ClientGetResource(virt);
+    NativeLog("dump bg getRes done img=%p captured=%d", img, g_dumpCaptured);
+    if (g_dumpCaptured > 0)
+        return 1;
+    char py[900];
+    _snprintf_s(py, _TRUNCATE,
+        "try:\n"
+        " import app\n"
+        " p='%s'\n"
+        " n=app.OpenTextFile(p)\n"
+        " f=open(r'C:\\Temp\\farmbot-captcha.log','ab')\n"
+        " f.write('open ')\n"
+        " f.write(p)\n"
+        " f.write(' ')\n"
+        " f.write(str(n))\n"
+        " f.write('\\r\\n')\n"
+        " f.close()\n"
+        " if n: app.CloseTextFile(n)\n"
+        "except Exception,e:\n"
+        " try:\n"
+        "  f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write('open fail '+str(e)+'\\r\\n'); f.close()\n"
+        " except: pass\n"
+        "try:\n"
+        " import ui\n"
+        " w=ui.ImageBox()\n"
+        " w.LoadImage('%s')\n"
+        " f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write('loadimage ok %s\\r\\n'); f.close()\n"
+        "except Exception,e:\n"
+        " try:\n"
+        "  f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write('loadimage fail %s '+str(e)+'\\r\\n'); f.close()\n"
+        " except: pass\n",
+        virt, virt, virt, virt);
+    NativeLog("dump bg OpenTextFile start");
+    SafePyRun(py);
+    NativeLog("dump bg OpenTextFile done captured=%d", g_dumpCaptured);
+    g_dumpVirt[0] = 0;
+    g_dumpDest[0] = 0;
+    return g_dumpCaptured > 0;
+}
+
+static void DumpCaptchaStep()
+{
+    const long step = g_captchaDumpStep;
+    if (step <= 0)
+        return;
+    const DWORD now = GetTickCount();
+    if (g_captchaDumpLastMs && now - g_captchaDumpLastMs < 400)
+        return;
+    g_captchaDumpLastMs = now;
+    char virt[260];
+    char dest[260];
+    virt[0] = 0;
+    if (step >= 1 && step <= 14)
+    {
+        _snprintf_s(virt, _TRUNCATE, "d:/ymir work/ui/game/captcha/bg_%d.png", (int)step);
+        _snprintf_s(dest, _TRUNCATE, "C:\\Temp\\captcha-bgs\\bg_%d.png", (int)step);
+    }
+    else
+    {
+        const char* extras[] = { "btn_norm.png", "btn_hover.png", "btn_select.png" };
+        const int extra = (int)step - 15;
+        if (extra < 0 || extra > 2)
+        {
+            NativeLog("dump bg done got=%d to C:\\Temp\\captcha-bgs", g_captchaDumpGot);
+            g_captchaDumpStep = 0;
+            RemoveGetCaptureHook();
+            InterlockedExchange(&g_captchaDumpBusy, 0);
+            return;
+        }
+        _snprintf_s(virt, _TRUNCATE, "d:/ymir work/ui/game/captcha/%s", extras[extra]);
+        _snprintf_s(dest, _TRUNCATE, "C:\\Temp\\captcha-bgs\\%s", extras[extra]);
+    }
+    NativeLog("dump bg step %d %s", (int)step, virt);
+    if (DumpViaClientLoad(virt, dest))
+    {
+        ++g_captchaDumpGot;
+        NativeLog("dump bg ok %s", virt);
+    }
+    else
+        NativeLog("dump bg miss %s", virt);
+    g_captchaDumpStep = step + 1;
+}
+
+static void DumpCaptchaBegin()
+{
+    if (InterlockedCompareExchange(&g_captchaDumpBusy, 1, 0) != 0)
+    {
+        g_lastOk = true;
+        g_lastReason = "dump already running";
+        NativeLog("dump bg already running");
+        return;
+    }
+    g_captchaDumpGot = 0;
+    g_captchaDumpLastMs = GetTickCount();
+    CreateDirectoryA("C:\\Temp", nullptr);
+    CreateDirectoryA("C:\\Temp\\captcha-bgs", nullptr);
+    NativeLog("dump bg armed packMgr=0x%X exist=0x%X resMgr=0x%X getRes=0x%X packGet=0x%X phase=%s",
+        kPackMgrRva, kPackExistRva, kResMgrRva, kGetResRva, kPackGetRva,
+        g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
+    if (!InstallGetCaptureHook())
+        NativeLog("dump bg get hook failed; OpenTextFile may still capture");
+    g_captchaDumpStep = 1;
+    g_lastOk = true;
+    g_lastReason = "dump armed";
+}
+
 static void CaptchaTick()
 {
-    if (!g_baerim || !g_inWorld || !g_loadFinished)
+    if (!g_baerim)
         return;
-    if (g_sessionPhase.empty() || !PhaseHas("Game") ||
-        PhaseHas("Load") || PhaseHas("Login") || PhaseHas("Off") ||
+    RefreshSession();
+    if (!g_inWorld)
+        return;
+    if (PhaseHas("Load") || PhaseHas("Login") || PhaseHas("Off") ||
         PhaseHas("Logo") || PhaseHas("Intro") || PhaseHas("Select"))
+        return;
+    if (!PyCanRun())
         return;
     static DWORD lastMs;
     static int armedLog;
     const DWORD now = GetTickCount();
-    if (lastMs && now - lastMs < 300)
+    if (lastMs && now - lastMs < 1000)
         return;
     lastMs = now;
     if (!armedLog)
     {
         armedLog = 1;
-        NativeLog("captcha solver armed");
+        NativeLog("captcha solver armed phase=%s load=%d",
+            g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str(), g_loadFinished);
     }
     static const char kPy[] =
         "try:\n"
-        " import constInfo, localeInfo, traceback, re\n"
-        " try: import item\n"
-        " except: item=None\n"
+        " import constInfo, traceback\n"
+        " try: import uiCaptcha\n"
+        " except: uiCaptcha=None\n"
+        " MAP={1:8,2:5,3:5,4:2,5:5,6:1,7:0,8:2,9:6,10:0,11:2,12:1,13:7,14:5,15:2,16:1,17:7,18:0,19:2,20:0,21:4,22:7,23:6,24:4,25:5,26:1,27:0,28:1,29:1,30:0,31:2,32:3,33:5,34:7,35:8,36:0,37:2,38:4,39:5,40:6,41:7,42:0,43:1,44:3,45:5,46:6,47:8}\n"
         " def _log(s):\n"
         "  try:\n"
         "   f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write(str(s)+'\\r\\n'); f.close()\n"
@@ -3861,154 +4147,57 @@ static void CaptchaTick()
         "  except:\n"
         "   try: return unicode(v).encode('utf-8','replace')\n"
         "   except: return ''\n"
-        " def _low(v): return _txt(v).lower().replace('\\\\','/')\n"
-        " def _call(o,n):\n"
-        "  try:\n"
-        "   f=getattr(o,n)\n"
-        "   return f() if callable(f) else f\n"
-        "  except: return None\n"
-        " def _blob(o, depth=0):\n"
-        "  out=[]\n"
-        "  if o is None or depth>3: return out\n"
-        "  for n in ('GetFileName','GetTooltipText','GetText','GetUpVisualFileName','GetOverVisualFileName','GetDownVisualFileName'):\n"
-        "   t=_txt(_call(o,n))\n"
-        "   if t: out.append(t)\n"
-        "  for n in ('upVisual','overVisual','downVisual','fileName','tooltipText','path','imageName','visual','filename'):\n"
-        "   try:\n"
-        "    v=getattr(o,n)\n"
-        "    if v is not None and not callable(v):\n"
-        "     t=_txt(v)\n"
-        "     if t: out.append(t)\n"
-        "   except: pass\n"
-        "  for n in ('img','image','icon','slot','child'):\n"
-        "   try: out.extend(_blob(getattr(o,n), depth+1))\n"
-        "   except: pass\n"
-        "  ch=getattr(o,'children',None)\n"
-        "  if ch:\n"
-        "   try:\n"
-        "    for c in list(ch)[:12]: out.extend(_blob(c, depth+1))\n"
-        "   except: pass\n"
-        "  return out\n"
-        " def _item_names(blob):\n"
-        "  names=[]\n"
-        "  if not item: return names\n"
-        "  for n in re.findall(r'(\\d{3,5})', blob):\n"
-        "   try:\n"
-        "    v=int(n)\n"
-        "    item.SelectItem(v)\n"
-        "    names.append(_txt(item.GetItemName()))\n"
-        "   except: pass\n"
-        "  return names\n"
-        " def _keys(q):\n"
-        "  noise=set(('click','on','the','a','an','please','find','select','choose','klicke','auf','das','den','die','ein','eine','bitte','waehle','wahlen','suche','press','hit','mark'))\n"
-        "  s=_low(q)\n"
-        "  for ch in '?!.,:;\\'\"()[]{}':\n"
-        "   s=s.replace(ch,' ')\n"
-        "  return [w for w in s.split() if len(w)>=3 and w not in noise]\n"
-        " def _pick(v):\n"
-        "  if v is None: return None\n"
-        "  t=type(v)\n"
-        "  if t is int or t is long: return int(v)\n"
-        "  if t is str or t is unicode:\n"
-        "   s=_txt(v).strip()\n"
-        "   if s.isdigit(): return int(s)\n"
-        "   return None\n"
-        "  if t is dict:\n"
-        "   for k in ('answer','index','cell','btn','button','pos'):\n"
-        "    if k in v:\n"
-        "     r=_pick(v[k])\n"
-        "     if r is not None: return r\n"
-        "  return None\n"
-        " if not getattr(localeInfo,'_farmbot_captcha_dumped',0):\n"
-        "  localeInfo._farmbot_captcha_dumped=1\n"
-        "  try:\n"
-        "   d=open(r'C:\\Temp\\captcha-dump.txt','w')\n"
-        "   d.write('CONFIG %r\\n'%(getattr(localeInfo,'CAPTCHA_CONFIG',None),))\n"
-        "   d.write('BG %r\\n'%(getattr(localeInfo,'CAPTCHA_BG_PATH',None),))\n"
-        "   d.write('BTN %r\\n'%(getattr(localeInfo,'CAPTCHA_BTN_PATH',None),))\n"
-        "   for i in range(1,30):\n"
-        "    d.write('Q%d %r\\n'%(i, getattr(localeInfo,'CAPTCHA_QUESTION_%d'%i,None)))\n"
-        "   d.close()\n"
-        "  except: pass\n"
+        " def _cfg_row(cfg, cid):\n"
+        "  if not cfg or not cid: return None\n"
+        "  row=None\n"
+        "  try: row=cfg.get(cid)\n"
+        "  except: row=None\n"
+        "  if row is None:\n"
+        "   try: row=cfg.get(str(cid))\n"
+        "   except: row=None\n"
+        "  return row\n"
         " iface=None\n"
         " try: iface=constInfo.GetInterfaceInstance()\n"
         " except: iface=None\n"
-        " if not iface: raise Exception('noiface')\n"
         " wnd=None\n"
-        " for n in ('GetCatpchaWnd','GetCaptchaWnd'):\n"
-        "  try:\n"
-        "   fn=getattr(iface,n,None)\n"
-        "   if fn: wnd=fn(); \n"
-        "   if wnd: break\n"
-        "  except: wnd=None\n"
-        " if wnd is None:\n"
-        "  for n in ('wndCaptcha','wndCatpcha','captchaWnd'):\n"
+        " if iface:\n"
+        "  for n in ('wndCaptcha','wndCatpcha','captchaWnd','captchaWatcher'):\n"
         "   wnd=getattr(iface,n,None)\n"
         "   if wnd: break\n"
-        " if not wnd:\n"
-        "  for n in dir(iface):\n"
-        "   if 'aptcha' in n.lower():\n"
-        "    try:\n"
-        "     v=getattr(iface,n)\n"
-        "     wnd=v() if callable(v) else v\n"
-        "     if wnd: break\n"
-        "    except: pass\n"
-        " if not wnd: raise Exception('nownd')\n"
         " shown=0\n"
-        " for w in (wnd, getattr(wnd,'main_window',None), getattr(wnd,'board',None)):\n"
-        "  try:\n"
-        "   if w and w.IsShow(): shown=1\n"
-        "  except: pass\n"
+        " if wnd:\n"
+        "  for w in (wnd, getattr(wnd,'main_window',None), getattr(wnd,'board',None)):\n"
+        "   try:\n"
+        "    if w and w.IsShow(): shown=1\n"
+        "   except: pass\n"
         " _state(shown)\n"
         " if not shown:\n"
         "  constInfo._farmbot_captcha_done=None\n"
-        " else:\n"
+        " elif wnd:\n"
         "  cid=int(getattr(wnd,'challengeId',0) or 0)\n"
+        "  cfg=getattr(uiCaptcha,'CAPTCHA_CONFIG',None) if uiCaptcha else None\n"
+        "  row=_cfg_row(cfg, cid)\n"
         "  q=''\n"
-        "  try: q=_txt(wnd.question.GetText())\n"
-        "  except:\n"
-        "   q=_txt(getattr(wnd,'question_text','') or '')\n"
-        "  if not q and cid:\n"
-        "   q=_txt(getattr(localeInfo,'CAPTCHA_QUESTION_%d'%cid, ''))\n"
+        "  bid=getattr(wnd,'backgroundId',None)\n"
+        "  if row:\n"
+        "   try: q=_txt(row.get('question'))\n"
+        "   except: q=''\n"
+        "   if bid is None:\n"
+        "    try: bid=row.get('bg')\n"
+        "    except: pass\n"
+        "  ans=MAP.get(cid)\n"
+        "  if getattr(constInfo,'_farmbot_cap_try',None)!=cid:\n"
+        "   constInfo._farmbot_cap_try=cid\n"
+        "   _log('map cid=%d bid=%r q=%r ans=%r'%(cid,bid,q,ans))\n"
         "  done=getattr(constInfo,'_farmbot_captcha_done',None)\n"
-        "  if done==cid and cid:\n"
-        "   pass\n"
-        "  else:\n"
-        "   ans=None\n"
-        "   cfg=getattr(localeInfo,'CAPTCHA_CONFIG',None)\n"
-        "   if isinstance(cfg, dict):\n"
-        "    for k in (cid, str(cid), '%d'%cid):\n"
-        "     if k in cfg:\n"
-        "      ans=_pick(cfg[k])\n"
-        "      if ans is not None: break\n"
-        "   if ans is None:\n"
-        "    ans=_pick(getattr(localeInfo,'CAPTCHA_ANSWER_%d'%cid, None))\n"
-        "   btns=getattr(wnd,'areaButtons',None)\n"
-        "   slots=[]\n"
-        "   if btns:\n"
-        "    for i,b in enumerate(list(btns)[:9]):\n"
-        "     names=_blob(b)\n"
-        "     raw=' '.join(names)\n"
-        "     names.extend(_item_names(raw))\n"
-        "     blob=_low(' '.join(names))\n"
-        "     slots.append((i,blob,_txt(names)))\n"
-        "   keys=_keys(q)\n"
-        "   if ans is None and keys and slots:\n"
-        "    for i,blob,raw in slots:\n"
-        "     if not blob: continue\n"
-        "     if any(k in blob or blob.find(k)>=0 for k in keys):\n"
-        "      ans=i\n"
-        "      break\n"
-        "   _log('show cid=%d q=%r keys=%r slots=%r ans=%r'%(cid,q,keys,[(i,b) for i,b,r in slots],ans))\n"
-        "   if ans is not None:\n"
-        "    ans=int(ans)\n"
-        "    if ans<0: ans=0\n"
-        "    if ans>8: ans=ans%9\n"
-        "    wnd.OnAreaClicked(ans)\n"
-        "    constInfo._farmbot_captcha_done=cid if cid else ans\n"
-        "    _log('ok cid=%d ans=%d q=%s'%(cid,ans,q.replace('\\n',' ')))\n"
-        "   else:\n"
-        "    _log('miss cid=%d q=%s cfg=%r'%(cid,q.replace('\\n',' '),cfg))\n"
+        "  if ans is None:\n"
+        "   if cid and getattr(constInfo,'_farmbot_cap_miss',None)!=cid:\n"
+        "    constInfo._farmbot_cap_miss=cid\n"
+        "    _log('miss cid=%d q=%r'%(cid,q))\n"
+        "  elif done!=cid:\n"
+        "   wnd.OnAreaClicked(int(ans))\n"
+        "   constInfo._farmbot_captcha_done=cid\n"
+        "   _log('ok cid=%d ans=%d q=%s'%(cid,int(ans),q.replace('\\n',' ')))\n"
         "except Exception:\n"
         " try:\n"
         "  f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write(traceback.format_exc()+'\\r\\n'); f.close()\n"
@@ -4144,7 +4333,7 @@ static int LooksLikeTga(const unsigned char* p)
     const unsigned w = *(unsigned short*)(p + 12);
     const unsigned h = *(unsigned short*)(p + 14);
     const unsigned bpp = p[16];
-    if (w < 8 || w > 256 || h < 8 || h > 256)
+    if (w < 8 || w > 2048 || h < 8 || h > 2048)
         return 0;
     if (bpp != 16 && bpp != 24 && bpp != 32)
         return 0;
@@ -4176,8 +4365,73 @@ static bool FileBigEnough(const char* path, int minBytes)
     return info.nFileSizeLow >= (DWORD)minBytes && info.nFileSizeHigh == 0;
 }
 
+static bool PackGet(const char* virt, unsigned char* mapped, int mappedBytes);
+static int NearbySize(const unsigned char* mapped, int mappedBytes, const unsigned char* data);
+
+static int PngFileBytes(const unsigned char* p)
+{
+    int n = 0;
+    __try
+    {
+        if (!p || p[0] != 0x89 || p[1] != 'P' || p[2] != 'N' || p[3] != 'G')
+            return 0;
+        int off = 8;
+        for (int k = 0; k < 256; ++k)
+        {
+            const unsigned len = ((unsigned)p[off] << 24) | ((unsigned)p[off + 1] << 16) |
+                ((unsigned)p[off + 2] << 8) | (unsigned)p[off + 3];
+            if (len > 8u * 1024u * 1024u)
+                return 0;
+            if (p[off + 4] == 'I' && p[off + 5] == 'E' && p[off + 6] == 'N' && p[off + 7] == 'D')
+            {
+                n = off + 12 + (int)len;
+                break;
+            }
+            off += 12 + (int)len;
+            if (off <= 0 || off > 4 * 1024 * 1024)
+                return 0;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+    return n;
+}
+
+static bool ExtractPackBlob(const char* virt, const char* dest)
+{
+    unsigned char mapped[512];
+    if (!virt || !virt[0] || !dest || !PackGet(virt, mapped, 512))
+        return false;
+    for (int i = 0; i + 4 <= 512; i += 4)
+    {
+        const unsigned char* p = *(const unsigned char**)(mapped + i);
+        if (!DataAddr(p))
+            continue;
+        const int nearN = NearbySize(mapped, 400, p);
+        const int png = PngFileBytes(p);
+        if (png >= 32)
+            return WriteBytes(dest, p, png);
+        if (nearN >= 32)
+        {
+            int sig = 0;
+            __try { sig = p[0] == 0x89 && p[1] == 'P' && p[2] == 'N' && p[3] == 'G' ? 1 : 0; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { sig = 0; }
+            if (sig)
+                return WriteBytes(dest, p, nearN);
+        }
+        const int tga = LooksLikeTga(p);
+        if (tga > 0)
+            return WriteBytes(dest, p, nearN > tga ? nearN : tga);
+    }
+    return false;
+}
+
 static bool ExtractPackFile(const char* virt, const char* dest)
 {
+    if (g_baerim)
+        return ExtractPackBlob(virt, dest);
     if (!virt || !virt[0] || !dest || !g_base || !kPackGetRva || !kPackMgrRva)
         return false;
     if (FileBigEnough(dest, 64))
@@ -4215,21 +4469,69 @@ static bool ExtractPackFile(const char* virt, const char* dest)
     return WriteBytes(dest, data, bytes);
 }
 
+static void* PackMgrPtr()
+{
+    void* mgr = nullptr;
+    if (!g_base || !kPackMgrRva)
+        return nullptr;
+    __try { mgr = *(void**)(g_base + kPackMgrRva); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { mgr = nullptr; }
+    return mgr;
+}
+
+static int PackExists(const char* virt)
+{
+    if (!virt || !virt[0] || !g_base || !kPackExistRva)
+        return -1;
+    void* mgr = PackMgrPtr();
+    if (!UserPtr(mgr))
+        return -1;
+    typedef int (__thiscall* FnExist)(void* self, const char* name);
+    FnExist exist = (FnExist)(g_base + kPackExistRva);
+    if (IsBadCodePtr((FARPROC)exist))
+        return -1;
+    int ok = 0;
+    __try { ok = exist(mgr, virt); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    return ok ? 1 : 0;
+}
+
 static bool PackGet(const char* virt, unsigned char* mapped, int mappedBytes)
 {
     if (!virt || !virt[0] || !mapped || mappedBytes < 64 || !g_base || !kPackGetRva || !kPackMgrRva)
         return false;
-    void* mgr = nullptr;
-    __try { mgr = *(void**)(g_base + kPackMgrRva); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { mgr = nullptr; }
+    void* mgr = PackMgrPtr();
     if (!UserPtr(mgr))
         return false;
+    memset(mapped, 0, mappedBytes);
+    int ok = 0;
+    if (g_baerim)
+    {
+        if (kPackCtorRva)
+        {
+            typedef void (__thiscall* FnCtor)(void* self);
+            FnCtor ctor = (FnCtor)(g_base + kPackCtorRva);
+            if (!IsBadCodePtr((FARPROC)ctor))
+            {
+                __try { ctor(mapped); }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+            }
+        }
+        typedef int (__thiscall* FnMgrGet)(void* self, void* mappedFile, const char* name, const void** dataOut);
+        FnMgrGet get = (FnMgrGet)(g_base + kPackGetRva);
+        if (IsBadCodePtr((FARPROC)get))
+            return false;
+        const void* data = nullptr;
+        __try { ok = get(mgr, mapped, virt, &data); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { ok = 0; data = nullptr; }
+        if (ok && data && mappedBytes >= 8)
+            *(const void**)(mapped + ((mappedBytes - 4) & ~3)) = data;
+        return ok != 0;
+    }
     typedef int (__thiscall* FnPackGet)(void* self, const char* name, unsigned len, void* mappedOut, int tryDisk);
     FnPackGet get = (FnPackGet)(g_base + kPackGetRva);
     if (IsBadCodePtr((FARPROC)get))
         return false;
-    memset(mapped, 0, mappedBytes);
-    int ok = 0;
     __try { ok = get(mgr, virt, (unsigned)strlen(virt), mapped, 0); }
     __except (EXCEPTION_EXECUTE_HANDLER) { ok = 0; }
     return ok != 0;
@@ -5820,6 +6122,18 @@ static void Execute(const Command& cmd)
         cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game")
         RefreshSession();
 
+    if (cmd.type == "dump_captcha_bg")
+    {
+        if (!g_baerim)
+        {
+            g_lastOk = false;
+            g_lastReason = "dump bg is baerim-only";
+            return;
+        }
+        DumpCaptchaBegin();
+        return;
+    }
+
     if (cmd.type == "loot_loop")
     {
         g_lootFast = (cmd.vid & 1) ? 1 : 0;
@@ -6225,25 +6539,33 @@ static void OnLoopPump(HWND hwnd, UINT min, UINT max)
 static BOOL WINAPI HookPeekA(LPMSG msg, HWND hwnd, UINT min, UINT max, UINT remove)
 {
     OnLoopPump(hwnd, min, max);
-    return g_peekA(msg, hwnd, min, max, remove);
+    const BOOL r = g_peekA(msg, hwnd, min, max, remove);
+    DumpCaptchaStep();
+    return r;
 }
 
 static BOOL WINAPI HookPeekW(LPMSG msg, HWND hwnd, UINT min, UINT max, UINT remove)
 {
     OnLoopPump(hwnd, min, max);
-    return g_peekW(msg, hwnd, min, max, remove);
+    const BOOL r = g_peekW(msg, hwnd, min, max, remove);
+    DumpCaptchaStep();
+    return r;
 }
 
 static BOOL WINAPI HookGetA(LPMSG msg, HWND hwnd, UINT min, UINT max)
 {
     OnLoopPump(hwnd, min, max);
-    return g_getA(msg, hwnd, min, max);
+    const BOOL r = g_getA(msg, hwnd, min, max);
+    DumpCaptchaStep();
+    return r;
 }
 
 static BOOL WINAPI HookGetW(LPMSG msg, HWND hwnd, UINT min, UINT max)
 {
     OnLoopPump(hwnd, min, max);
-    return g_getW(msg, hwnd, min, max);
+    const BOOL r = g_getW(msg, hwnd, min, max);
+    DumpCaptchaStep();
+    return r;
 }
 
 static void CaptureLogin(const char* id, const char* pwd)
@@ -6685,6 +7007,10 @@ static void ClearLoginRvas()
     kGetIconImageRva = 0;
     kPackMgrRva = 0;
     kPackGetRva = 0;
+    kPackCtorRva = 0;
+    kPackExistRva = 0;
+    kResMgrRva = 0;
+    kGetResRva = 0;
     kUseItemRva = 0;
     kGetSkillIndexRva = 0;
     kGetSkillLevelRva = 0;
@@ -6901,6 +7227,10 @@ static void LoadConfig()
             kPackMgrRva = ParseHex(line + 8);
         else if (strncmp(line, "packGet=", 8) == 0)
             kPackGetRva = ParseHex(line + 8);
+        else if (strncmp(line, "packCtor=", 9) == 0)
+            kPackCtorRva = ParseHex(line + 9);
+        else if (strncmp(line, "packExist=", 10) == 0)
+            kPackExistRva = ParseHex(line + 10);
         else if (strncmp(line, "useItem=", 8) == 0)
             kUseItemRva = ParseHex(line + 8);
         else if (strncmp(line, "getSkillIndex=", 14) == 0)
@@ -7260,6 +7590,8 @@ static DWORD WINAPI InitThread(void*)
         kInstAttackRva = 0x125C70;
         kInRangeRva = 0x11E1C0;
         kGetPixelRva = 0x126030;
+        kResMgrRva = 0x3B74070;
+        kGetResRva = 0x3351F0;
     }
     InstallLoopHooks(client);
     NativeLog("loaded base=%p profile=%s pressActor=0x%X moveTo=0x%X instAtk=0x%X inRange=0x%X getPixel=0x%X hooks=%d",

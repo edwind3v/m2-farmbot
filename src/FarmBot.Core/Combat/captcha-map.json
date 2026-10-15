@@ -1,0 +1,272 @@
+{
+  "grid": {
+    "cols": 3,
+    "rows": 3,
+    "cellWidth": 100,
+    "cellHeight": 66,
+    "imageWidth": 300,
+    "imageHeight": 200,
+    "indexOrder": "left-to-right, top-to-bottom, 0-8"
+  },
+  "backgrounds": {
+    "1": {
+      "file": "bg_1.png",
+      "kind": "scene",
+      "cells": {
+        "0": "blacksmith head",
+        "1": "window",
+        "2": "general store head",
+        "3": "blacksmith torso",
+        "4": "hammer / street",
+        "5": "general store torso / hands",
+        "6": "blacksmith legs",
+        "7": "ground",
+        "8": "general store skirt"
+      }
+    },
+    "2": {
+      "file": "bg_2.png",
+      "kind": "scene",
+      "cells": {
+        "0": "sky / shoulder",
+        "1": "fisherman head",
+        "2": "staff top / water",
+        "3": "strap / shoulder",
+        "4": "fisherman chest",
+        "5": "staff hand",
+        "6": "bag",
+        "7": "robe",
+        "8": "staff base"
+      }
+    },
+    "3": {
+      "file": "bg_3.png",
+      "kind": "scene",
+      "cells": {
+        "0": "distant animals",
+        "1": "distant animals",
+        "2": "grass / tail tip",
+        "3": "wolf snout",
+        "4": "wolf body",
+        "5": "wolf tail",
+        "6": "grass / jaw",
+        "7": "front paws",
+        "8": "hind paws"
+      }
+    },
+    "4": {
+      "file": "bg_4.png",
+      "kind": "scene",
+      "cells": {
+        "0": "ground",
+        "1": "mom hair bun",
+        "2": "baby head",
+        "3": "ground",
+        "4": "mom face",
+        "5": "baby body",
+        "6": "ground",
+        "7": "mom torso",
+        "8": "sling"
+      }
+    },
+    "5": {
+      "file": "bg_5.png",
+      "kind": "scene",
+      "cells": {
+        "0": "storekeeper face left",
+        "1": "storekeeper face right",
+        "2": "wall above fire",
+        "3": "storekeeper chest left",
+        "4": "storekeeper chest right",
+        "5": "fire",
+        "6": "occupied hand",
+        "7": "empty hand",
+        "8": "brazier stand"
+      }
+    },
+    "6": {
+      "file": "bg_6.png",
+      "kind": "scene",
+      "cells": {
+        "0": "hill",
+        "1": "yonah head",
+        "2": "tree",
+        "3": "yonah shoulder",
+        "4": "yonah chest",
+        "5": "vase top",
+        "6": "yonah arm",
+        "7": "yonah robe",
+        "8": "vase body"
+      }
+    },
+    "7": {
+      "file": "bg_7.png",
+      "kind": "scene",
+      "cells": {
+        "0": "warrior helmet left",
+        "1": "warrior helmet / horse rear",
+        "2": "horses",
+        "3": "armor left",
+        "4": "armor center",
+        "5": "armor / horse legs",
+        "6": "armor lower left",
+        "7": "armor lower center",
+        "8": "armor lower right"
+      }
+    },
+    "8": {
+      "file": "bg_8.png",
+      "kind": "scene",
+      "cells": {
+        "0": "axe blade",
+        "1": "stable boy head",
+        "2": "fence / background",
+        "3": "axe / hand",
+        "4": "armor chest",
+        "5": "armor arm",
+        "6": "axe haft",
+        "7": "armor lower",
+        "8": "armor lower right"
+      }
+    },
+    "9": {
+      "file": "bg_9.png",
+      "kind": "scene",
+      "cells": {
+        "0": "baek-go head",
+        "1": "ground / crate edge",
+        "2": "apple crate",
+        "3": "baek-go torso",
+        "4": "paper",
+        "5": "crate / ground",
+        "6": "baek-go hands",
+        "7": "robe hem",
+        "8": "ground"
+      }
+    },
+    "10": {
+      "file": "bg_10.png",
+      "kind": "icons",
+      "cells": {
+        "0": "book",
+        "1": "empty",
+        "2": "shield",
+        "3": "empty",
+        "4": "sword",
+        "5": "empty",
+        "6": "horse",
+        "7": "empty",
+        "8": "fish"
+      }
+    },
+    "11": {
+      "file": "bg_11.png",
+      "kind": "icons",
+      "cells": {
+        "0": "potion",
+        "1": "sword",
+        "2": "fish",
+        "3": "empty",
+        "4": "shield",
+        "5": "book",
+        "6": "empty",
+        "7": "horse",
+        "8": "empty"
+      }
+    },
+    "12": {
+      "file": "bg_12.png",
+      "kind": "icons",
+      "cells": {
+        "0": "horse",
+        "1": "empty",
+        "2": "sword",
+        "3": "shield",
+        "4": "empty",
+        "5": "fish",
+        "6": "empty",
+        "7": "potion",
+        "8": "book"
+      }
+    },
+    "13": {
+      "file": "bg_13.png",
+      "kind": "icons",
+      "cells": {
+        "0": "sword",
+        "1": "empty",
+        "2": "horse",
+        "3": "empty",
+        "4": "book",
+        "5": "potion",
+        "6": "fish",
+        "7": "shield",
+        "8": "empty"
+      }
+    },
+    "14": {
+      "file": "bg_14.png",
+      "kind": "icons",
+      "cells": {
+        "0": "potion",
+        "1": "book",
+        "2": "empty",
+        "3": "fish",
+        "4": "empty",
+        "5": "horse",
+        "6": "sword",
+        "7": "empty",
+        "8": "shield"
+      }
+    }
+  },
+  "challenges": [
+    { "id": 1,  "bg": 10, "question": "Click on the fish", "button": 8 },
+    { "id": 2,  "bg": 3,  "question": "Click on the wolf's tail.", "button": 5 },
+    { "id": 3,  "bg": 11, "question": "Click on the book", "button": 5 },
+    { "id": 4,  "bg": 6,  "question": "Click on the tree in the background", "button": 2 },
+    { "id": 5,  "bg": 1,  "question": "Click on the hand of the General Store", "button": 5 },
+    { "id": 6,  "bg": 11, "question": "Click on the sword", "button": 1 },
+    { "id": 7,  "bg": 9,  "question": "Click on the head of Baek-Go", "button": 0 },
+    { "id": 8,  "bg": 4,  "question": "Click on the baby head.", "button": 2 },
+    { "id": 9,  "bg": 10, "question": "Click on the horse", "button": 6 },
+    { "id": 10, "bg": 5,  "question": "Click on the left half of the Storekeeper's face", "button": 0 },
+    { "id": 11, "bg": 11, "question": "Click on the fish", "button": 2 },
+    { "id": 12, "bg": 2,  "question": "Click on the head of the fisherman.", "button": 1 },
+    { "id": 13, "bg": 11, "question": "Click on the horse", "button": 7 },
+    { "id": 14, "bg": 5,  "question": "Click on the fire", "button": 5 },
+    { "id": 15, "bg": 10, "question": "Click on the shield", "button": 2 },
+    { "id": 16, "bg": 6,  "question": "Click on Yonah head", "button": 1 },
+    { "id": 17, "bg": 3,  "question": "Click on the wolf's front paw.", "button": 7 },
+    { "id": 18, "bg": 11, "question": "Click on the potion", "button": 0 },
+    { "id": 19, "bg": 7,  "question": "Click on the horse in the background", "button": 2 },
+    { "id": 20, "bg": 1,  "question": "Click on the Blacksmith head.", "button": 0 },
+    { "id": 21, "bg": 11, "question": "Click on the shield", "button": 4 },
+    { "id": 22, "bg": 5,  "question": "Click on the Storekeeper's empty hand", "button": 7 },
+    { "id": 23, "bg": 2,  "question": "Click on the bag of the fisherman.", "button": 6 },
+    { "id": 24, "bg": 10, "question": "Click on the sword", "button": 4 },
+    { "id": 25, "bg": 6,  "question": "Click on the top of the vase", "button": 5 },
+    { "id": 26, "bg": 4,  "question": "Click on the hair of the mom. (Ah-Yu)", "button": 1 },
+    { "id": 27, "bg": 10, "question": "Click on the book", "button": 0 },
+    { "id": 28, "bg": 5,  "question": "Click on the right half of the Storekeeper's face", "button": 1 },
+    { "id": 29, "bg": 8,  "question": "Click on the head of the Stable Boy", "button": 1 },
+    { "id": 30, "bg": 12, "question": "Click on the horse", "button": 0 },
+    { "id": 31, "bg": 12, "question": "Click on the sword", "button": 2 },
+    { "id": 32, "bg": 12, "question": "Click on the shield", "button": 3 },
+    { "id": 33, "bg": 12, "question": "Click on the fish", "button": 5 },
+    { "id": 34, "bg": 12, "question": "Click on the potion", "button": 7 },
+    { "id": 35, "bg": 12, "question": "Click on the book", "button": 8 },
+    { "id": 36, "bg": 13, "question": "Click on the sword", "button": 0 },
+    { "id": 37, "bg": 13, "question": "Click on the horse", "button": 2 },
+    { "id": 38, "bg": 13, "question": "Click on the book", "button": 4 },
+    { "id": 39, "bg": 13, "question": "Click on the potion", "button": 5 },
+    { "id": 40, "bg": 13, "question": "Click on the fish", "button": 6 },
+    { "id": 41, "bg": 13, "question": "Click on the shield", "button": 7 },
+    { "id": 42, "bg": 14, "question": "Click on the potion", "button": 0 },
+    { "id": 43, "bg": 14, "question": "Click on the book", "button": 1 },
+    { "id": 44, "bg": 14, "question": "Click on the fish", "button": 3 },
+    { "id": 45, "bg": 14, "question": "Click on the horse", "button": 5 },
+    { "id": 46, "bg": 14, "question": "Click on the sword", "button": 6 },
+    { "id": 47, "bg": 14, "question": "Click on the shield", "button": 8 }
+  ]
+}

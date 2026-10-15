@@ -312,6 +312,8 @@ public sealed class ActionModuleHost
             AppendHex(text, "getIconImage", player.GetIconImageRva);
             AppendHex(text, "packMgr", recovered.PackMgrRva);
             AppendHex(text, "packGet", recovered.PackGetRva);
+            AppendHex(text, "packCtor", recovered.PackMappedCtorRva);
+            AppendHex(text, "packExist", recovered.PackExistRva);
             AppendHex(text, "useItem", player.UseItemRva);
             AppendHex(text, "getSkillIndex", player.GetSkillIndexRva);
             AppendHex(text, "getSkillLevel", player.GetSkillLevelRva);

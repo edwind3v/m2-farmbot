@@ -255,6 +255,22 @@ public sealed class FarmBotShell : IDisposable
         SaveSettings();
     }
 
+    public void DumpCaptchaBackgrounds()
+    {
+        if (_actionSink == null || !_actionSink.Available)
+        {
+            _log.Warn("dump bg: companion is not connected");
+            Notify();
+            return;
+        }
+
+        if (!_actionSink.TryDumpCaptchaBackgrounds())
+            _log.Warn("dump bg failed: " + _actionSink.Status);
+        else
+            _log.Info("dump bg started; files go to C:\\Temp\\captcha-bgs, logs to C:\\Temp\\farmbot-native.log");
+        Notify();
+    }
+
     public void SetPotionHpPercent(double value)
     {
         lock (_configGate)

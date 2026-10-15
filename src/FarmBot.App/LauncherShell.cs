@@ -12,9 +12,16 @@ public sealed class LauncherShell : IDisposable
     private readonly string _slotsPath;
     private readonly object _gate = new();
     private readonly Dictionary<string, ClientSession> _sessions = new();
+    private readonly Dictionary<string, string> _slotNotes = new();
     private readonly FileBotLog _log;
     private readonly SynchronizationContext? _sync = SynchronizationContext.Current;
     private LauncherState _state;
+    private int _launchTicket;
+    private string? _busySlotId;
+    private string _busyStatus = "";
+    private int _launchPid;
+    private AdapterActionSink? _launchSink;
+    private bool _disposed;
 
     public LauncherShell()
     {
@@ -39,7 +46,7 @@ public sealed class LauncherShell : IDisposable
         get
         {
             lock (_gate)
-                return _sessions.Count > 0;
+                return _sessions.Count > 0 || _busySlotId != null;
         }
     }
 
@@ -87,8 +94,12 @@ public sealed class LauncherShell : IDisposable
     {
         lock (_gate)
         {
+            if (_busySlotId == slot.Id && _busyStatus.Length > 0)
+                return _busyStatus;
             if (_sessions.TryGetValue(slot.Id, out var session))
                 return session.Status;
+            if (_slotNotes.TryGetValue(slot.Id, out var note))
+                return note;
         }
 
         return "idle";
@@ -98,6 +109,21 @@ public sealed class LauncherShell : IDisposable
     {
         lock (_gate)
             return _sessions.ContainsKey(slot.Id);
+    }
+
+    public bool IsBusy(ClientSlot slot)
+    {
+        lock (_gate)
+            return _busySlotId == slot.Id;
+    }
+
+    public bool SlotsLocked
+    {
+        get
+        {
+            lock (_gate)
+                return _busySlotId != null;
+        }
     }
 
     public void Tick()
@@ -166,6 +192,8 @@ public sealed class LauncherShell : IDisposable
 
     public void EditSlot(ClientSlot slot)
     {
+        if (SlotsLocked)
+            return;
         Editor = slot;
         EditorPassword = "";
         Notify();
@@ -196,6 +224,8 @@ public sealed class LauncherShell : IDisposable
 
     public void DeleteSlot(ClientSlot slot)
     {
+        if (SlotsLocked)
+            return;
         CloseSlot(slot);
         _state.Slots.Remove(slot);
         if (Editor?.Id == slot.Id)
@@ -207,8 +237,21 @@ public sealed class LauncherShell : IDisposable
     public void CloseSlot(ClientSlot slot)
     {
         ClientSession? session;
+        var cancelLaunch = false;
         lock (_gate)
+        {
             _sessions.TryGetValue(slot.Id, out session);
+            if (_busySlotId == slot.Id)
+            {
+                _launchTicket++;
+                _busySlotId = null;
+                _busyStatus = "";
+                cancelLaunch = true;
+            }
+        }
+
+        if (cancelLaunch)
+            ReleaseLaunchProcess();
         session?.Close();
         Status = "closed " + slot.DisplayName;
         Notify();
@@ -237,6 +280,13 @@ public sealed class LauncherShell : IDisposable
 
         stale?.Close();
 
+        if (SlotsLocked)
+        {
+            Status = "already opening a client";
+            Notify();
+            return;
+        }
+
         var path = _state.ClientPath;
         if (!File.Exists(path))
         {
@@ -261,98 +311,25 @@ public sealed class LauncherShell : IDisposable
         }
 
         slot.ChannelName = channel.Name;
-        StopStrayClients(path);
-        var pipe = LoaderOutput.UniquePipeName(slot.Id);
-        var host = new ActionModuleHost(pipe) { Profile = _state.SelectedProfile };
-        if (!host.TryLaunch(path, out var launchStatus, out var pid))
-        {
-            Status = launchStatus;
-            Notify();
-            return;
-        }
-
-        var sink = new AdapterActionSink(host.PipeName, host.Token);
-        if (!host.WaitUntilListening(sink))
-        {
-            Status = "client launched but companion did not accept auth: " + sink.Status;
-            try
-            {
-                using var process = System.Diagnostics.Process.GetProcessById(pid);
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-            }
-
-            sink.Dispose();
-            Notify();
-            return;
-        }
-
-        var configPath = SlotStore.ConfigPath(_baseDirectory, slot.Id);
-        var config = SlotStore.LoadBotConfig(_baseDirectory, slot);
-        config.ClientPath = path;
-        config.ClientProfile = _state.SelectedProfile;
-        ConfigStore.Save(configPath, config);
-        var shell = new FarmBotShell(configPath, pid, host, sink);
-        var form = new MainForm(shell, WindowTitle(slot));
-        var session = new ClientSession(slot, pid, shell, form, host, sink);
-        form.SessionClosing = () => RemoveSession(slot.Id, killClient: true);
-        session.Ended += () =>
-        {
-            session.Status = "client exited";
-            Status = "client exited — launcher stays open";
-            Notify();
-        };
-        lock (_gate)
-            _sessions[slot.Id] = session;
-        session.Status = "launching";
-        form.Show();
-        Status = "launched PID " + pid;
+        var profile = _state.SelectedProfile;
+        var ticket = BeginLaunch(slot, "waiting for client to open...");
+        Status = "waiting for client to open...";
         Notify();
-
-        var password = SlotStore.UnprotectPassword(slot.PasswordProtected);
-        if (_state.SelectedProfile == ClientProfile.Baerim ||
-            string.IsNullOrWhiteSpace(slot.Account) ||
-            string.IsNullOrWhiteSpace(password))
-        {
-            session.Status = "client opened";
-            Status = _state.SelectedProfile == ClientProfile.Baerim
-                ? "client opened — log in in-game, then start the bot"
-                : "client opened — log in manually, then save the slot";
-            Notify();
-            return;
-        }
-
-        Task.Run(() =>
-        {
-            var play = new QuickPlayOrchestrator(sink, _log);
-            var ok = play.TryEnter(slot, channel, password, 180000, out var playStatus);
-            session.Status = ok ? "in-game" : "quick-play failed";
-            Status = playStatus;
-            if (!string.IsNullOrWhiteSpace(slot.CharacterName))
-            {
-                try
-                {
-                    if (!form.IsDisposed && form.IsHandleCreated)
-                        form.BeginInvoke(() => form.Text = WindowTitle(slot));
-                }
-                catch (InvalidOperationException)
-                {
-                }
-
-                Persist();
-            }
-
-            Notify();
-        });
+        Task.Run(() => OpenClient(slot, path, profile, channel, ticket));
     }
 
     public void ShutdownAll()
     {
         ClientSession[] sessions;
         lock (_gate)
+        {
+            _launchTicket++;
+            _busySlotId = null;
+            _busyStatus = "";
             sessions = _sessions.Values.ToArray();
+        }
+
+        ReleaseLaunchProcess();
         foreach (var session in sessions)
             session.Close();
         Persist();
@@ -360,6 +337,8 @@ public sealed class LauncherShell : IDisposable
 
     public void Dispose()
     {
+        lock (_gate)
+            _disposed = true;
         ShutdownAll();
     }
 
@@ -367,13 +346,27 @@ public sealed class LauncherShell : IDisposable
     {
         ClientSession? session;
         lock (_gate)
+        {
             _sessions.TryGetValue(slotId, out session);
+            if (_busySlotId == slotId)
+            {
+                _launchTicket++;
+                _busySlotId = null;
+                _busyStatus = "";
+            }
+
+            if (session != null)
+                _sessions.Remove(slotId);
+        }
+
         if (session == null)
+        {
+            Notify();
             return;
+        }
+
         if (killClient)
             session.KillClient();
-        lock (_gate)
-            _sessions.Remove(slotId);
         session.Status = "idle";
         Persist();
         Notify();
@@ -393,10 +386,13 @@ public sealed class LauncherShell : IDisposable
         if (!SlotStore.ApplyLiveCredentials(session.Slot, info, name))
             return;
 
-        if (!string.IsNullOrWhiteSpace(session.Slot.CharacterName))
-            session.Status = "in-game";
-        else if (!string.IsNullOrWhiteSpace(session.Slot.Account))
-            session.Status = "account captured";
+        if (_busySlotId != session.Slot.Id)
+        {
+            if (!string.IsNullOrWhiteSpace(session.Slot.CharacterName))
+                session.Status = "in-game";
+            else if (!string.IsNullOrWhiteSpace(session.Slot.Account))
+                session.Status = "account captured";
+        }
         session.Form.Text = WindowTitle(session.Slot);
         Persist();
     }
@@ -421,12 +417,374 @@ public sealed class LauncherShell : IDisposable
             Changed?.Invoke();
     }
 
-    private static void StopStrayClients(string exePath)
+    private void OpenClient(ClientSlot slot, string path, ClientProfile profile, GameChannel channel, int ticket)
+    {
+        var launchedPid = 0;
+        AdapterActionSink? launchedSink = null;
+        var published = false;
+        try
+        {
+            if (!IsCurrent(ticket))
+                return;
+
+            StopStrayClients(path, message => SetBusy(ticket, message));
+            if (!IsCurrent(ticket))
+                return;
+
+            SetBusy(ticket, "waiting for client to open...");
+            var pipe = LoaderOutput.UniquePipeName(slot.Id);
+            var host = new ActionModuleHost(pipe) { Profile = profile };
+            if (!host.TryLaunch(path, out var launchStatus, out var pid))
+            {
+                FailBusy(ticket, launchStatus);
+                return;
+            }
+
+            launchedPid = pid;
+            var sink = new AdapterActionSink(host.PipeName, host.Token);
+            launchedSink = sink;
+            if (!PublishLaunch(ticket, pid, sink))
+            {
+                KillPid(pid);
+                sink.Dispose();
+                return;
+            }
+
+            published = true;
+            SetBusy(ticket, "connecting to client...");
+            var listening = false;
+            try
+            {
+                listening = host.WaitUntilListening(sink);
+            }
+            catch
+            {
+                listening = false;
+            }
+
+            if (!IsCurrent(ticket))
+                return;
+
+            if (!listening)
+            {
+                var status = "client launched but companion did not accept auth: " + sink.Status;
+                if (!ClaimLaunch(ticket, out var ownedPid, out var ownedSink))
+                    return;
+                KillPid(ownedPid);
+                ownedSink?.Dispose();
+                FailBusy(ticket, status);
+                return;
+            }
+
+            PostUi(() => FinishLaunch(slot, path, profile, channel, host, sink, pid, ticket));
+        }
+        catch (Exception ex)
+        {
+            if (!published)
+            {
+                KillPid(launchedPid);
+                launchedSink?.Dispose();
+            }
+            else if (ClaimLaunch(ticket, out var ownedPid, out var ownedSink))
+            {
+                KillPid(ownedPid);
+                ownedSink?.Dispose();
+            }
+
+            FailBusy(ticket, "launch failed: " + ex.Message);
+        }
+    }
+
+    private void FinishLaunch(
+        ClientSlot slot,
+        string path,
+        ClientProfile profile,
+        GameChannel channel,
+        ActionModuleHost host,
+        AdapterActionSink sink,
+        int pid,
+        int ticket)
+    {
+        lock (_gate)
+        {
+            if (ticket != _launchTicket || _disposed)
+                return;
+            _launchPid = 0;
+            _launchSink = null;
+        }
+
+        MainForm? form = null;
+        ClientSession? session = null;
+        var published = false;
+        try
+        {
+            var configPath = SlotStore.ConfigPath(_baseDirectory, slot.Id);
+            var config = SlotStore.LoadBotConfig(_baseDirectory, slot);
+            config.ClientPath = path;
+            config.ClientProfile = profile;
+            ConfigStore.Save(configPath, config);
+            var shell = new FarmBotShell(configPath, pid, host, sink);
+            form = new MainForm(shell, WindowTitle(slot));
+            session = new ClientSession(slot, pid, shell, form, host, sink);
+            form.SessionClosing = () => RemoveSession(slot.Id, killClient: true);
+            session.Ended += () =>
+            {
+                session.Status = "client exited";
+                Status = "client exited — launcher stays open";
+                lock (_gate)
+                {
+                    if (_busySlotId == slot.Id && ticket == _launchTicket)
+                    {
+                        _launchTicket++;
+                        _busySlotId = null;
+                        _busyStatus = "";
+                    }
+                }
+
+                Notify();
+            };
+
+            lock (_gate)
+            {
+                if (ticket != _launchTicket || _disposed)
+                {
+                    session.Dispose();
+                    return;
+                }
+
+                _sessions[slot.Id] = session;
+                published = true;
+            }
+
+            session.Status = "client opened";
+            form.Show();
+            if (!IsCurrent(ticket))
+                return;
+
+            var password = SlotStore.UnprotectPassword(slot.PasswordProtected);
+            if (profile == ClientProfile.Baerim ||
+                string.IsNullOrWhiteSpace(slot.Account) ||
+                string.IsNullOrWhiteSpace(password))
+            {
+                session.Status = "client opened";
+                Status = profile == ClientProfile.Baerim
+                    ? "client opened — log in in-game, then start the bot"
+                    : "client opened — log in manually, then save the slot";
+                ClearBusy(ticket, null);
+                Notify();
+                return;
+            }
+
+            SetBusy(ticket, "logging in...");
+            session.Status = "logging in...";
+            Task.Run(() =>
+            {
+                var play = new QuickPlayOrchestrator(sink, _log);
+                var ok = play.TryEnter(slot, channel, password, 180000, out var playStatus, message =>
+                {
+                    session.Status = message;
+                    SetBusy(ticket, message);
+                });
+                if (!IsCurrent(ticket))
+                    return;
+                lock (_gate)
+                {
+                    if (!_sessions.ContainsKey(slot.Id))
+                        return;
+                }
+
+                session.Status = string.IsNullOrWhiteSpace(playStatus)
+                    ? (ok ? "in-game" : "quick-play failed")
+                    : playStatus;
+                Status = playStatus;
+                if (!string.IsNullOrWhiteSpace(slot.CharacterName))
+                {
+                    try
+                    {
+                        if (!form.IsDisposed && form.IsHandleCreated)
+                            form.BeginInvoke(() => form.Text = WindowTitle(slot));
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+
+                    Persist();
+                }
+
+                ClearBusy(ticket, null);
+                Notify();
+            });
+        }
+        catch (Exception ex)
+        {
+            if (published)
+            {
+                lock (_gate)
+                    _sessions.Remove(slot.Id);
+            }
+
+            if (session != null)
+                session.Dispose();
+            else
+                form?.Dispose();
+            KillPid(pid);
+            try
+            {
+                sink.Dispose();
+            }
+            catch
+            {
+            }
+
+            FailBusy(ticket, "launch failed: " + ex.Message);
+        }
+    }
+
+    private int BeginLaunch(ClientSlot slot, string message)
+    {
+        lock (_gate)
+        {
+            _launchTicket++;
+            _busySlotId = slot.Id;
+            _busyStatus = message;
+            _slotNotes.Remove(slot.Id);
+            _launchPid = 0;
+            _launchSink = null;
+            return _launchTicket;
+        }
+    }
+
+    private void SetBusy(int ticket, string message)
+    {
+        lock (_gate)
+        {
+            if (ticket != _launchTicket || _busySlotId == null)
+                return;
+            _busyStatus = message;
+        }
+
+        Status = message;
+        Notify();
+    }
+
+    private void FailBusy(int ticket, string message)
+    {
+        lock (_gate)
+        {
+            if (ticket != _launchTicket)
+                return;
+            if (_busySlotId != null)
+                _slotNotes[_busySlotId] = message;
+            _busySlotId = null;
+            _busyStatus = "";
+        }
+
+        Status = message;
+        Notify();
+    }
+
+    private void ClearBusy(int ticket, string? note)
+    {
+        lock (_gate)
+        {
+            if (ticket != _launchTicket)
+                return;
+            if (_busySlotId != null)
+            {
+                if (note == null)
+                    _slotNotes.Remove(_busySlotId);
+                else
+                    _slotNotes[_busySlotId] = note;
+            }
+
+            _busySlotId = null;
+            _busyStatus = "";
+        }
+    }
+
+    private bool IsCurrent(int ticket)
+    {
+        lock (_gate)
+            return ticket == _launchTicket && !_disposed;
+    }
+
+    private bool PublishLaunch(int ticket, int pid, AdapterActionSink sink)
+    {
+        lock (_gate)
+        {
+            if (ticket != _launchTicket || _disposed)
+                return false;
+            _launchPid = pid;
+            _launchSink = sink;
+            return true;
+        }
+    }
+
+    private bool ClaimLaunch(int ticket, out int pid, out AdapterActionSink? sink)
+    {
+        lock (_gate)
+        {
+            if (ticket != _launchTicket)
+            {
+                pid = 0;
+                sink = null;
+                return false;
+            }
+
+            pid = _launchPid;
+            sink = _launchSink;
+            _launchPid = 0;
+            _launchSink = null;
+            return true;
+        }
+    }
+
+    private void ReleaseLaunchProcess()
+    {
+        int pid;
+        AdapterActionSink? sink;
+        lock (_gate)
+        {
+            pid = _launchPid;
+            sink = _launchSink;
+            _launchPid = 0;
+            _launchSink = null;
+        }
+
+        KillPid(pid);
+        sink?.Dispose();
+    }
+
+    private void PostUi(Action action)
+    {
+        if (_sync != null)
+            _sync.Post(_ => action(), null);
+        else
+            action();
+    }
+
+    private static void KillPid(int pid)
+    {
+        if (pid <= 0)
+            return;
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void StopStrayClients(string exePath, Action<string>? phase = null)
     {
         var name = Path.GetFileNameWithoutExtension(exePath);
         if (string.IsNullOrWhiteSpace(name))
             return;
         var deadline = DateTime.UtcNow.AddSeconds(8);
+        var announced = false;
         while (DateTime.UtcNow < deadline)
         {
             var leftover = Process.GetProcessesByName(name)
@@ -434,6 +792,12 @@ public sealed class LauncherShell : IDisposable
                 .ToArray();
             if (leftover.Length == 0)
                 break;
+            if (!announced)
+            {
+                announced = true;
+                phase?.Invoke("closing leftover clients...");
+            }
+
             foreach (var process in leftover)
             {
                 try
@@ -453,6 +817,7 @@ public sealed class LauncherShell : IDisposable
             Thread.Sleep(300);
         }
 
+        phase?.Invoke("waiting for client to open...");
         Thread.Sleep(8000);
     }
 

@@ -31,16 +31,22 @@
 
         @foreach (var slot in Shell.VisibleSlots)
         {
-            <div class="slot @(Shell.IsRunning(slot) ? "on" : null)">
+            <div class="slot @(Shell.IsRunning(slot) ? "on" : null) @(Shell.IsBusy(slot) ? "busy" : null)">
                 <div class="slot-main">
                     <b>@slot.DisplayName</b>
-                    <span>@Shell.SessionStatus(slot)</span>
+                    <span class="slot-state">
+                        @if (Shell.IsBusy(slot))
+                        {
+                            <span class="spinner" aria-hidden="true"></span>
+                        }
+                        @Shell.SessionStatus(slot)
+                    </span>
                 </div>
                 <div class="slot-cmd">
-                    <button class="btn btn-ok" disabled="@Shell.IsRunning(slot)" @onclick="() => Shell.Play(slot)">Play</button>
-                    <button class="btn" @onclick="() => Shell.EditSlot(slot)">Edit</button>
+                    <button class="btn btn-ok" disabled="@(Shell.SlotsLocked || Shell.IsRunning(slot))" @onclick="() => Shell.Play(slot)">Play</button>
+                    <button class="btn" disabled="@Shell.SlotsLocked" @onclick="() => Shell.EditSlot(slot)">Edit</button>
                     <button class="btn btn-danger" disabled="@(!Shell.IsRunning(slot))" @onclick="() => Shell.CloseSlot(slot)">X</button>
-                    <button class="btn btn-ghost" @onclick="() => Shell.DeleteSlot(slot)" title="Remove saved slot">Del</button>
+                    <button class="btn btn-ghost" disabled="@Shell.SlotsLocked" @onclick="() => Shell.DeleteSlot(slot)" title="Remove saved slot">Del</button>
                 </div>
             </div>
         }
@@ -71,7 +77,7 @@
                 </div>
                 <div class="field-row"><label>Character name</label><input @bind="editor.CharacterName" placeholder="filled in-game" /></div>
                 <div class="slot-cmd">
-                    <button class="btn btn-save" @onclick="Shell.SaveEditor">Save</button>
+                    <button class="btn btn-save" disabled="@Shell.SlotsLocked" @onclick="Shell.SaveEditor">Save</button>
                     <button class="btn" @onclick="Shell.CancelEdit">Cancel</button>
                 </div>
             </div>

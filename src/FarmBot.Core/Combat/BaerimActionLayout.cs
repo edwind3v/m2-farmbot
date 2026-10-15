@@ -12,6 +12,8 @@ public sealed record BaerimNativeLayout(
     uint IsSkillCoolTimeRva,
     uint PackMgrRva,
     uint PackGetRva,
+    uint PackMappedCtorRva,
+    uint PackExistRva,
     IReadOnlyList<string> Evidence);
 
 public static class BaerimActionLayoutRecoverer
@@ -79,6 +81,8 @@ public static class BaerimActionLayoutRecoverer
             coolRva,
             pack.mgr,
             pack.get,
+            pack.ctor,
+            pack.exist,
             evidence);
     }
 
@@ -390,81 +394,48 @@ public static class BaerimActionLayoutRecoverer
         return -1;
     }
 
-    private static (uint mgr, uint get) RecoverPack(BaerimPe pe, List<string> evidence)
+    private static (uint mgr, uint get, uint ctor, uint exist) RecoverPack(BaerimPe pe, List<string> evidence)
     {
-        uint eterGet = 0;
-        foreach (var text in new[]
-                 {
-                     "CEterPack::Get: cannot map %s from %s",
-                     "CEterPack::Get2: cannot map %s from %s"
-                 })
+        var exist = RecoverPlayerMethod(pe, "IsExistFile", 0, evidence);
+        var open = RecoverPlayerMethod(pe, "OpenTextFile", 0, evidence);
+        uint mgr = exist.singleton;
+        uint packGet = 0;
+        uint ctor = 0;
+        uint existNative = mgr == 0 || exist.wrapper == 0
+            ? 0
+            : FirstCallAfterSingleton(pe, exist.wrapper, pe.ImageBase + mgr);
+        if (open.wrapper != 0 && mgr != 0)
         {
-            if (!pe.TryFindAscii(text, out var va))
-                continue;
-            foreach (var site in pe.FindImmediateXrefs(va))
+            var off = pe.VaToFile(pe.ImageBase + open.wrapper);
+            var mgrVa = pe.ImageBase + mgr;
+            if (off >= 0)
             {
-                var off = pe.VaToFile(site);
-                if (off < 0)
-                    continue;
-                var start = FunctionStartFile(pe, off);
-                if (start < 0)
-                    continue;
-                eterGet = pe.FileToVa(start) - pe.ImageBase;
-                if (pe.IsRva(eterGet))
-                    break;
-                eterGet = 0;
-            }
-
-            if (eterGet != 0)
-                break;
-        }
-
-        if (eterGet == 0)
-        {
-            evidence.Add("Baerim CEterPack::Get was not recovered.");
-            return (0, 0);
-        }
-
-        var parentHits = new Dictionary<uint, int>();
-        foreach (var callVa in pe.FindRelativeCallsTo(pe.ImageBase + eterGet))
-        {
-            var off = pe.VaToFile(callVa);
-            if (off < 0)
-                continue;
-            var start = FunctionStartFile(pe, off);
-            if (start < 0)
-                continue;
-            var rva = pe.FileToVa(start) - pe.ImageBase;
-            if (!pe.IsRva(rva) || rva == eterGet)
-                continue;
-            parentHits[rva] = parentHits.GetValueOrDefault(rva) + 1;
-        }
-
-        uint packGet = parentHits.Count == 0 ? 0 : parentHits.OrderByDescending(kv => kv.Value).First().Key;
-        uint mgr = 0;
-        if (packGet != 0)
-        {
-            foreach (var site in pe.FindRelativeCallsTo(pe.ImageBase + packGet))
-            {
-                var off = pe.VaToFile(site);
-                if (off < 0)
-                    continue;
-                for (var i = off - 1; i >= off - 28 && i >= 6; i--)
+                var lim = Math.Min(pe.Length - 6, off + 0x180);
+                for (var i = off; i < lim; i++)
                 {
-                    if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x0D && pe.IsData(pe.ReadU32(i + 2)))
+                    if (pe.Byte(i) != 0x8B || pe.Byte(i + 1) != 0x0D || pe.ReadU32(i + 2) != mgrVa)
+                        continue;
+                    packGet = RelativeCall(pe, i + 6, i + 0x28);
+                    for (var j = i - 5; j >= off && i - j < 0x30; j--)
                     {
-                        mgr = pe.ReadU32(i + 2) - pe.ImageBase;
+                        if (pe.Byte(j) != 0xE8)
+                            continue;
+                        var dest = (uint)(pe.FileToVa(j + 5) + pe.ReadI32(j + 1));
+                        if (pe.IsCode(dest))
+                            ctor = dest - pe.ImageBase;
                         break;
                     }
-                }
 
-                if (mgr != 0)
                     break;
+                }
             }
         }
 
-        evidence.Add($"Baerim packMgr=0x{mgr:X} packGet=0x{packGet:X} eterGet=0x{eterGet:X}.");
-        return (mgr, packGet);
+        if (mgr == 0 || packGet == 0)
+            evidence.Add("Baerim CEterPackManager::Get was not recovered.");
+        else
+            evidence.Add($"Baerim packMgr=0x{mgr:X} packGet=0x{packGet:X} packCtor=0x{ctor:X} packExist=0x{existNative:X}.");
+        return (mgr, packGet, ctor, existNative);
     }
 
     private sealed class BaerimPe
