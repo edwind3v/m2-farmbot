@@ -4127,81 +4127,133 @@ static void CaptchaTick()
         NativeLog("captcha solver armed phase=%s load=%d",
             g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str(), g_loadFinished);
     }
-    static const char kPy[] =
-        "try:\n"
-        " import constInfo, traceback\n"
-        " try: import uiCaptcha\n"
-        " except: uiCaptcha=None\n"
-        " MAP={1:8,2:5,3:5,4:2,5:5,6:1,7:0,8:2,9:6,10:0,11:2,12:1,13:7,14:5,15:2,16:1,17:7,18:0,19:2,20:0,21:4,22:7,23:6,24:4,25:5,26:1,27:0,28:1,29:1,30:0,31:2,32:3,33:5,34:7,35:8,36:0,37:2,38:4,39:5,40:6,41:7,42:0,43:1,44:3,45:5,46:6,47:8}\n"
-        " def _log(s):\n"
-        "  try:\n"
-        "   f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write(str(s)+'\\r\\n'); f.close()\n"
-        "  except: pass\n"
-        " def _state(v):\n"
-        "  try:\n"
-        "   f=open(r'C:\\Temp\\farmbot-captcha.state','wb'); f.write('1' if v else '0'); f.close()\n"
-        "  except: pass\n"
-        " def _txt(v):\n"
-        "  if v is None: return ''\n"
-        "  try: return str(v)\n"
-        "  except:\n"
-        "   try: return unicode(v).encode('utf-8','replace')\n"
-        "   except: return ''\n"
-        " def _cfg_row(cfg, cid):\n"
-        "  if not cfg or not cid: return None\n"
-        "  row=None\n"
-        "  try: row=cfg.get(cid)\n"
-        "  except: row=None\n"
-        "  if row is None:\n"
-        "   try: row=cfg.get(str(cid))\n"
-        "   except: row=None\n"
-        "  return row\n"
-        " iface=None\n"
-        " try: iface=constInfo.GetInterfaceInstance()\n"
-        " except: iface=None\n"
-        " wnd=None\n"
-        " if iface:\n"
-        "  for n in ('wndCaptcha','wndCatpcha','captchaWnd','captchaWatcher'):\n"
-        "   wnd=getattr(iface,n,None)\n"
-        "   if wnd: break\n"
-        " shown=0\n"
-        " if wnd:\n"
-        "  for w in (wnd, getattr(wnd,'main_window',None), getattr(wnd,'board',None)):\n"
-        "   try:\n"
-        "    if w and w.IsShow(): shown=1\n"
-        "   except: pass\n"
-        " _state(shown)\n"
-        " if not shown:\n"
-        "  constInfo._farmbot_captcha_done=None\n"
-        " elif wnd:\n"
-        "  cid=int(getattr(wnd,'challengeId',0) or 0)\n"
-        "  cfg=getattr(uiCaptcha,'CAPTCHA_CONFIG',None) if uiCaptcha else None\n"
-        "  row=_cfg_row(cfg, cid)\n"
-        "  q=''\n"
-        "  bid=getattr(wnd,'backgroundId',None)\n"
-        "  if row:\n"
-        "   try: q=_txt(row.get('question'))\n"
-        "   except: q=''\n"
-        "   if bid is None:\n"
-        "    try: bid=row.get('bg')\n"
-        "    except: pass\n"
-        "  ans=MAP.get(cid)\n"
-        "  if getattr(constInfo,'_farmbot_cap_try',None)!=cid:\n"
-        "   constInfo._farmbot_cap_try=cid\n"
-        "   _log('map cid=%d bid=%r q=%r ans=%r'%(cid,bid,q,ans))\n"
-        "  done=getattr(constInfo,'_farmbot_captcha_done',None)\n"
-        "  if ans is None:\n"
-        "   if cid and getattr(constInfo,'_farmbot_cap_miss',None)!=cid:\n"
-        "    constInfo._farmbot_cap_miss=cid\n"
-        "    _log('miss cid=%d q=%r'%(cid,q))\n"
-        "  elif done!=cid:\n"
-        "   wnd.OnAreaClicked(int(ans))\n"
-        "   constInfo._farmbot_captcha_done=cid\n"
-        "   _log('ok cid=%d ans=%d q=%s'%(cid,int(ans),q.replace('\\n',' ')))\n"
-        "except Exception:\n"
-        " try:\n"
-        "  f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write(traceback.format_exc()+'\\r\\n'); f.close()\n"
-        " except: pass\n";
+    static const char kPy[] = R"PY(
+try:
+ import constInfo, traceback, gc
+ try: import uiCaptcha
+ except: uiCaptcha=None
+ MAP={1:8,2:5,3:5,4:2,5:5,6:1,7:0,8:2,9:6,10:0,11:2,12:1,13:7,14:5,15:2,16:1,17:7,18:0,19:2,20:0,21:4,22:7,23:6,24:4,25:5,26:1,27:0,28:1,29:1,30:0,31:2,32:3,33:5,34:7,35:8,36:0,37:2,38:4,39:5,40:6,41:7,42:0,43:1,44:3,45:5,46:6,47:8}
+ def _log(s):
+  try:
+   f=open(r'C:\Temp\farmbot-captcha.log','ab'); f.write(str(s)+'\r\n'); f.close()
+  except: pass
+ def _state(v):
+  try:
+   f=open(r'C:\Temp\farmbot-captcha.state','wb'); f.write('1' if v else '0'); f.close()
+  except: pass
+ def _txt(v):
+  if v is None: return ''
+  try: return str(v)
+  except:
+   try: return unicode(v).encode('utf-8','replace')
+   except: return ''
+ def _cfg_row(cfg, cid):
+  if not cfg or not cid: return None
+  row=None
+  try: row=cfg.get(cid)
+  except: row=None
+  if row is None:
+   try: row=cfg.get(str(cid))
+   except: row=None
+  return row
+ def _shown(w):
+  if not w: return 0
+  for x in (w, getattr(w,'main_window',None), getattr(w,'board',None)):
+   try:
+    if x and x.IsShow(): return 1
+   except: pass
+  return 0
+ def _hook():
+  if not uiCaptcha: return
+  cls=getattr(uiCaptcha,'CaptchaWindow',None)
+  if not cls or getattr(cls,'_farmbot_hook',0): return
+  origSet=getattr(cls,'SetChallenge',None)
+  origOpen=getattr(cls,'Open',None)
+  origClose=getattr(cls,'Close',None)
+  def _set(self,*a,**k):
+   constInfo._farmbot_captcha_wnd=self
+   return origSet(self,*a,**k) if origSet else None
+  def _open(self,*a,**k):
+   constInfo._farmbot_captcha_wnd=self
+   return origOpen(self,*a,**k) if origOpen else None
+  def _close(self,*a,**k):
+   try:
+    if getattr(constInfo,'_farmbot_captcha_wnd',None) is self:
+     constInfo._farmbot_captcha_wnd=None
+   except: pass
+   return origClose(self,*a,**k) if origClose else None
+  try:
+   if origSet: cls.SetChallenge=_set
+   if origOpen: cls.Open=_open
+   if origClose: cls.Close=_close
+   cls._farmbot_hook=1
+   _log('hook SetChallenge')
+  except Exception:
+   _log('hook fail')
+ _hook()
+ how='none'
+ wnd=getattr(constInfo,'_farmbot_captcha_wnd',None)
+ if wnd:
+  how='hook'
+ if not wnd:
+  iface=None
+  try: iface=constInfo.GetInterfaceInstance()
+  except: iface=None
+  if iface:
+   for n in ('wndCaptcha','wndCatpcha','captchaWnd','captchaWatcher'):
+    wnd=getattr(iface,n,None)
+    if wnd:
+     how='attr '+n
+     break
+ if (not wnd) or not _shown(wnd):
+  cls=getattr(uiCaptcha,'CaptchaWindow',None) if uiCaptcha else None
+  if cls:
+   for o in gc.get_objects():
+    try:
+     if isinstance(o, cls) and _shown(o):
+      wnd=o
+      how='scan'
+      constInfo._farmbot_captcha_wnd=o
+      break
+    except: pass
+ shown=_shown(wnd)
+ _state(shown)
+ probe=(shown, how, id(wnd) if wnd else 0)
+ if getattr(constInfo,'_farmbot_cap_probe',None)!=probe:
+  constInfo._farmbot_cap_probe=probe
+  _log('probe shown=%d how=%s wnd=%s'%(shown,how,type(wnd).__name__ if wnd else None))
+ if not shown:
+  constInfo._farmbot_captcha_done=None
+ elif wnd:
+  cid=int(getattr(wnd,'challengeId',0) or 0)
+  cfg=getattr(uiCaptcha,'CAPTCHA_CONFIG',None) if uiCaptcha else None
+  row=_cfg_row(cfg, cid)
+  q=''
+  bid=getattr(wnd,'backgroundId',None)
+  if row:
+   try: q=_txt(row.get('question'))
+   except: q=''
+   if bid is None:
+    try: bid=row.get('bg')
+    except: pass
+  ans=MAP.get(cid)
+  if getattr(constInfo,'_farmbot_cap_try',None)!=cid:
+   constInfo._farmbot_cap_try=cid
+   _log('map cid=%d bid=%r q=%r ans=%r how=%s'%(cid,bid,q,ans,how))
+  done=getattr(constInfo,'_farmbot_captcha_done',None)
+  if ans is None:
+   if cid and getattr(constInfo,'_farmbot_cap_miss',None)!=cid:
+    constInfo._farmbot_cap_miss=cid
+    _log('miss cid=%d q=%r'%(cid,q))
+  elif done!=cid:
+   wnd.OnAreaClicked(int(ans))
+   constInfo._farmbot_captcha_done=cid
+   _log('ok cid=%d ans=%d q=%s how=%s'%(cid,int(ans),q.replace('\n',' '),how))
+except Exception:
+ try:
+  f=open(r'C:\Temp\farmbot-captcha.log','ab'); f.write(traceback.format_exc()+'\r\n'); f.close()
+ except: pass
+)PY";
     SafePyRun(kPy);
     FILE* sf = nullptr;
     int shown = 0;
