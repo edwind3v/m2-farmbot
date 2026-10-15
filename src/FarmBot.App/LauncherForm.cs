@@ -3,9 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace FarmBot;
 
-public sealed class LauncherForm : Form
+public sealed class LauncherForm : FramelessForm
 {
     private readonly LauncherShell _shell;
+    private readonly WindowChrome _chrome = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 400 };
 
     public LauncherForm()
@@ -21,6 +22,7 @@ public sealed class LauncherForm : Form
         ForeColor = Color.FromArgb(236, 232, 223);
         ClientSize = new Size(460, 720);
         MinimumSize = new Size(400, 520);
+        _chrome.Bind(this);
         HostBlazor();
         _timer.Tick += (_, _) => _shell.Tick();
         _timer.Start();
@@ -57,6 +59,7 @@ public sealed class LauncherForm : Form
             var services = new ServiceCollection();
             services.AddWindowsFormsBlazorWebView();
             services.AddSingleton(_shell);
+            services.AddSingleton(_chrome);
             services.AddSingleton<ThemeService>();
             var provider = services.BuildServiceProvider();
 

@@ -3,9 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace FarmBot;
 
-public sealed class MainForm : Form
+public sealed class MainForm : FramelessForm
 {
     private readonly FarmBotShell _shell;
+    private readonly WindowChrome _chrome = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 200 };
     private bool _hotkeysRegistered;
     private bool _closing;
@@ -23,8 +24,9 @@ public sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(19, 21, 28);
         ForeColor = Color.FromArgb(236, 232, 223);
-        ClientSize = new Size(1280, 820);
-        MinimumSize = new Size(960, 620);
+        ClientSize = new Size(830, 480);
+        MinimumSize = new Size(830, 480);
+        _chrome.Bind(this);
         HostBlazor();
         _timer.Tick += (_, _) =>
         {
@@ -103,6 +105,7 @@ public sealed class MainForm : Form
             var services = new ServiceCollection();
             services.AddWindowsFormsBlazorWebView();
             services.AddSingleton(_shell);
+            services.AddSingleton(_chrome);
             services.AddSingleton<ThemeService>();
             var provider = services.BuildServiceProvider();
 

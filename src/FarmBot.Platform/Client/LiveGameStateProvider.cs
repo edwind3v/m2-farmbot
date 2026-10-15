@@ -341,6 +341,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             Vid = vid,
             Type = type,
             Vnum = vnumOrRace,
+            Race = race,
             X = x,
             Y = y,
             Z = z,
@@ -530,7 +531,8 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             MapName = mapName,
             MapWorldW = mapWorldW,
             MapWorldH = mapWorldH,
-            FacingDeg = MinimapFacing(main)
+            FacingDeg = MinimapFacing(main),
+            Race = main?.Race
         };
     }
 
@@ -624,7 +626,8 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
                 Name = main.Name,
                 X = main.X,
                 Y = main.Y,
-                Z = main.Z
+                Z = main.Z,
+                Race = main.Race
             };
 
     private bool TryReadHudPoints(

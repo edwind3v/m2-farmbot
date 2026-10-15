@@ -33,6 +33,10 @@ public sealed class FarmBotShell : IDisposable
     private float _atlasX;
     private float _atlasY;
     private bool _potsArmed;
+    private readonly object _farmClockGate = new();
+    private long _farmedMs;
+    private long _farmSegmentStartMs;
+    private bool _farmTiming;
 
     public FarmBotShell()
         : this(ConfigStore.DefaultPath(AppContext.BaseDirectory), 0, null, null)
@@ -294,6 +298,31 @@ public sealed class FarmBotShell : IDisposable
                 .ToList();
     }
 
+    public string FarmedElapsedText
+    {
+        get
+        {
+            var span = TimeSpan.FromMilliseconds(FarmedElapsedMs);
+            return span.TotalHours >= 1
+                ? $"{(int)span.TotalHours}:{span.Minutes:00}:{span.Seconds:00}"
+                : $"{span.Minutes:00}:{span.Seconds:00}";
+        }
+    }
+
+    private long FarmedElapsedMs
+    {
+        get
+        {
+            lock (_farmClockGate)
+            {
+                var total = _farmedMs;
+                if (_farmTiming)
+                    total += Environment.TickCount64 - _farmSegmentStartMs;
+                return Math.Max(0, total);
+            }
+        }
+    }
+
     public void Tick()
     {
         try
@@ -302,6 +331,7 @@ public sealed class FarmBotShell : IDisposable
             if (runtime == null)
                 return;
             View = runtime.Capture();
+            SyncFarmClock();
             ArmFoundPots();
             RefreshAtlas();
             Notify();
@@ -673,6 +703,24 @@ public sealed class FarmBotShell : IDisposable
             _logLines.Add(entry);
             if (_logLines.Count > 400)
                 _logLines.RemoveRange(0, _logLines.Count - 300);
+        }
+    }
+
+    private void SyncFarmClock()
+    {
+        var enabled = View.Enabled;
+        lock (_farmClockGate)
+        {
+            if (enabled && !_farmTiming)
+            {
+                _farmTiming = true;
+                _farmSegmentStartMs = Environment.TickCount64;
+            }
+            else if (!enabled && _farmTiming)
+            {
+                _farmedMs += Environment.TickCount64 - _farmSegmentStartMs;
+                _farmTiming = false;
+            }
         }
     }
 

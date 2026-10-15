@@ -1,0 +1,52 @@
+@inject WindowChrome Chrome
+@inject IJSRuntime JS
+@implements IDisposable
+
+<header class="titlebar" data-drag @onmousedown="OnDrag" @ondblclick="OnDoubleClick">
+    <div class="titlebar-brand">
+        @Brand
+    </div>
+    <div class="titlebar-actions" @onmousedown:stopPropagation="true" @ondblclick:stopPropagation="true">
+        @Actions
+    </div>
+    <div class="win-btns" @onmousedown:stopPropagation="true" @ondblclick:stopPropagation="true">
+        <button type="button" class="win-btn" title="Minimize" @onclick="Chrome.Minimize"><Icons Name="min" /></button>
+        <button type="button" class="win-btn" title="@(Chrome.IsMaximized ? "Restore" : "Maximize")" @onclick="Chrome.ToggleMaximize">
+            <Icons Name="@(Chrome.IsMaximized ? "restore" : "max")" />
+        </button>
+        <button type="button" class="win-btn win-close" title="Close" @onclick="Chrome.Close"><Icons Name="close" /></button>
+    </div>
+</header>
+
+@code {
+    [Parameter] public RenderFragment? Brand { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    private DotNetObjectReference<WindowChrome>? _ref;
+
+    protected override void OnInitialized() => Chrome.Changed += OnChanged;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        _ref = DotNetObjectReference.Create(Chrome);
+        await JS.InvokeVoidAsync("farmChrome.set", _ref);
+    }
+
+    private void OnDrag(MouseEventArgs e)
+    {
+        if (e.Button == 0)
+            Chrome.Drag();
+    }
+
+    private void OnDoubleClick() => Chrome.ToggleMaximize();
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Chrome.Changed -= OnChanged;
+        _ref?.Dispose();
+    }
+}

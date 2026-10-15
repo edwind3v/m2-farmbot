@@ -775,7 +775,8 @@ public sealed class BotRuntime : IDisposable
                 Hp = hud.Hp,
                 MaxHp = hud.MaxHp,
                 Mp = hud.Mp,
-                MaxMp = hud.MaxMp
+                MaxMp = hud.MaxMp,
+                Race = hud.Race ?? snapshot.Player.Race
             }
         };
         if (config.ClientProfile != ClientProfile.Baerim)

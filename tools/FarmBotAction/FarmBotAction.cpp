@@ -297,6 +297,7 @@ static int g_hudHp;
 static int g_hudMaxHp;
 static int g_hudMp;
 static int g_hudMaxMp;
+static int g_hudRace = -1;
 static bool g_hudOk;
 static volatile long g_lootOn;
 static volatile long g_lootFast;
@@ -513,11 +514,24 @@ static int CallGetStatus(void* player, int type)
     return ReadPoint(player, type);
 }
 
+static void* CallGetMainActor();
+
+static int ReadInstanceRace(void* inst)
+{
+    if (!UserPtr(inst) || !kRaceDisp)
+        return -1;
+    unsigned race = 0xFFFFFFFFu;
+    __try { race = *(unsigned*)((char*)inst + kRaceDisp); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    return race <= 8 ? (int)race : -1;
+}
+
 static void RefreshHud(void* player)
 {
     if (!player)
     {
         g_hudOk = false;
+        g_hudRace = -1;
         return;
     }
     g_hudLevel = CallGetStatus(player, kPointLevel);
@@ -528,6 +542,7 @@ static void RefreshHud(void* player)
     g_hudMp = CallGetStatus(player, kPointSp);
     g_hudMaxMp = CallGetStatus(player, kPointMaxSp);
     g_hudOk = g_hudLevel >= 1 && g_hudLevel <= 250 && g_hudMaxHp > 0 && g_hudHp >= 0 && g_hudHp <= g_hudMaxHp;
+    g_hudRace = ReadInstanceRace(CallGetMainActor());
 }
 
 static bool CallSetTarget(void* player, unsigned vid, int force)
@@ -4108,10 +4123,12 @@ static void CaptchaTick()
     if (!g_baerim)
         return;
     RefreshSession();
-    if (!g_inWorld)
+    if (!g_inWorld || !g_loadFinished)
         return;
     if (PhaseHas("Load") || PhaseHas("Login") || PhaseHas("Off") ||
         PhaseHas("Logo") || PhaseHas("Intro") || PhaseHas("Select"))
+        return;
+    if (!WindowClassIs("GameWindow") && !HasGameWindow())
         return;
     if (!PyCanRun())
         return;
@@ -4129,7 +4146,7 @@ static void CaptchaTick()
     }
     static const char kPy[] = R"PY(
 try:
- import constInfo, traceback, gc
+ import constInfo, traceback
  try: import uiCaptcha
  except: uiCaptcha=None
  MAP={1:8,2:5,3:5,4:2,5:5,6:1,7:0,8:2,9:6,10:0,11:2,12:1,13:7,14:5,15:2,16:1,17:7,18:0,19:2,20:0,21:4,22:7,23:6,24:4,25:5,26:1,27:0,28:1,29:1,30:0,31:2,32:3,33:5,34:7,35:8,36:0,37:2,38:4,39:5,40:6,41:7,42:0,43:1,44:3,45:5,46:6,47:8}
@@ -4205,17 +4222,6 @@ try:
     if wnd:
      how='attr '+n
      break
- if (not wnd) or not _shown(wnd):
-  cls=getattr(uiCaptcha,'CaptchaWindow',None) if uiCaptcha else None
-  if cls:
-   for o in gc.get_objects():
-    try:
-     if isinstance(o, cls) and _shown(o):
-      wnd=o
-      how='scan'
-      constInfo._farmbot_captcha_wnd=o
-      break
-    except: pass
  shown=_shown(wnd)
  _state(shown)
  probe=(shown, how, id(wnd) if wnd else 0)
@@ -7584,7 +7590,7 @@ static void Serve()
         _snprintf_s(
             head,
             _TRUNCATE,
-            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d,\"atlasWidth\":%u,\"atlasHeight\":%u,\"worldW\":%.1f,\"worldH\":%.1f,\"phase\":\"%s\",\"character\":\"%s\",\"account\":\"%s\",\"password\":\"%s\",\"characterSlot\":%d,\"startGame\":%s,\"inWorld\":%s",
+            "{\"ok\":%s,\"type\":\"%s\",\"reason\":\"%s\",\"targetVid\":%u,\"convention\":\"loop-iat\",\"level\":%d,\"exp\":%d,\"nextExp\":%d,\"hp\":%d,\"maxHp\":%d,\"mp\":%d,\"maxMp\":%d,\"race\":%d,\"atlasWidth\":%u,\"atlasHeight\":%u,\"worldW\":%.1f,\"worldH\":%.1f,\"phase\":\"%s\",\"character\":\"%s\",\"account\":\"%s\",\"password\":\"%s\",\"characterSlot\":%d,\"startGame\":%s,\"inWorld\":%s",
             g_lastOk ? "true" : "false",
             cmd.type.c_str(),
             reason,
@@ -7596,6 +7602,7 @@ static void Serve()
             g_hudMaxHp,
             g_hudMp,
             g_hudMaxMp,
+            g_hudRace,
             g_atlasWidth,
             g_atlasHeight,
             g_atlasWorldW,

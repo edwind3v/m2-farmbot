@@ -39,6 +39,7 @@ public sealed class ActionResponse
     public int MaxHp { get; set; }
     public int Mp { get; set; }
     public int MaxMp { get; set; }
+    public int Race { get; set; } = -1;
     public int AtlasWidth { get; set; }
     public int AtlasHeight { get; set; }
     public float WorldW { get; set; }

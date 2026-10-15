@@ -315,13 +315,95 @@ a { color: var(--accent-2); text-decoration: none; }
 
 .shell {
     display: grid;
-    grid-template-columns: 268px 1fr;
-    grid-template-rows: 56px 1fr 32px;
+    grid-template-rows: 36px 1fr;
     height: 100%;
+    min-height: 0;
+    overflow: hidden;
     background:
-        radial-gradient(900px 420px at 0% 0%, var(--glow), transparent 55%),
+        radial-gradient(720px 280px at 0% 0%, var(--glow), transparent 55%),
         var(--ink);
 }
+
+.shell-body {
+    display: grid;
+    grid-template-columns: 248px 1fr;
+    min-height: 0;
+}
+
+.titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 4px 0 10px;
+    background: color-mix(in srgb, var(--ink-2) 92%, transparent);
+    border-bottom: 1px solid var(--line);
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: grab;
+}
+
+.titlebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.titlebar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    cursor: default;
+}
+
+.win-btns {
+    display: flex;
+    align-items: stretch;
+    margin-left: 4px;
+    cursor: default;
+}
+
+.win-btn {
+    appearance: none;
+    width: 36px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+}
+
+.win-btn:hover { background: var(--hover); color: var(--text); }
+.win-btn:active { transform: scale(0.96); }
+.win-btn.win-close:hover { background: var(--danger-fill); color: var(--danger-text); }
+
+.session-clock {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 8px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.session-clock.on { color: var(--accent-2); border-color: var(--accent-border); }
+
+.titlebar .cmd .btn { padding: 3px 9px; font-size: 12px; }
+.titlebar .pill { height: 22px; padding: 0 8px; }
 
 .topbar {
     grid-column: 1 / -1;
@@ -337,7 +419,7 @@ a { color: var(--accent-2); text-decoration: none; }
     display: flex;
     flex-direction: column;
     line-height: 1.05;
-    min-width: 92px;
+    min-width: 72px;
 }
 
 .brand b {
@@ -363,7 +445,7 @@ a { color: var(--accent-2); text-decoration: none; }
     appearance: none;
     border: 1px solid var(--line-strong);
     background: var(--panel);
-    padding: 6px 12px;
+    padding: 4px 10px;
     cursor: pointer;
     border-radius: 999px;
     color: var(--text);
@@ -494,15 +576,17 @@ a { color: var(--accent-2); text-decoration: none; }
     flex-direction: column;
     overflow: hidden;
     padding: 0;
+    min-width: 0;
     min-height: 0;
+    border-left: 1px solid var(--line);
 }
 
 .tabstrip {
     display: flex;
     align-items: center;
     gap: 3px;
-    flex: 0 0 32px;
-    padding: 0 10px;
+    flex: 0 0 30px;
+    padding: 0 8px;
     background: var(--ink-2);
     border-bottom: 1px solid var(--line);
     overflow-x: auto;
@@ -512,10 +596,10 @@ a { color: var(--accent-2); text-decoration: none; }
 .tab {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     height: 22px;
     max-width: 168px;
-    padding: 0 8px 0 10px;
+    padding: 0 8px 0 7px;
     border: 1px solid transparent;
     border-radius: 6px;
     background: transparent;
@@ -570,10 +654,13 @@ a { color: var(--accent-2); text-decoration: none; }
     position: absolute;
     inset: 0;
     overflow: auto;
-    padding: 22px 26px 88px;
+    padding: 10px 12px 14px;
 }
 
-.workspace-page.on { display: block; }
+.workspace-page.on {
+    display: flex;
+    flex-direction: column;
+}
 
 .status {
     grid-column: 1 / -1;
@@ -769,7 +856,7 @@ table.grid tr:hover td { background: var(--hover); }
 table.grid tr.sel td { background: var(--sel); }
 table.grid tr.dirty td { box-shadow: inset 3px 0 0 var(--dirty); }
 
-.field-row { display: grid; grid-template-columns: 170px 1fr; gap: 10px; margin-bottom: 9px; align-items: start; }
+.field-row { display: grid; grid-template-columns: 108px 1fr; gap: 8px; margin-bottom: 7px; align-items: start; }
 .field-row label { color: var(--muted); padding-top: 7px; font-size: 12px; }
 .field-row input, .field-row select, .field-row textarea {
     width: 100%;
@@ -836,7 +923,7 @@ table.grid tr.dirty td { box-shadow: inset 3px 0 0 var(--dirty); }
     border-radius: 10px;
 }
 
-.tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
 .tabs .tab {
     border: 1px solid var(--line);
     background: transparent;
@@ -853,11 +940,13 @@ table.grid tr.dirty td { box-shadow: inset 3px 0 0 var(--dirty); }
     font-size: 12px;
     background: var(--ink);
     border: 1px solid var(--line);
-    padding: 12px;
-    height: calc(100vh - 210px);
+    padding: 10px;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
     overflow: auto;
     white-space: pre-wrap;
-    border-radius: 12px;
+    border-radius: 10px;
 }
 
 .child-block { margin-top: 18px; }
@@ -874,8 +963,8 @@ table.grid tr.dirty td { box-shadow: inset 3px 0 0 var(--dirty); }
 .tile {
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 16px;
-    padding: 18px;
+    border-radius: 12px;
+    padding: 10px;
 }
 
 .tile h2 {
@@ -892,7 +981,7 @@ table.grid tr.dirty td { box-shadow: inset 3px 0 0 var(--dirty); }
     margin-top: 10px;
 }
 
-.quick { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
 .theme-wrap {
     position: relative;
@@ -904,8 +993,8 @@ table.grid tr.dirty td { box-shadow: inset 3px 0 0 var(--dirty); }
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    height: 28px;
-    padding: 0 10px 0 8px;
+    height: 24px;
+    padding: 0 8px 0 6px;
     border: 1px solid var(--line-strong);
     background: var(--panel);
     border-radius: 999px;

@@ -19,6 +19,17 @@
                 document.documentElement.setAttribute('data-theme', id || 'night');
             }
         };
+        window.farmChrome = {
+            set: function (dotnet) { this.ref = dotnet; },
+            drag: function (event) {
+                if (!this.ref || !event || event.button !== 0)
+                    return;
+                if (event.target && event.target.closest && event.target.closest('button, a, input, select, textarea, label, .win-btns, .titlebar-actions'))
+                    return;
+                event.preventDefault();
+                this.ref.invokeMethodAsync('DragFromJs');
+            }
+        };
     </script>
     <script src="_framework/blazor.webview.js"></script>
 </body>

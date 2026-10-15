@@ -8,6 +8,7 @@ public sealed record Entity
     public ActorType Type { get; init; }
     public EntityKind Kind { get; init; }
     public uint Vnum { get; init; }
+    public uint Race { get; init; }
     public float X { get; init; }
     public float Y { get; init; }
     public float Z { get; init; }

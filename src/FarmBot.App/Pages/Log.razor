@@ -2,12 +2,8 @@
 @implements IDisposable
 @inject FarmBotShell Shell
 
-<div class="eyebrow">Diagnostics</div>
-<div class="page-head">
-    <h1>Log</h1>
-    <div class="toolbar">
-        <span class="grid-count">@Shell.LogLines.Count lines</span>
-    </div>
+<div class="log-toolbar">
+    <span class="grid-count">@Shell.LogLines.Count lines</span>
 </div>
 
 <div class="log-list">

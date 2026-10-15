@@ -277,9 +277,10 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         var phase = response.Phase ?? "";
         var character = response.Character ?? "";
         var reason = response.Reason ?? "";
+        uint? race = response.Race is >= 0 and <= 8 ? (uint)response.Race : null;
         if (response.MaxHp <= 0 || response.Level is < 1 or > 250)
         {
-            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame);
+            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame, race);
             return true;
         }
 
@@ -295,7 +296,8 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
             phase,
             character,
             reason,
-            response.StartGame);
+            response.StartGame,
+            race);
         return true;
     }
 

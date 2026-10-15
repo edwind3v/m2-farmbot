@@ -12,7 +12,8 @@ public readonly record struct PlayerHudPoints(
     string Phase = "",
     string Character = "",
     string Reason = "",
-    bool StartGame = false);
+    bool StartGame = false,
+    uint? Race = null);
 
 public static class PlayerHudDecoder
 {

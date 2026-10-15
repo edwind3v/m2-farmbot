@@ -2,15 +2,7 @@
 @implements IDisposable
 @inject FarmBotShell Shell
 
-<div class="eyebrow">Operations</div>
-<div class="page-head">
-    <h1>Ranged Attack</h1>
-    <div class="toolbar">
-        <button class="btn btn-save" @onclick="Shell.SaveSettings">Save</button>
-    </div>
-</div>
-
-<p class="lede">Ranged attack and the two pickup boxes are separate. Tick Fast pickup to grab whatever the client already treats as next to you, at the delay you set. Tick Ranged pickup to walk the client's ground-item list — items, yang, and drops with no owner — spoof beside each one, and pick it. No Start bot required. The character does not walk.</p>
+<p class="lede compact">Blasts selected farm targets in one burst, then returns. Fast pickup and ranged pickup start as soon as they are ticked. The character does not walk.</p>
 
 <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAttackEnabled" /> Ranged attack</label>
 <label class="check-row"><input type="checkbox" @bind="Shell.Config.RangedAvoidAttacks" /> Avoid attacks</label>
@@ -18,30 +10,26 @@
 <label class="check-row"><input type="checkbox" @bind="Shell.Config.FastPickupEnabled" /> Fast pickup</label>
 <div class="field-grid">
     <div class="field-row"><label>Radius</label><input type="number" min="0" step="25" @bind="Shell.Config.RangedAttackRadius" /></div>
-        <div class="field-row"><label>Maximum targets at once</label><input type="number" @bind="Shell.Config.RangedAttackMaxTargets" /></div>
-        <div class="field-row"><label>Attack delay ms</label><input type="number" @bind="Shell.Config.RangedAttackDelayMs" /></div>
+    <div class="field-row"><label>Max targets</label><input type="number" @bind="Shell.Config.RangedAttackMaxTargets" /></div>
+    <div class="field-row"><label>Attack delay ms</label><input type="number" @bind="Shell.Config.RangedAttackDelayMs" /></div>
     <div class="field-row"><label>Loot range</label><input type="number" min="0" step="25" @bind="Shell.Config.LootRange" /></div>
-    <div class="field-row"><label>Fast pickup delay ms</label><input type="number" @bind="Shell.Config.FastPickupDelayMs" /></div>
+    <div class="field-row"><label>Fast pickup ms</label><input type="number" @bind="Shell.Config.FastPickupDelayMs" /></div>
     <div class="field-row"><label>Farm radius</label><input type="number" disabled value="@Shell.Config.FarmRadius.ToString("0")" /></div>
 </div>
-<label class="slider" style="margin-top:12px">
+<label class="slider">
     <span>Fast pickup delay <b>@Shell.Config.FastPickupDelayMs ms</b></span>
     <input type="range" min="1" max="500" step="1" value="@Shell.Config.FastPickupDelayMs" @oninput="OnFastDelay" />
 </label>
 
-<div class="quick" style="margin-top:14px">
+<div class="quick">
     <button class="btn btn-ok" disabled="@(Shell.RangedOnly)" @onclick="Shell.StartRanged">Start ranged</button>
     <button class="btn btn-danger" disabled="@(!Shell.RangedOnly)" @onclick="Shell.StopBot">Stop ranged</button>
-    <button class="btn btn-ok" disabled="@(Shell.View.Enabled)" @onclick="Shell.StartBot">Start bot</button>
-    <button class="btn btn-danger" disabled="@(!Shell.View.Enabled || Shell.RangedOnly)" @onclick="Shell.StopBot">Stop bot</button>
-    <button class="btn btn-save" @onclick="Shell.SaveSettings">Save settings</button>
 </div>
 
-<div class="tile" style="margin-top:18px">
-    <div class="eyebrow">Queue</div>
-    <h2>@(Shell.RangedOnly ? "Following you" : Shell.Config.RangedAttackEnabled ? "Ranged targets" : "Ranged is off")</h2>
+<div class="tile compact">
+    <div class="pot-label">@(Shell.RangedOnly ? "Following you" : Shell.Config.RangedAttackEnabled ? "Ranged targets" : "Ranged is off")</div>
     <p>@Status</p>
-    <div class="table-shell" style="margin-top:12px">
+    <div class="table-shell">
         <div class="table-wrap short">
             <table class="grid">
                 <thead>
@@ -78,7 +66,7 @@
         get
         {
             if (!Shell.Config.RangedAttackEnabled && !Shell.RangedOnly)
-                return "Press Start ranged to blast around you as you walk, or turn the checkbox on and use Start bot to farm a locked circle.";
+                return "Press Start ranged to blast around you as you walk, or turn the checkbox on and use Start to farm a locked circle.";
             var count = Queue.Count;
             var cap = Shell.Config.RangedAttackMaxTargets;
             return count == 0

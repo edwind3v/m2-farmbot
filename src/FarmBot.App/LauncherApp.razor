@@ -4,12 +4,14 @@
 @implements IDisposable
 
 <div class="launcher">
-    <header class="launch-top">
-        <div class="brand">
-            <b>FarmBot</b>
-            <span>launcher</span>
-        </div>
-        <div class="launch-actions">
+    <TitleBar>
+        <Brand>
+            <div class="brand">
+                <b>FarmBot</b>
+                <span>launcher</span>
+            </div>
+        </Brand>
+        <Actions>
             <label class="profile-label">
                 Mode
                 <select class="profile" value="@Shell.ProfileName" @onchange="OnProfileChanged">
@@ -18,9 +20,9 @@
                     <option value="Normal">Normal</option>
                 </select>
             </label>
-            <button class="btn btn-save" @onclick="Shell.AddSlot">+ New slot</button>
-        </div>
-    </header>
+            <button class="btn btn-save" @onclick="Shell.AddSlot">+ Slot</button>
+        </Actions>
+    </TitleBar>
 
     <div class="launch-body">
         <div class="field-row">

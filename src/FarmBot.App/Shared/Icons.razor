@@ -1,0 +1,72 @@
+<span class="ico" aria-hidden="true">
+@switch (Name)
+{
+    case "clock":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="8.25" />
+            <path d="M12 7.75V12l3.25 1.9" />
+        </svg>
+        break;
+    case "sword":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.2 4.8 19.2 9.8 9.4 19.6H4.4v-5Z" />
+            <path d="m12 7 5 5" />
+            <path d="m5.2 16.2 2.6 2.6" />
+        </svg>
+        break;
+    case "crosshair":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="6.5" />
+            <circle cx="12" cy="12" r="2.2" />
+            <path d="M12 3.5v3M12 17.5v3M3.5 12h3M17.5 12h3" />
+        </svg>
+        break;
+    case "list":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 7h11M9 12h11M9 17h8" />
+            <circle cx="5" cy="7" r="1.15" fill="currentColor" stroke="none" />
+            <circle cx="5" cy="12" r="1.15" fill="currentColor" stroke="none" />
+            <circle cx="5" cy="17" r="1.15" fill="currentColor" stroke="none" />
+        </svg>
+        break;
+    case "sliders":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7h16M4 12h16M4 17h16" />
+            <circle cx="9" cy="7" r="1.85" fill="currentColor" />
+            <circle cx="15" cy="12" r="1.85" fill="currentColor" />
+            <circle cx="11" cy="17" r="1.85" fill="currentColor" />
+        </svg>
+        break;
+    case "log":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6" y="4.5" width="12" height="15" rx="1.6" />
+            <path d="M9 9h6M9 12.2h6M9 15.4h4" />
+        </svg>
+        break;
+    case "min":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M6 16h12" />
+        </svg>
+        break;
+    case "max":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6.2" y="6.2" width="11.6" height="11.6" rx="1.4" />
+        </svg>
+        break;
+    case "restore":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 8.5h8.5V17H8Z" />
+            <path d="M7.2 15.5H6.4A1.4 1.4 0 0 1 5 14.1V6.9A1.4 1.4 0 0 1 6.4 5.5h7.2A1.4 1.4 0 0 1 15 6.9v.8" />
+        </svg>
+        break;
+    case "close":
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="m7 7 10 10M17 7 7 17" />
+        </svg>
+        break;
+}
+</span>
+
+@code {
+    [Parameter] public string Name { get; set; } = "";
+}

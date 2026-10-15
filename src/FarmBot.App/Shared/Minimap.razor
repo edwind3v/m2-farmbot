@@ -8,26 +8,26 @@
         {
             <img class="minimap-atlas" src="@Shell.AtlasUrl" alt="" />
         }
-        <svg class="minimap" viewBox="0 0 200 200" aria-label="Farm map">
-        <circle cx="100" cy="100" r="99" fill="@(string.IsNullOrEmpty(Shell.AtlasUrl) ? "#0e1016" : "transparent")" stroke="rgba(232,228,218,0.12)" />
-        <circle cx="100" cy="100" r="@N(FarmCircle)" fill="none" stroke="rgba(196,120,58,0.55)" stroke-width="1.2" />
-        @if (Shell.Config.RangedAttackEnabled)
-        {
-            <circle cx="100" cy="100" r="@N(RangedCircle)" fill="none" stroke="rgba(74,126,196,0.7)" stroke-width="1.2" stroke-dasharray="4 3" />
-        }
-        @foreach (var mark in Marks)
-        {
-            <circle cx="@N(mark.X)" cy="@N(mark.Y)" r="@(mark.Target ? 4 : 2.8)" fill="@mark.Fill">
-                <title>@mark.Label</title>
-            </circle>
-            @if (mark.Target)
+        <svg class="minimap" viewBox="0 0 @N(MapW) @N(MapH)" aria-label="Farm map">
+            <rect x="0.5" y="0.5" width="@N(MapW - 1)" height="@N(MapH - 1)" rx="8" fill="@(string.IsNullOrEmpty(Shell.AtlasUrl) ? "#0e1016" : "transparent")" stroke="rgba(232,228,218,0.12)" />
+            <ellipse cx="@N(Cx)" cy="@N(Cy)" rx="@N(FarmRx)" ry="@N(FarmRy)" fill="none" stroke="rgba(196,120,58,0.55)" stroke-width="1.2" />
+            @if (Shell.Config.RangedAttackEnabled)
             {
-                <circle cx="@N(mark.X)" cy="@N(mark.Y)" r="7" fill="none" stroke="#d9a06a" stroke-width="1.2" />
+                <ellipse cx="@N(Cx)" cy="@N(Cy)" rx="@N(RangedRx)" ry="@N(RangedRy)" fill="none" stroke="rgba(74,126,196,0.7)" stroke-width="1.2" stroke-dasharray="4 3" />
             }
-        }
-        <g transform="rotate(@N(Facing), 100, 100)">
-            <polygon points="100,93 106,107 100,103 94,107" fill="#c4783a" />
-        </g>
+            @foreach (var mark in Marks)
+            {
+                <circle cx="@N(mark.X)" cy="@N(mark.Y)" r="@(mark.Target ? 3.6 : 2.4)" fill="@mark.Fill">
+                    <title>@mark.Label</title>
+                </circle>
+                @if (mark.Target)
+                {
+                    <circle cx="@N(mark.X)" cy="@N(mark.Y)" r="6.2" fill="none" stroke="#d9a06a" stroke-width="1.2" />
+                }
+            }
+            <g transform="rotate(@N(Facing), @N(Cx), @N(Cy))">
+                <polygon points="@N(Cx),@N(Cy - 7) @N(Cx + 5.2),@N(Cy + 6) @N(Cx),@N(Cy + 2.4) @N(Cx - 5.2),@N(Cy + 6)" fill="#c4783a" />
+            </g>
         </svg>
     </div>
     <div class="minimap-legend">
@@ -48,15 +48,23 @@
 </div>
 
 @code {
+    private const double MapW = 240;
+    private const double MapH = 150;
+    private const double Cx = 120;
+    private const double Cy = 75;
+    private const double HalfW = 114;
+    private const double HalfH = 70;
+
     private sealed record Mark(double X, double Y, string Fill, string Label, bool Target);
 
     private IReadOnlyList<Mark> Marks => BuildMarks();
 
     private double ViewRadius => Shell.MapViewRadius;
 
-    private double FarmCircle => Math.Clamp(92.0 * Shell.Config.FarmRadius / ViewRadius, 4, 96);
-
-    private double RangedCircle => Math.Clamp(92.0 * Shell.Config.RangedAttackRadius / ViewRadius, 4, 96);
+    private double FarmRx => Math.Clamp(HalfW * Shell.Config.FarmRadius / ViewRadius, 4, HalfW);
+    private double FarmRy => Math.Clamp(HalfH * Shell.Config.FarmRadius / ViewRadius, 4, HalfH);
+    private double RangedRx => Math.Clamp(HalfW * Shell.Config.RangedAttackRadius / ViewRadius, 4, HalfW);
+    private double RangedRy => Math.Clamp(HalfH * Shell.Config.RangedAttackRadius / ViewRadius, 4, HalfH);
 
     private float Facing => Shell.View.Snapshot?.Player.FacingDeg ?? 0;
 
@@ -86,21 +94,22 @@
             return Array.Empty<Mark>();
 
         var player = snapshot.Player;
-        var scale = 92.0 / ViewRadius;
+        var scaleX = HalfW / ViewRadius;
+        var scaleY = HalfH / ViewRadius;
         var bosses = Shell.BossVnums().ToHashSet();
         var marks = new List<Mark>();
         foreach (var entity in snapshot.Entities)
         {
             if (!TryColor(entity, bosses, out var fill))
                 continue;
-            var dx = (entity.X - player.X) * scale;
-            var dy = (entity.Y - player.Y) * scale;
-            if (dx * dx + dy * dy > 92 * 92)
+            var dx = (entity.X - player.X) * scaleX;
+            var dy = (entity.Y - player.Y) * scaleY;
+            if (Math.Abs(dx) > HalfW || Math.Abs(dy) > HalfH)
                 continue;
             var label = string.IsNullOrWhiteSpace(entity.Name)
                 ? $"{EntityMapping.TypeName(entity.ResolvedType)}  VNUM {entity.Vnum}  {entity.Distance:0}"
                 : $"{entity.Name}  VNUM {entity.Vnum}  {entity.Distance:0}";
-            marks.Add(new Mark(100 + dx, 100 - dy, fill, label, view.Target?.Vid == entity.Vid));
+            marks.Add(new Mark(Cx + dx, Cy - dy, fill, label, view.Target?.Vid == entity.Vid));
         }
 
         return marks;
