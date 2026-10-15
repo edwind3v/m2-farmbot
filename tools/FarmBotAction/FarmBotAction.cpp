@@ -268,6 +268,7 @@ static int g_skillsReady;
 static void* g_mainInst;
 static char g_mainName[64];
 static volatile long g_allowMelee;
+static int g_captchaShown;
 static DWORD g_scanUnstableMs;
 static BYTE* g_updateComboCall;
 static volatile long g_busy;
@@ -3830,22 +3831,86 @@ static void CaptchaTick()
         PhaseHas("Load") || PhaseHas("Login") || PhaseHas("Off") ||
         PhaseHas("Logo") || PhaseHas("Intro") || PhaseHas("Select"))
         return;
-    if (!g_sessionCharacter[0])
-        return;
     static DWORD lastMs;
+    static int armedLog;
     const DWORD now = GetTickCount();
-    if (lastMs && now - lastMs < 400)
+    if (lastMs && now - lastMs < 300)
         return;
     lastMs = now;
+    if (!armedLog)
+    {
+        armedLog = 1;
+        NativeLog("captcha solver armed");
+    }
     static const char kPy[] =
         "try:\n"
-        " import constInfo, localeInfo\n"
+        " import constInfo, localeInfo, traceback, re\n"
+        " try: import item\n"
+        " except: item=None\n"
+        " def _log(s):\n"
+        "  try:\n"
+        "   f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write(str(s)+'\\r\\n'); f.close()\n"
+        "  except: pass\n"
+        " def _state(v):\n"
+        "  try:\n"
+        "   f=open(r'C:\\Temp\\farmbot-captcha.state','wb'); f.write('1' if v else '0'); f.close()\n"
+        "  except: pass\n"
+        " def _txt(v):\n"
+        "  if v is None: return ''\n"
+        "  try: return str(v)\n"
+        "  except:\n"
+        "   try: return unicode(v).encode('utf-8','replace')\n"
+        "   except: return ''\n"
+        " def _low(v): return _txt(v).lower().replace('\\\\','/')\n"
+        " def _call(o,n):\n"
+        "  try:\n"
+        "   f=getattr(o,n)\n"
+        "   return f() if callable(f) else f\n"
+        "  except: return None\n"
+        " def _blob(o, depth=0):\n"
+        "  out=[]\n"
+        "  if o is None or depth>3: return out\n"
+        "  for n in ('GetFileName','GetTooltipText','GetText','GetUpVisualFileName','GetOverVisualFileName','GetDownVisualFileName'):\n"
+        "   t=_txt(_call(o,n))\n"
+        "   if t: out.append(t)\n"
+        "  for n in ('upVisual','overVisual','downVisual','fileName','tooltipText','path','imageName','visual','filename'):\n"
+        "   try:\n"
+        "    v=getattr(o,n)\n"
+        "    if v is not None and not callable(v):\n"
+        "     t=_txt(v)\n"
+        "     if t: out.append(t)\n"
+        "   except: pass\n"
+        "  for n in ('img','image','icon','slot','child'):\n"
+        "   try: out.extend(_blob(getattr(o,n), depth+1))\n"
+        "   except: pass\n"
+        "  ch=getattr(o,'children',None)\n"
+        "  if ch:\n"
+        "   try:\n"
+        "    for c in list(ch)[:12]: out.extend(_blob(c, depth+1))\n"
+        "   except: pass\n"
+        "  return out\n"
+        " def _item_names(blob):\n"
+        "  names=[]\n"
+        "  if not item: return names\n"
+        "  for n in re.findall(r'(\\d{3,5})', blob):\n"
+        "   try:\n"
+        "    v=int(n)\n"
+        "    item.SelectItem(v)\n"
+        "    names.append(_txt(item.GetItemName()))\n"
+        "   except: pass\n"
+        "  return names\n"
+        " def _keys(q):\n"
+        "  noise=set(('click','on','the','a','an','please','find','select','choose','klicke','auf','das','den','die','ein','eine','bitte','waehle','wahlen','suche','press','hit','mark'))\n"
+        "  s=_low(q)\n"
+        "  for ch in '?!.,:;\\'\"()[]{}':\n"
+        "   s=s.replace(ch,' ')\n"
+        "  return [w for w in s.split() if len(w)>=3 and w not in noise]\n"
         " def _pick(v):\n"
         "  if v is None: return None\n"
         "  t=type(v)\n"
         "  if t is int or t is long: return int(v)\n"
         "  if t is str or t is unicode:\n"
-        "   s=str(v).strip()\n"
+        "   s=_txt(v).strip()\n"
         "   if s.isdigit(): return int(s)\n"
         "   return None\n"
         "  if t is dict:\n"
@@ -3854,11 +3919,6 @@ static void CaptchaTick()
         "     r=_pick(v[k])\n"
         "     if r is not None: return r\n"
         "  return None\n"
-        " def _log(s):\n"
-        "  try:\n"
-        "   f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write(s+'\\r\\n'); f.close()\n"
-        "  except: pass\n"
-        " iface=None\n"
         " if not getattr(localeInfo,'_farmbot_captcha_dumped',0):\n"
         "  localeInfo._farmbot_captcha_dumped=1\n"
         "  try:\n"
@@ -3870,98 +3930,104 @@ static void CaptchaTick()
         "    d.write('Q%d %r\\n'%(i, getattr(localeInfo,'CAPTCHA_QUESTION_%d'%i,None)))\n"
         "   d.close()\n"
         "  except: pass\n"
+        " iface=None\n"
         " try: iface=constInfo.GetInterfaceInstance()\n"
         " except: iface=None\n"
         " if not iface: raise Exception('noiface')\n"
         " wnd=None\n"
-        " try: wnd=iface.GetCatpchaWnd()\n"
-        " except: wnd=None\n"
-        " if wnd is None: wnd=getattr(iface,'wndCaptcha',None)\n"
+        " for n in ('GetCatpchaWnd','GetCaptchaWnd'):\n"
+        "  try:\n"
+        "   fn=getattr(iface,n,None)\n"
+        "   if fn: wnd=fn(); \n"
+        "   if wnd: break\n"
+        "  except: wnd=None\n"
+        " if wnd is None:\n"
+        "  for n in ('wndCaptcha','wndCatpcha','captchaWnd'):\n"
+        "   wnd=getattr(iface,n,None)\n"
+        "   if wnd: break\n"
+        " if not wnd:\n"
+        "  for n in dir(iface):\n"
+        "   if 'aptcha' in n.lower():\n"
+        "    try:\n"
+        "     v=getattr(iface,n)\n"
+        "     wnd=v() if callable(v) else v\n"
+        "     if wnd: break\n"
+        "    except: pass\n"
         " if not wnd: raise Exception('nownd')\n"
         " shown=0\n"
-        " try:\n"
-        "  if wnd.IsShow(): shown=1\n"
-        " except: shown=0\n"
+        " for w in (wnd, getattr(wnd,'main_window',None), getattr(wnd,'board',None)):\n"
+        "  try:\n"
+        "   if w and w.IsShow(): shown=1\n"
+        "  except: pass\n"
+        " _state(shown)\n"
         " if not shown:\n"
         "  constInfo._farmbot_captcha_done=None\n"
         " else:\n"
         "  cid=int(getattr(wnd,'challengeId',0) or 0)\n"
-        "  if getattr(constInfo,'_farmbot_captcha_done',None)==cid and cid:\n"
+        "  q=''\n"
+        "  try: q=_txt(wnd.question.GetText())\n"
+        "  except:\n"
+        "   q=_txt(getattr(wnd,'question_text','') or '')\n"
+        "  if not q and cid:\n"
+        "   q=_txt(getattr(localeInfo,'CAPTCHA_QUESTION_%d'%cid, ''))\n"
+        "  done=getattr(constInfo,'_farmbot_captcha_done',None)\n"
+        "  if done==cid and cid:\n"
         "   pass\n"
         "  else:\n"
-        "   q=''\n"
-        "   try: q=str(wnd.question.GetText())\n"
-        "   except:\n"
-        "    try: q=str(getattr(wnd,'question_text','') or '')\n"
-        "    except: q=''\n"
-        "   if '#' in q:\n"
-        "    try:\n"
-        "     tail=q.split('#')[-1].strip()\n"
-        "     if tail.isdigit(): ans=int(tail)\n"
-        "     else: ans=None\n"
-        "    except: ans=None\n"
-        "   else: ans=None\n"
+        "   ans=None\n"
         "   cfg=getattr(localeInfo,'CAPTCHA_CONFIG',None)\n"
-        "   if ans is None and isinstance(cfg, dict):\n"
+        "   if isinstance(cfg, dict):\n"
         "    for k in (cid, str(cid), '%d'%cid):\n"
         "     if k in cfg:\n"
         "      ans=_pick(cfg[k])\n"
         "      if ans is not None: break\n"
-        "    if ans is None and 'answers' in cfg:\n"
-        "     ad=cfg['answers']\n"
-        "     if isinstance(ad, dict):\n"
-        "      ans=_pick(ad.get(cid))\n"
-        "      if ans is None: ans=_pick(ad.get(str(cid)))\n"
-        "     elif isinstance(ad, (list,tuple)) and cid>=1 and cid<=len(ad):\n"
-        "      ans=_pick(ad[cid-1])\n"
-        "    if ans is None: ans=_pick(cfg.get('answer'))\n"
-        "   if ans is None and isinstance(cfg, (list,tuple)) and cid>=1 and cid<=len(cfg):\n"
-        "    ans=_pick(cfg[cid-1])\n"
-        "   if ans is None and isinstance(cfg, (str, unicode)):\n"
-        "    import re\n"
-        "    m=re.search(r'(?:^|[,;\\s])%d\\s*[:=]\\s*(\\d+)'%cid, str(cfg))\n"
-        "    if m: ans=int(m.group(1))\n"
         "   if ans is None:\n"
         "    ans=_pick(getattr(localeInfo,'CAPTCHA_ANSWER_%d'%cid, None))\n"
-        "   if ans is None:\n"
-        "    ql=q.lower()\n"
-        "    btns=getattr(wnd,'areaButtons',None)\n"
-        "    words=[w for w in ql.replace('?',' ').replace('.',' ').split() if len(w)>=4]\n"
-        "    if btns and words:\n"
-        "     for i,b in enumerate(list(btns)):\n"
-        "      names=[]\n"
-        "      for fn in ('GetFileName','GetTooltipText','GetText'):\n"
-        "       try: names.append(str(getattr(b,fn)()))\n"
-        "       except: pass\n"
-        "      blob=(' '.join(names)).lower()\n"
-        "      if blob and any(w in blob for w in words):\n"
-        "       ans=i\n"
-        "       break\n"
-        "   if ans is None:\n"
-        "    items=None\n"
-        "    if isinstance(cfg, dict):\n"
-        "     for k in ('items','names','cells','grid'):\n"
-        "      if k in cfg: items=cfg[k]; break\n"
-        "    ql=q.lower()\n"
-        "    if items:\n"
-        "     seq=items if isinstance(items,(list,tuple)) else (items.values() if isinstance(items,dict) else [])\n"
-        "     for i,name in enumerate(list(seq)[:9]):\n"
-        "      ns=str(name).lower()\n"
-        "      if ns and len(ns)>=3 and ns in ql:\n"
-        "       ans=i\n"
-        "       break\n"
+        "   btns=getattr(wnd,'areaButtons',None)\n"
+        "   slots=[]\n"
+        "   if btns:\n"
+        "    for i,b in enumerate(list(btns)[:9]):\n"
+        "     names=_blob(b)\n"
+        "     raw=' '.join(names)\n"
+        "     names.extend(_item_names(raw))\n"
+        "     blob=_low(' '.join(names))\n"
+        "     slots.append((i,blob,_txt(names)))\n"
+        "   keys=_keys(q)\n"
+        "   if ans is None and keys and slots:\n"
+        "    for i,blob,raw in slots:\n"
+        "     if not blob: continue\n"
+        "     if any(k in blob or blob.find(k)>=0 for k in keys):\n"
+        "      ans=i\n"
+        "      break\n"
+        "   _log('show cid=%d q=%r keys=%r slots=%r ans=%r'%(cid,q,keys,[(i,b) for i,b,r in slots],ans))\n"
         "   if ans is not None:\n"
         "    ans=int(ans)\n"
         "    if ans<0: ans=0\n"
         "    if ans>8: ans=ans%9\n"
         "    wnd.OnAreaClicked(ans)\n"
-        "    constInfo._farmbot_captcha_done=cid\n"
+        "    constInfo._farmbot_captcha_done=cid if cid else ans\n"
         "    _log('ok cid=%d ans=%d q=%s'%(cid,ans,q.replace('\\n',' ')))\n"
         "   else:\n"
         "    _log('miss cid=%d q=%s cfg=%r'%(cid,q.replace('\\n',' '),cfg))\n"
-        "except:\n"
-        " pass\n";
+        "except Exception:\n"
+        " try:\n"
+        "  f=open(r'C:\\Temp\\farmbot-captcha.log','ab'); f.write(traceback.format_exc()+'\\r\\n'); f.close()\n"
+        " except: pass\n";
     SafePyRun(kPy);
+    FILE* sf = nullptr;
+    int shown = 0;
+    if (fopen_s(&sf, "C:\\Temp\\farmbot-captcha.state", "rb") == 0 && sf)
+    {
+        char c = 0;
+        fread(&c, 1, 1, sf);
+        fclose(sf);
+        shown = c == '1' ? 1 : 0;
+    }
+    if (shown && !g_captchaShown)
+        NativeLog("captcha window open, solving while farming");
+    if (!shown && g_captchaShown)
+        NativeLog("captcha window closed");
+    g_captchaShown = shown;
 }
 
 static bool StartCombat(void* player, unsigned vid, float x, float y, bool click, bool autoAttack)
@@ -6138,8 +6204,8 @@ static void Drain()
         EnterCriticalSection(&g_lock);
     }
     LeaveCriticalSection(&g_lock);
-    ChaseTick(Player());
     CaptchaTick();
+    ChaseTick(Player());
     InterlockedExchange(&g_busy, 0);
 }
 
