@@ -146,9 +146,9 @@ public sealed class AutoCombatController
     {
         if (target == null)
             return Enter(CombatState.Verify, nowMs, null, null, "target missing while approaching");
-        if (TimedOut(config, nowMs))
+        if (TimedOut(config, nowMs) && !InRange(target, config))
             return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
-        if (IsStuck(snapshot.Player, config, nowMs) && !InRange(target, config))
+        if (!UseArthion(config) && IsStuck(snapshot.Player, config, nowMs) && !InRange(target, config))
             return Enter(CombatState.Recover, nowMs, target, null, "stuck approaching");
         if (UseArthion(config))
         {
@@ -156,14 +156,16 @@ public sealed class AutoCombatController
             {
                 _armedVid = target.Vid;
                 _lastAttackMs = nowMs;
+                _targetAcquiredMs = nowMs;
                 return Enter(CombatState.Attack, nowMs, target,
                     NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "in melee, keep walking until native range");
             }
+
+            return Stay(target, null, $"approaching VID {target.Vid} dist {target.Distance:0}");
         }
-        else if (InRange(target, config))
-        {
+
+        if (InRange(target, config))
             return Enter(CombatState.FaceTarget, nowMs, target, NativeCombatAction.Face(target.Vid), "in attack range");
-        }
 
         if (ShouldEmit(nowMs, config.MoveIntervalMs))
         {
@@ -192,9 +194,10 @@ public sealed class AutoCombatController
             if (!InMelee(target, config))
             {
                 _armedVid = 0;
-                return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "left melee range");
+                return Enter(CombatState.Approach, nowMs, target, null, "left melee range");
             }
 
+            _targetAcquiredMs = nowMs;
             if (_armedVid == target.Vid)
                 return Stay(target, null, $"auto-attacking VID {target.Vid}");
 
@@ -225,7 +228,7 @@ public sealed class AutoCombatController
             return Enter(CombatState.AcquireTarget, nowMs, null, null, "target dead or missing; selecting next");
         }
 
-        if (TimedOut(config, nowMs))
+        if (TimedOut(config, nowMs) && !InRange(target, config))
             return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
         if (UseArthion(config) ? InMelee(target, config) : InRange(target, config))
             return Enter(CombatState.Attack, nowMs, target, null, "target still attackable");
@@ -236,13 +239,16 @@ public sealed class AutoCombatController
     {
         _recoveries++;
         var target = CurrentTarget(snapshot, config);
-        if (target == null || _recoveries >= 3 || TimedOut(config, nowMs))
+        if (target == null || _recoveries >= 3 || (TimedOut(config, nowMs) && (target == null || !InRange(target, config))))
         {
             _targetVid = 0;
-            return Enter(CombatState.AcquireTarget, nowMs, null, NativeCombatAction.Stop(), "recover: drop target");
+            return Enter(CombatState.AcquireTarget, nowMs, null,
+                UseArthion(config) ? null : NativeCombatAction.Stop(), "recover: drop target");
         }
 
         NoteMove(snapshot.Player, nowMs);
+        if (UseArthion(config))
+            return Enter(CombatState.Approach, nowMs, target, null, "recover: keep native chase");
         return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y),
             "recover: re-click actor");
     }
@@ -257,8 +263,6 @@ public sealed class AutoCombatController
         if (!IsLegalPveTarget(found))
             return null;
         if (IsDead(found))
-            return null;
-        if (TargetSelector.Select(snapshot, config, _targetVid)?.Vid != _targetVid && !found.IsCombatant)
             return null;
         return found;
     }
@@ -279,10 +283,11 @@ public sealed class AutoCombatController
         target.Distance <= config.AttackRange;
 
     private static bool InMelee(EntityState target, BotConfig config) =>
-        target.Distance > 1f && target.Distance <= Math.Min(config.AttackRange, 140f);
+        target.Distance <= Math.Min(config.AttackRange, 180f);
 
     private static bool UseArthion(BotConfig config) =>
-        config.ClientProfile == ClientProfile.Arthion;
+        config.ClientProfile == ClientProfile.Arthion ||
+        config.ClientProfile == ClientProfile.Baerim;
 
     private bool TimedOut(BotConfig config, long nowMs) =>
         _targetVid != 0 && _targetAcquiredMs != 0 && nowMs - _targetAcquiredMs >= config.TargetTimeoutMs;

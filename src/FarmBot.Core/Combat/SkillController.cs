@@ -14,7 +14,8 @@ public sealed class SkillController
         bool hasTarget,
         long nowMs)
     {
-        if (config.ClientProfile != ClientProfile.Arthion || skills == null || skills.Count == 0)
+        if ((config.ClientProfile != ClientProfile.Arthion && config.ClientProfile != ClientProfile.Baerim) ||
+            skills == null || skills.Count == 0)
             return null;
 
         var enabled = config.SkillEnabledIndexes ?? new List<uint>();

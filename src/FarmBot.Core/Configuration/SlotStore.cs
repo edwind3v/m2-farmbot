@@ -9,7 +9,8 @@ namespace FarmBot.Core.Configuration;
 public enum ClientProfile
 {
     Normal,
-    Arthion
+    Arthion,
+    Baerim
 }
 
 public sealed class ClientSlot
@@ -48,18 +49,24 @@ public sealed class LauncherState
     public List<ClientSlot> Slots { get; set; } = new();
     public ProfileLaunchState Normal { get; set; } = new();
     public ProfileLaunchState Arthion { get; set; } = new();
+    public ProfileLaunchState Baerim { get; set; } = new();
 
     [System.Text.Json.Serialization.JsonIgnore]
     public ClientProfile SelectedProfile => SlotStore.ParseProfile(Profile);
 
     [System.Text.Json.Serialization.JsonIgnore]
-    public ProfileLaunchState Active =>
-        SelectedProfile == ClientProfile.Arthion ? Arthion : Normal;
+    public ProfileLaunchState Active => SelectedProfile switch
+    {
+        ClientProfile.Baerim => Baerim,
+        ClientProfile.Arthion => Arthion,
+        _ => Normal
+    };
 
     [System.Text.Json.Serialization.JsonIgnore]
     public IEnumerable<ClientSlot> AllSlots =>
         (Normal?.Slots ?? Enumerable.Empty<ClientSlot>())
-        .Concat(Arthion?.Slots ?? Enumerable.Empty<ClientSlot>());
+        .Concat(Arthion?.Slots ?? Enumerable.Empty<ClientSlot>())
+        .Concat(Baerim?.Slots ?? Enumerable.Empty<ClientSlot>());
 }
 
 public static class SlotStore
@@ -189,31 +196,46 @@ public static class SlotStore
         }
     }
 
-    public static ClientProfile ParseProfile(string? value) =>
-        string.Equals(value, nameof(ClientProfile.Normal), StringComparison.OrdinalIgnoreCase)
-            ? ClientProfile.Normal
-            : ClientProfile.Arthion;
+    public static ClientProfile ParseProfile(string? value)
+    {
+        if (string.Equals(value, nameof(ClientProfile.Normal), StringComparison.OrdinalIgnoreCase))
+            return ClientProfile.Normal;
+        if (string.Equals(value, nameof(ClientProfile.Baerim), StringComparison.OrdinalIgnoreCase))
+            return ClientProfile.Baerim;
+        return ClientProfile.Arthion;
+    }
 
-    public static string ProfileName(ClientProfile profile) =>
-        profile == ClientProfile.Normal ? nameof(ClientProfile.Normal) : nameof(ClientProfile.Arthion);
+    public static string ProfileName(ClientProfile profile) => profile switch
+    {
+        ClientProfile.Normal => nameof(ClientProfile.Normal),
+        ClientProfile.Baerim => nameof(ClientProfile.Baerim),
+        _ => nameof(ClientProfile.Arthion)
+    };
 
     public static bool IsArthionPath(string? path) =>
         !string.IsNullOrWhiteSpace(path) &&
         Path.GetFileName(path).Contains("Arthion", StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsBaerimPath(string? path) =>
+        !string.IsNullOrWhiteSpace(path) &&
+        Path.GetFileName(path).Contains("baerim", StringComparison.OrdinalIgnoreCase);
+
     public static void Sanitize(LauncherState state)
     {
         state.Normal ??= new ProfileLaunchState();
         state.Arthion ??= new ProfileLaunchState();
+        state.Baerim ??= new ProfileLaunchState();
         state.Normal.Slots ??= new List<ClientSlot>();
         state.Arthion.Slots ??= new List<ClientSlot>();
+        state.Baerim.Slots ??= new List<ClientSlot>();
         state.Normal.ClientPath ??= "";
         state.Arthion.ClientPath ??= "";
+        state.Baerim.ClientPath ??= "";
         state.ClientPath ??= "";
         state.Slots ??= new List<ClientSlot>();
         MigrateLegacySlots(state);
         state.Profile = ProfileName(ParseProfile(state.Profile));
-        if (state.Active.Slots.Count == 0)
+        if (state.SelectedProfile != ClientProfile.Baerim && state.Active.Slots.Count == 0)
         {
             if (state.Arthion.Slots.Count > 0)
                 state.Profile = nameof(ClientProfile.Arthion);
@@ -224,6 +246,10 @@ public static class SlotStore
             state.Normal.ClientPath = BotConfig.CreateDefault().ClientPath;
         if (string.IsNullOrWhiteSpace(state.Arthion.ClientPath) && IsArthionPath(state.ClientPath))
             state.Arthion.ClientPath = state.ClientPath;
+        if (string.IsNullOrWhiteSpace(state.Baerim.ClientPath) && IsBaerimPath(state.ClientPath))
+            state.Baerim.ClientPath = state.ClientPath;
+        if (string.IsNullOrWhiteSpace(state.Baerim.ClientPath))
+            state.Baerim.ClientPath = @"E:\Baerim\client\baerim.exe";
         MirrorActive(state);
         foreach (var slot in state.AllSlots)
             SanitizeSlot(slot);
@@ -244,6 +270,8 @@ public static class SlotStore
 
         if (IsArthionPath(state.ClientPath))
             state.Arthion.ClientPath = state.ClientPath;
+        else if (IsBaerimPath(state.ClientPath))
+            state.Baerim.ClientPath = state.ClientPath;
         else if (!string.IsNullOrWhiteSpace(state.ClientPath))
             state.Normal.ClientPath = state.ClientPath;
 
@@ -251,7 +279,7 @@ public static class SlotStore
             state.Profile = nameof(ClientProfile.Arthion);
     }
 
-    private static void MirrorActive(LauncherState state)
+    public static void MirrorActive(LauncherState state)
     {
         var active = state.Active;
         state.ClientPath = active.ClientPath ?? "";

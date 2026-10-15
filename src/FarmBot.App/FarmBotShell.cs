@@ -154,7 +154,8 @@ public sealed class FarmBotShell : IDisposable
         get
         {
             lock (_configGate)
-                return _config.ClientProfile == ClientProfile.Arthion;
+                return _config.ClientProfile == ClientProfile.Arthion ||
+                       _config.ClientProfile == ClientProfile.Baerim;
         }
     }
 
@@ -165,7 +166,8 @@ public sealed class FarmBotShell : IDisposable
         get
         {
             lock (_configGate)
-                return _config.ClientProfile == ClientProfile.Arthion;
+                return _config.ClientProfile == ClientProfile.Arthion ||
+                       _config.ClientProfile == ClientProfile.Baerim;
         }
     }
 

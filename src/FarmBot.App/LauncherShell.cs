@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FarmBot.Core.Combat;
 using FarmBot.Core.Configuration;
 using FarmBot.Core.Logging;
@@ -101,16 +102,31 @@ public sealed class LauncherShell : IDisposable
 
     public void Tick()
     {
-        lock (_gate)
+        try
         {
-            foreach (var session in _sessions.Values.ToArray())
+            lock (_gate)
             {
-                session.Shell.Tick();
-                ApplyLiveSession(session);
+                foreach (var session in _sessions.Values.ToArray())
+                {
+                    try
+                    {
+                        session.Shell.Tick();
+                        ApplyLiveSession(session);
+                    }
+                    catch (Exception ex)
+                    {
+                        session.Status = "session error";
+                        Status = "session error: " + ex.Message;
+                    }
+                }
             }
-        }
 
-        Notify();
+            Notify();
+        }
+        catch (Exception ex)
+        {
+            Status = "launcher tick: " + ex.Message;
+        }
     }
 
     public void SetProfile(ClientProfile profile)
@@ -119,6 +135,7 @@ public sealed class LauncherShell : IDisposable
         if (string.Equals(_state.Profile, name, StringComparison.Ordinal))
             return;
         _state.Profile = name;
+        SlotStore.MirrorActive(_state);
         if (Editor != null && !_state.Slots.Contains(Editor))
         {
             Editor = null;
@@ -127,9 +144,12 @@ public sealed class LauncherShell : IDisposable
 
         if (_state.Slots.Count == 0)
             _state.Slots.Add(new ClientSlot());
-        Status = profile == ClientProfile.Arthion
-            ? "Arthion mode — walk to the target, then attack."
-            : "Normal mode — original Metin2 client loading and combat.";
+        Status = profile switch
+        {
+            ClientProfile.Baerim => "Baerim mode — walk to the target, then attack.",
+            ClientProfile.Arthion => "Arthion mode — walk to the target, then attack.",
+            _ => "Normal mode — original Metin2 client loading and combat."
+        };
         Persist();
         Notify();
     }
@@ -196,12 +216,12 @@ public sealed class LauncherShell : IDisposable
 
     public void Play(ClientSlot slot)
     {
+        ClientSession? stale = null;
         lock (_gate)
         {
-            if (_sessions.ContainsKey(slot.Id))
+            if (_sessions.TryGetValue(slot.Id, out var existing))
             {
-                var existing = _sessions[slot.Id];
-                if (!existing.Form.IsDisposed)
+                if (existing.ClientAlive && !existing.Form.IsDisposed)
                 {
                     existing.Form.BringToFront();
                     existing.Form.WindowState = FormWindowState.Normal;
@@ -209,8 +229,13 @@ public sealed class LauncherShell : IDisposable
                     Notify();
                     return;
                 }
+
+                _sessions.Remove(slot.Id);
+                stale = existing;
             }
         }
+
+        stale?.Close();
 
         var path = _state.ClientPath;
         if (!File.Exists(path))
@@ -236,6 +261,7 @@ public sealed class LauncherShell : IDisposable
         }
 
         slot.ChannelName = channel.Name;
+        StopStrayClients(path);
         var pipe = LoaderOutput.UniquePipeName(slot.Id);
         var host = new ActionModuleHost(pipe) { Profile = _state.SelectedProfile };
         if (!host.TryLaunch(path, out var launchStatus, out var pid))
@@ -272,7 +298,12 @@ public sealed class LauncherShell : IDisposable
         var form = new MainForm(shell, WindowTitle(slot));
         var session = new ClientSession(slot, pid, shell, form, host, sink);
         form.SessionClosing = () => RemoveSession(slot.Id, killClient: true);
-        session.Ended += () => RemoveSession(slot.Id, killClient: false);
+        session.Ended += () =>
+        {
+            session.Status = "client exited";
+            Status = "client exited — launcher stays open";
+            Notify();
+        };
         lock (_gate)
             _sessions[slot.Id] = session;
         session.Status = "launching";
@@ -297,7 +328,15 @@ public sealed class LauncherShell : IDisposable
             Status = playStatus;
             if (!string.IsNullOrWhiteSpace(slot.CharacterName))
             {
-                form.BeginInvoke(() => form.Text = WindowTitle(slot));
+                try
+                {
+                    if (!form.IsDisposed && form.IsHandleCreated)
+                        form.BeginInvoke(() => form.Text = WindowTitle(slot));
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
                 Persist();
             }
 
@@ -376,6 +415,41 @@ public sealed class LauncherShell : IDisposable
             _sync.Post(_ => Changed?.Invoke(), null);
         else
             Changed?.Invoke();
+    }
+
+    private static void StopStrayClients(string exePath)
+    {
+        var name = Path.GetFileNameWithoutExtension(exePath);
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+        var deadline = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < deadline)
+        {
+            var leftover = Process.GetProcessesByName(name)
+                .Concat(Process.GetProcessesByName("FarmBotLoad"))
+                .ToArray();
+            if (leftover.Length == 0)
+                break;
+            foreach (var process in leftover)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(2000);
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+
+            Thread.Sleep(300);
+        }
+
+        Thread.Sleep(5000);
     }
 
     private static string WindowTitle(ClientSlot slot)

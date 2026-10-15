@@ -247,4 +247,35 @@ public class PlayerActionLayoutTests
         Assert.NotEqual(0x608290u, player.GetSkillIndexRva);
         Assert.NotEqual(0x608290u, player.ClickSkillSlotRva);
     }
+
+    [Fact]
+    public void RecoversBaerimPlayerWhenPresent()
+    {
+        const string baerim = @"E:\Baerim\client\baerim.exe";
+        if (!File.Exists(baerim))
+            return;
+
+        var recovered = BaerimActionLayoutRecoverer.Recover(baerim);
+        var player = recovered.Player;
+        var entity = recovered.Entity;
+        var login = recovered.Login;
+        var rawEntity = FarmBot.Core.Entities.ClientReleaseLayout.Recover(baerim);
+        var dump = $"player=0x{player.PlayerSingletonRva:X} charMgr=0x{entity.SingletonRva:X} map=+0x{entity.MapDisplacement:X} rawMap=+0x{rawEntity.MapDisplacement:X} graphic=+0x{entity.GraphicDisplacement:X} race=+0x{entity.RaceDisplacement:X} vnum=+0x{entity.VirtualNumberDisplacement:X} type=+0x{entity.ActorTypeDisplacement:X} pos=+0x{entity.PixelXDisplacement:X}/+0x{entity.PixelYDisplacement:X}/+0x{entity.PixelZDisplacement:X} name=+0x{entity.InstanceNameDisplacement:X} main=+0x{entity.MainPointerDisplacement:X} can={entity.CanEnumerate} negateY={entity.NegatePixelY} setTargetSlot=0x{player.SetTargetVtableSlot:X} getStatusSlot=0x{player.GetStatusVtableSlot:X} clickSkill=0x{player.ClickSkillSlotRva:X} combo=0x{player.ComboAttackRva:X} getItemIndexSlot=0x{recovered.GetItemIndexVtableSlot:X} getItemCountSlot=0x{recovered.GetItemCountVtableSlot:X} isSkillCool=0x{recovered.IsSkillCoolTimeRva:X} packMgr=0x{recovered.PackMgrRva:X} packGet=0x{recovered.PackGetRva:X} net=0x{login.NetStreamRva:X} loginCan={login.CanLogin}\n" +
+                   string.Join("\n", recovered.Evidence) + "\n--- entity ---\n" +
+                   string.Join("\n", entity.Evidence);
+        Directory.CreateDirectory(@"C:\Temp");
+        File.WriteAllText(@"C:\Temp\baerim-player.txt", dump);
+        Assert.Equal(0x3B74090u, player.PlayerSingletonRva);
+        Assert.Equal(0x3B74094u, entity.SingletonRva);
+        Assert.Equal(0x84u, entity.MapDisplacement);
+        Assert.Equal(0x64u, player.SetTargetVtableSlot);
+        Assert.Equal(0x10u, player.GetStatusVtableSlot);
+        Assert.Equal(0x44u, recovered.GetItemIndexVtableSlot);
+        Assert.Equal(0x4Cu, recovered.GetItemCountVtableSlot);
+        Assert.Equal(0x1B8A50u, player.ClickSkillSlotRva);
+        Assert.Equal(0x1AA5B0u, player.ComboAttackRva);
+        Assert.True(login.CanLogin, dump);
+        Assert.NotEqual(0x3956A14u, recovered.PackMgrRva);
+        Assert.NotEqual(0x5054A0u, recovered.PackGetRva);
+    }
 }

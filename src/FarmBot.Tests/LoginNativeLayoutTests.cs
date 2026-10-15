@@ -361,6 +361,65 @@ public class SlotStoreTests
         Assert.Equal("Hero", slot.CharacterName);
         Assert.Equal(1, slot.CharacterSlot);
     }
+
+    [Fact]
+    public void SanitizeKeepsEmptyBaerimSelectionAndDoesNotTouchArthionSlots()
+    {
+        var state = new LauncherState
+        {
+            Profile = nameof(ClientProfile.Baerim),
+            Arthion =
+            {
+                ClientPath = @"E:\Arthion\game\Arthion.exe",
+                Slots = { new ClientSlot { Account = "arthion-acc", CharacterName = "lockedin" } }
+            }
+        };
+        SlotStore.Sanitize(state);
+        Assert.Equal(ClientProfile.Baerim, state.SelectedProfile);
+        Assert.Equal(@"E:\Baerim\client\baerim.exe", state.ClientPath);
+        Assert.Equal(@"E:\Baerim\client\baerim.exe", state.Baerim.ClientPath);
+        Assert.Empty(state.Slots);
+        Assert.Single(state.Arthion.Slots);
+        Assert.Equal("arthion-acc", state.Arthion.Slots[0].Account);
+        Assert.Equal(@"E:\Arthion\game\Arthion.exe", state.Arthion.ClientPath);
+    }
+
+    [Fact]
+    public void SwitchingProfilesMirrorsOnlyThatBucketAndKeepsSeparateClientPaths()
+    {
+        var state = new LauncherState
+        {
+            Profile = nameof(ClientProfile.Arthion),
+            Arthion =
+            {
+                ClientPath = @"E:\Arthion\game\Arthion.exe",
+                Slots = { new ClientSlot { Account = "arthion-acc", CharacterName = "lockedin" } }
+            },
+            Baerim =
+            {
+                ClientPath = @"E:\Baerim\client\baerim.exe",
+                Slots = { new ClientSlot { Account = "baerim-acc", CharacterName = "baerim-hero" } }
+            }
+        };
+        SlotStore.Sanitize(state);
+        Assert.Equal(ClientProfile.Arthion, state.SelectedProfile);
+        Assert.Equal("arthion-acc", state.Slots[0].Account);
+        Assert.Equal(@"E:\Arthion\game\Arthion.exe", state.ClientPath);
+
+        state.Profile = nameof(ClientProfile.Baerim);
+        SlotStore.MirrorActive(state);
+        Assert.Equal("baerim-acc", state.Slots[0].Account);
+        Assert.Equal(@"E:\Baerim\client\baerim.exe", state.ClientPath);
+        state.Slots[0].Account = "mutated-baerim";
+        Assert.Equal("arthion-acc", state.Arthion.Slots[0].Account);
+        Assert.Equal(@"E:\Arthion\game\Arthion.exe", state.Arthion.ClientPath);
+
+        state.Profile = nameof(ClientProfile.Arthion);
+        SlotStore.MirrorActive(state);
+        Assert.Equal("arthion-acc", state.Slots[0].Account);
+        Assert.Equal("mutated-baerim", state.Baerim.Slots[0].Account);
+        Assert.Equal(@"E:\Baerim\client\baerim.exe", state.Baerim.ClientPath);
+    }
 }
 
 public class LoaderOutputTests

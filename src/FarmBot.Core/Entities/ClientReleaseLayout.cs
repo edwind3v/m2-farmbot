@@ -70,10 +70,10 @@ public static class ClientReleaseLayout
         var mapDisp = FindMapDisplacement(pe, create, evidence);
         if (mapDisp == 0)
             mapDisp = FindMapDisplacementFromMethods(pe, methods, singleton, evidence);
-        if (mapDisp == 0 && singleton != 0)
+        if (mapDisp < 0x10 && singleton != 0)
         {
             mapDisp = 0x20;
-            evidence.Add("CreateInstance missing; using CPythonCharacterManager m_kAliveInstMap default this+0x20.");
+            evidence.Add("Alive-map displacement was below this+0x10; using CPythonCharacterManager m_kAliveInstMap default this+0x20.");
         }
 
         var mainDisp = FindMainPointerDisplacement(pe, methods, evidence);
@@ -269,6 +269,9 @@ public static class ClientReleaseLayout
 
         // RegisterInstance / GetInstancePtr compare _Isnil at node+0x0D, then key at +0x10.
         // The map object is the lea/add [reg+disp] immediately before that check.
+        // Displacements below 0x10 are node fields / IAbstract this-adjust, not m_kAliveInstMap.
+        uint first = 0;
+        var firstNil = -1;
         for (var i = off; i < off + window && i + 4 < pe.Length; i++)
         {
             if (pe.Byte(i) != 0x80 || pe.Byte(i + 2) != 0x0D || pe.Byte(i + 3) != 0x00)
@@ -279,46 +282,37 @@ public static class ClientReleaseLayout
 
             for (var j = i; j >= off && i - j < 0x50; j--)
             {
+                uint disp = 0;
                 if (pe.Byte(j) == 0x8D)
                 {
                     var modrm = pe.Byte(j + 1);
                     if ((modrm & 0xC0) == 0x40)
-                    {
-                        var disp = pe.Byte(j + 2);
-                        if (disp is > 0 and <= 0x40)
-                        {
-                            mapDisp = disp;
-                            isNilFile = i;
-                            return true;
-                        }
-                    }
+                        disp = pe.Byte(j + 2);
+                }
+                else if (pe.Byte(j) == 0x83 && pe.Byte(j + 1) == 0xC1)
+                    disp = pe.Byte(j + 2);
+                else if (pe.Byte(j) == 0x81 && pe.Byte(j + 1) == 0xC1)
+                    disp = pe.ReadU32(j + 2);
+                if (disp is < 0x10 or > 0x40)
+                    continue;
+                if (disp == 0x20)
+                {
+                    mapDisp = 0x20;
+                    isNilFile = i;
+                    return true;
                 }
 
-                if (pe.Byte(j) == 0x83 && pe.Byte(j + 1) == 0xC1)
+                if (first == 0)
                 {
-                    var disp = pe.Byte(j + 2);
-                    if (disp is > 0 and <= 0x40)
-                    {
-                        mapDisp = disp;
-                        isNilFile = i;
-                        return true;
-                    }
-                }
-
-                if (pe.Byte(j) == 0x81 && pe.Byte(j + 1) == 0xC1)
-                {
-                    var disp = pe.ReadU32(j + 2);
-                    if (disp is > 0 and <= 0x40)
-                    {
-                        mapDisp = disp;
-                        isNilFile = i;
-                        return true;
-                    }
+                    first = disp;
+                    firstNil = i;
                 }
             }
         }
 
-        return false;
+        mapDisp = first;
+        isNilFile = firstNil;
+        return first != 0;
     }
 
     private static List<uint> RelativeCalls(MappedPe pe, uint rva, int window)

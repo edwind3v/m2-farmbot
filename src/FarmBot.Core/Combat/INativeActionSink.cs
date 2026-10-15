@@ -1,3 +1,5 @@
+using FarmBot.Core.Models;
+
 namespace FarmBot.Core.Combat;
 
 public interface INativeActionSink
@@ -26,4 +28,10 @@ public interface INativeActionSink
     }
 
     bool TryUseSkill(int slot, uint targetVid) => false;
+
+    bool TryReadEntities(out IReadOnlyList<EntityState> entities)
+    {
+        entities = Array.Empty<EntityState>();
+        return false;
+    }
 }

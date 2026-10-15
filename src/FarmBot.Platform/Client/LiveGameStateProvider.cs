@@ -1,5 +1,6 @@
 using System.Text;
 using FarmBot.Core.Combat;
+using FarmBot.Core.Configuration;
 using FarmBot.Core.Entities;
 using FarmBot.Core.Geometry;
 using FarmBot.Core.Logging;
@@ -244,8 +245,17 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             return _layout.CanEnumerate || _playerLayout is { PlayerSingletonRva: > 0x1000 };
         }
 
-        _layout = ClientReleaseLayout.Recover(path);
-        _playerLayout = PlayerActionLayoutRecoverer.Recover(path);
+        if (SlotStore.IsBaerimPath(path))
+        {
+            var recovered = BaerimActionLayoutRecoverer.Recover(path);
+            _layout = recovered.Entity;
+            _playerLayout = recovered.Player;
+        }
+        else
+        {
+            _layout = ClientReleaseLayout.Recover(path);
+            _playerLayout = PlayerActionLayoutRecoverer.Recover(path);
+        }
         _layoutPath = path;
         if (_layout.CanEnumerate)
         {

@@ -20,7 +20,8 @@ public sealed class PotionController
         int purpleRemain,
         long nowMs)
     {
-        if (config.ClientProfile != ClientProfile.Arthion || pots == null || pots.Count == 0)
+        if ((config.ClientProfile != ClientProfile.Arthion && config.ClientProfile != ClientProfile.Baerim) ||
+            pots == null || pots.Count == 0)
             return null;
         if (nowMs - _lastUseMs < CooldownMs)
             return null;

@@ -45,7 +45,7 @@ public class AutoCombatControllerTests
 
         var approach = controller.Tick(far, config, true, 5_200);
         Assert.Equal(CombatState.Approach, approach.State);
-        Assert.Equal(NativeActionKind.PressActor, approach.Action!.Kind);
+        Assert.Null(approach.Action);
 
         var near = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 80, 0));
         var attack = controller.Tick(near, config, true, 5_400);
@@ -60,6 +60,89 @@ public class AutoCombatControllerTests
     }
 
     [Fact]
+    public void KeepsAttackingWhenStandingOnAMetin()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.MoveIntervalMs = 100;
+        config.TargetTimeoutMs = 20_000;
+        config.ClientProfile = ClientProfile.Baerim;
+
+        var close = Fixtures.World(Fixtures.Mob(41, "Metin of Darkness", EntityKind.Metin, 40, 0));
+        controller.Tick(close, config, true, 1_000);
+        var attack = controller.Tick(close, config, true, 1_200);
+        Assert.Equal(CombatState.Attack, attack.State);
+        Assert.Equal(41u, attack.Target!.Vid);
+
+        var onTop = Fixtures.World(Fixtures.Mob(41, "Metin of Darkness", EntityKind.Metin, 0, 0));
+        var hold = controller.Tick(onTop, config, true, 1_400);
+        Assert.Equal(CombatState.Attack, hold.State);
+        Assert.Equal(41u, controller.TargetVid);
+        Assert.DoesNotContain("left melee", hold.Reason, StringComparison.OrdinalIgnoreCase);
+
+        var still = controller.Tick(onTop, config, true, 25_000);
+        Assert.Equal(CombatState.Attack, still.State);
+        Assert.Equal(41u, controller.TargetVid);
+    }
+
+    [Fact]
+    public void DoesNotReclickTheSameBaerimVidWhileApproaching()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.MoveIntervalMs = 100;
+        config.ClientProfile = ClientProfile.Baerim;
+
+        var far = Fixtures.World(Fixtures.Mob(71, "Metin of Darkness", EntityKind.Metin, 600, 0));
+        var acquired = controller.Tick(far, config, true, 1_000);
+        Assert.Equal(NativeActionKind.PressActor, acquired.Action!.Kind);
+        Assert.Equal(71u, acquired.Target!.Vid);
+
+        var again = controller.Tick(far, config, true, 1_200);
+        Assert.Equal(CombatState.Approach, again.State);
+        Assert.Equal(71u, controller.TargetVid);
+        Assert.Null(again.Action);
+
+        var third = controller.Tick(far, config, true, 1_800);
+        Assert.Null(third.Action);
+        Assert.Equal(71u, controller.TargetVid);
+
+        config.StuckTimeoutMs = 200;
+        var still = controller.Tick(far, config, true, 2_200);
+        Assert.Equal(CombatState.Approach, still.State);
+        Assert.Equal(71u, controller.TargetVid);
+        Assert.Null(still.Action);
+        Assert.DoesNotContain("recover", still.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("stop", still.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void StaysInAttackAtStoneEdgeDistance()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.ClientProfile = ClientProfile.Baerim;
+
+        var edge = Fixtures.World(Fixtures.Mob(81, "Metin of Darkness", EntityKind.Metin, 143, 0));
+        controller.Tick(edge, config, true, 2_000);
+        var attack = controller.Tick(edge, config, true, 2_200);
+        Assert.Equal(CombatState.Attack, attack.State);
+        Assert.Equal(81u, attack.Target!.Vid);
+        Assert.DoesNotContain("left melee", attack.Reason, StringComparison.OrdinalIgnoreCase);
+
+        var hold = controller.Tick(edge, config, true, 2_400);
+        Assert.Equal(CombatState.Attack, hold.State);
+        Assert.Equal(81u, controller.TargetVid);
+        Assert.Null(hold.Action);
+    }
+
+    [Fact]
     public void WalksToATargetInsideFarmRangeButOutsideMelee()
     {
         var controller = new AutoCombatController();
@@ -69,11 +152,11 @@ public class AutoCombatControllerTests
         config.MoveIntervalMs = 100;
 
         var mid = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 220, 0));
-        controller.Tick(mid, config, true, 5_000);
+        var acquired = controller.Tick(mid, config, true, 5_000);
+        Assert.Equal(NativeActionKind.PressActor, acquired.Action!.Kind);
         var approach = controller.Tick(mid, config, true, 5_200);
         Assert.Equal(CombatState.Approach, approach.State);
-        Assert.Equal(NativeActionKind.PressActor, approach.Action!.Kind);
-        Assert.NotEqual(NativeActionKind.Attack, approach.Action.Kind);
+        Assert.Null(approach.Action);
     }
 
     [Fact]
@@ -85,12 +168,12 @@ public class AutoCombatControllerTests
         config.AttackRange = 300;
         config.MoveIntervalMs = 50;
 
-        var justOutside = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 160, 0));
-        controller.Tick(justOutside, config, true, 5_000);
+        var justOutside = Fixtures.World(Fixtures.Mob(21, "Wild Dog", EntityKind.Monster, 190, 0));
+        var acquired = controller.Tick(justOutside, config, true, 5_000);
+        Assert.Equal(NativeActionKind.PressActor, acquired.Action!.Kind);
         var tick = controller.Tick(justOutside, config, true, 5_200);
         Assert.Equal(CombatState.Approach, tick.State);
-        Assert.Equal(NativeActionKind.PressActor, tick.Action!.Kind);
-        Assert.NotEqual(NativeActionKind.Attack, tick.Action.Kind);
+        Assert.Null(tick.Action);
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 using System.IO.Pipes;
 using System.Runtime.Versioning;
+using FarmBot.Core.Entities;
+using FarmBot.Core.Models;
 
 namespace FarmBot.Core.Combat;
 
@@ -413,6 +415,19 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }, updateStatus: false).Ok;
     }
 
+    public bool TryReadEntities(out IReadOnlyList<EntityState> entities)
+    {
+        entities = Array.Empty<EntityState>();
+        Ensure();
+        if (!_client.Connected)
+            return false;
+        var response = _client.Submit(ActionProtocol.GetEntities, 0, true, updateStatus: false);
+        if (!response.Ok)
+            return false;
+        entities = ParseActors(response.Entities);
+        return true;
+    }
+
     private static IReadOnlyList<PotionStack> ParsePots(System.Text.Json.JsonElement pots)
     {
         string json;
@@ -520,6 +535,63 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         {
             return Array.Empty<LearnedSkill>();
         }
+    }
+
+    private static IReadOnlyList<EntityState> ParseActors(System.Text.Json.JsonElement actors)
+    {
+        string json;
+        if (actors.ValueKind == System.Text.Json.JsonValueKind.Array)
+            json = actors.GetRawText();
+        else if (actors.ValueKind == System.Text.Json.JsonValueKind.String)
+            json = actors.GetString() ?? "";
+        else
+            return Array.Empty<EntityState>();
+        if (string.IsNullOrWhiteSpace(json))
+            return Array.Empty<EntityState>();
+        try
+        {
+            var rows = System.Text.Json.JsonSerializer.Deserialize<List<ActorWire>>(json, FarmBot.Core.Json.JsonDefaults.Instance);
+            if (rows == null || rows.Count == 0)
+                return Array.Empty<EntityState>();
+            var list = new List<EntityState>(rows.Count);
+            foreach (var row in rows)
+            {
+                if (row.Vid == 0)
+                    continue;
+                var type = row.Type <= (uint)ActorType.Object ? (ActorType)row.Type : ActorType.Enemy;
+                list.Add(new EntityState
+                {
+                    Vid = row.Vid,
+                    Name = row.Name ?? "",
+                    Type = type,
+                    TypeSpecified = true,
+                    Kind = EntityMapping.ToKind(type),
+                    Vnum = row.Vnum,
+                    X = row.X,
+                    Y = row.Y,
+                    Z = row.Z,
+                    Hp = 1,
+                    MaxHp = 1
+                });
+            }
+
+            return list;
+        }
+        catch
+        {
+            return Array.Empty<EntityState>();
+        }
+    }
+
+    private sealed class ActorWire
+    {
+        public uint Vid { get; set; }
+        public uint Type { get; set; }
+        public uint Vnum { get; set; }
+        public float X { get; set; }
+        public float Y { get; set; }
+        public float Z { get; set; }
+        public string? Name { get; set; }
     }
 
     private sealed class SkillWire

@@ -16,7 +16,7 @@ public sealed class CharacterKit
 public static class CharacterKitStore
 {
     public const int PotionPollMs = 250;
-    public const int SkillPollMs = 150;
+    public const int SkillPollMs = 10000;
 
     public static string Root(string baseDirectory) => Path.Combine(baseDirectory, "cache");
 

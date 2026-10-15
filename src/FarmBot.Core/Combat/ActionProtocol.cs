@@ -52,6 +52,7 @@ public sealed class ActionResponse
     public bool InWorld { get; set; }
     public System.Text.Json.JsonElement Pots { get; set; }
     public System.Text.Json.JsonElement Skills { get; set; }
+    public System.Text.Json.JsonElement Entities { get; set; }
     public int GreenRemain { get; set; }
     public int PurpleRemain { get; set; }
 }
@@ -81,6 +82,7 @@ public static class ActionProtocol
     public const string GetPots = "get_pots";
     public const string UseItem = "use_item";
     public const string GetSkills = "get_skills";
+    public const string GetEntities = "get_entities";
     public const string UseSkill = "use_skill";
     public const int Version = 1;
 
@@ -118,7 +120,7 @@ public static class ActionProtocol
         if (!ReadExact(stream, header))
             return false;
         var length = BinaryPrimitives.ReadInt32LittleEndian(header);
-        if (length <= 0 || length > 64 * 1024)
+        if (length <= 0 || length > 512 * 1024)
             return false;
         payload = new byte[length];
         return ReadExact(stream, payload);

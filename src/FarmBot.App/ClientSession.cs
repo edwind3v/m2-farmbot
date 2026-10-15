@@ -34,6 +34,25 @@ public sealed class ClientSession : IDisposable
     public ActionModuleHost Host { get; }
     public AdapterActionSink Sink { get; }
     public string Status { get; set; } = "launching";
+    public bool ClientAlive
+    {
+        get
+        {
+            try
+            {
+                if (_process != null)
+                    return !_process.HasExited;
+                if (ProcessId <= 0)
+                    return false;
+                using var process = Process.GetProcessById(ProcessId);
+                return !process.HasExited;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
     public long LastCredentialProbeAt { get; set; }
     public event Action? Ended;
 
@@ -95,19 +114,16 @@ public sealed class ClientSession : IDisposable
             _process.EnableRaisingEvents = true;
             _process.Exited += (_, _) =>
             {
-                Status = "idle";
-                Ended?.Invoke();
+                Status = "client exited";
                 try
                 {
-                    if (!Form.IsDisposed && Form.IsHandleCreated)
-                        Form.BeginInvoke(Form.Close);
+                    Shell.StopBot();
                 }
-                catch (ObjectDisposedException)
+                catch
                 {
                 }
-                catch (InvalidOperationException)
-                {
-                }
+
+                Ended?.Invoke();
             };
         }
         catch (ArgumentException)

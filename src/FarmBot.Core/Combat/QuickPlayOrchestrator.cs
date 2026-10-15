@@ -31,12 +31,19 @@ public sealed class QuickPlayOrchestrator
 
         var characterSlot = Math.Clamp(slot.CharacterSlot, 0, 4);
         var deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(timeoutMs, 30000));
-        Thread.Sleep(100);
+        Thread.Sleep(2000);
+        var started = DateTime.UtcNow;
+        var lastSkip = DateTime.MinValue;
         if (!WaitFor(deadline, () =>
             {
                 var phase = CurrentPhase();
                 if (IsAtLeastLogin(phase))
                     return true;
+                if (DateTime.UtcNow - started < TimeSpan.FromSeconds(12))
+                    return false;
+                if (DateTime.UtcNow - lastSkip < TimeSpan.FromMilliseconds(1500))
+                    return false;
+                lastSkip = DateTime.UtcNow;
                 _sink.SkipIntro();
                 return IsAtLeastLogin(CurrentPhase());
             }))
@@ -46,26 +53,23 @@ public sealed class QuickPlayOrchestrator
             return false;
         }
 
+        Thread.Sleep(2500);
         _log.Info($"quick play login for {slot.Account} slot {characterSlot + 1} on {channel.Name}");
-        var loginError = "";
+        var login = _sink.Login(
+            slot.Account,
+            password,
+            channel.Host,
+            channel.Port,
+            channel.AuthHost,
+            channel.AuthPort,
+            characterSlot);
+        var loginError = login.Ok
+            ? ""
+            : (string.IsNullOrWhiteSpace(login.Reason) ? "login command failed" : login.Reason);
         if (!WaitFor(deadline, () =>
             {
-                if (IsSelectOrEntering(CurrentPhase()) || Snapshot().InWorld)
+                if (!string.IsNullOrEmpty(loginError))
                     return true;
-                var login = _sink.Login(
-                    slot.Account,
-                    password,
-                    channel.Host,
-                    channel.Port,
-                    channel.AuthHost,
-                    channel.AuthPort,
-                    characterSlot);
-                if (!login.Ok)
-                {
-                    loginError = string.IsNullOrWhiteSpace(login.Reason) ? "login command failed" : login.Reason;
-                    return true;
-                }
-
                 return IsSelectOrEntering(CurrentPhase()) || Snapshot().InWorld;
             }) || !string.IsNullOrEmpty(loginError))
         {
@@ -183,8 +187,8 @@ public sealed class QuickPlayOrchestrator
         }
     }
 
-    private static bool IsAtLeastLogin(string phase) =>
-        ContainsPhase(phase, "Login") || IsSelectOrEntering(phase);
+    public static bool IsAtLeastLogin(string phase) =>
+        (ContainsPhase(phase, "Login") && !ContainsPhase(phase, "Off")) || IsSelectOrEntering(phase);
 
     public static bool NeedsCharacterSelect(string phase) =>
         ContainsPhase(phase, "Select") && !IsEnteringWorld(phase);

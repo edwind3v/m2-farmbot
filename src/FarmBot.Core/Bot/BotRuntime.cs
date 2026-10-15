@@ -1,5 +1,7 @@
 using FarmBot.Core.Combat;
 using FarmBot.Core.Configuration;
+using FarmBot.Core.Entities;
+using FarmBot.Core.Geometry;
 using FarmBot.Core.Input;
 using FarmBot.Core.Logging;
 using FarmBot.Core.Looting;
@@ -74,7 +76,16 @@ public sealed class BotRuntime : IDisposable
     private bool _inWorld;
     private string _gamePhase = "";
     private string _phaseLog = "";
+    private string _phaseKey = "";
     private long _phaseLogAtMs;
+    private CombatState _loggedCombatState = CombatState.Idle;
+    private uint _loggedCombatVid;
+    private long _entitiesAtMs;
+    private int _lastNativeActorCount = -1;
+    private IReadOnlyList<EntityState> _lastNativeActors = Array.Empty<EntityState>();
+    private float _lastOriginX;
+    private float _lastOriginY;
+    private float _lastOriginZ;
 
     public BotRuntime(
         IGameStateSource source,
@@ -230,7 +241,7 @@ public sealed class BotRuntime : IDisposable
         if (_source is IAdvancingSource advancing)
             advancing.Advance(dtMs);
 
-        var snapshot = OverlayHud(_source.GetSnapshot(nowMs), nowMs);
+        var snapshot = OverlayHud(_source.GetSnapshot(nowMs), config, nowMs);
         MaybeUpdateIdentity(snapshot);
         TickPotions(snapshot, config, nowMs);
         if (snapshot != null)
@@ -331,8 +342,11 @@ public sealed class BotRuntime : IDisposable
             rangedOnly = _rangedOnly;
         var tick = _combat.Tick(snapshot, config, context.Enabled, nowMs);
         _combatState = tick.State;
-        if (tick.Action != null)
+        var vid = tick.Target?.Vid ?? 0;
+        if (tick.Action != null && (tick.State != _loggedCombatState || vid != _loggedCombatVid))
         {
+            _loggedCombatState = tick.State;
+            _loggedCombatVid = vid;
             _log.Info($"combat {tick.State} {tick.Action.Describe()} dist={tick.Target?.Distance:0} {tick.Reason}");
         }
         return new BrainDecision(ToPhase(tick.State), tick.Target, tick.Action?.ToCommand(), tick.Reason);
@@ -347,6 +361,8 @@ public sealed class BotRuntime : IDisposable
             return;
         var mask = LootPolicy.LoopMask(config, enabled, rangedOnly);
         var delay = config.FastPickupEnabled ? Math.Max(1, config.FastPickupDelayMs) : 50;
+        if (config.ClientProfile == ClientProfile.Baerim)
+            delay = Math.Max(400, delay);
         var radius = LootPolicy.PickupRadius(config);
         var want = mask != 0;
         var ranged = (mask & LootPolicy.RangedLoop) != 0;
@@ -452,7 +468,12 @@ public sealed class BotRuntime : IDisposable
             if (enabled && config.RangedAttackEnabled)
                 wait = Math.Max(1, Math.Min(wait, config.RangedAttackDelayMs));
             if (config.FastPickupEnabled || config.RangedPickupEnabled)
-                wait = Math.Max(1, Math.Min(wait, config.FastPickupEnabled ? config.FastPickupDelayMs : 50));
+            {
+                var pickupWait = config.FastPickupEnabled ? config.FastPickupDelayMs : 50;
+                if (config.ClientProfile == ClientProfile.Baerim)
+                    pickupWait = Math.Max(400, pickupWait);
+                wait = Math.Max(1, Math.Min(wait, pickupWait));
+            }
             if (WaitCancelled(token, wait))
                 break;
         }
@@ -472,7 +493,8 @@ public sealed class BotRuntime : IDisposable
 
     private void TickPotions(WorldSnapshot? snapshot, BotConfig config, long nowMs)
     {
-        if (config.ClientProfile != ClientProfile.Arthion || _sink == null)
+        if ((config.ClientProfile != ClientProfile.Arthion && config.ClientProfile != ClientProfile.Baerim) ||
+            _sink == null)
             return;
         ClientIconStore.ClientPath = config.ClientPath ?? "";
         if (!_inWorld)
@@ -545,7 +567,8 @@ public sealed class BotRuntime : IDisposable
 
     private void TickSkills(WorldSnapshot? snapshot, BotConfig config, long nowMs)
     {
-        if (config.ClientProfile != ClientProfile.Arthion || _sink == null)
+        if ((config.ClientProfile != ClientProfile.Arthion && config.ClientProfile != ClientProfile.Baerim) ||
+            _sink == null)
             return;
         if (!_inWorld)
         {
@@ -560,8 +583,19 @@ public sealed class BotRuntime : IDisposable
             return;
         }
 
+        if (_combat.TargetVid != 0)
+            return;
+        IReadOnlyList<LearnedSkill> cached;
+        lock (_gate)
+            cached = _learnedSkills;
+        if (!_skillsSeenLive && cached.Count > 0)
+        {
+            _skillsSeenLive = true;
+            _skillsInGame = true;
+            return;
+        }
         var interval = !_skillsInGame ? 0 : CharacterKitStore.SkillPollMs;
-        if (nowMs - _skillsAtMs >= interval && _sink.TryReadSkills(out var scan))
+        if (!_skillsSeenLive && nowMs - _skillsAtMs >= interval && _sink.TryReadSkills(out var scan))
         {
             var first = !_skillsInGame;
             _skillsAtMs = nowMs;
@@ -717,7 +751,7 @@ public sealed class BotRuntime : IDisposable
         }
     }
 
-    private WorldSnapshot? OverlayHud(WorldSnapshot? snapshot, long nowMs)
+    private WorldSnapshot? OverlayHud(WorldSnapshot? snapshot, BotConfig config, long nowMs)
     {
         if (snapshot == null || _sink == null)
             return snapshot;
@@ -731,7 +765,7 @@ public sealed class BotRuntime : IDisposable
         NoteGamePhase(hud, nowMs);
         if (!_inWorld || hud.MaxHp <= 0)
             return snapshot;
-        return snapshot with
+        snapshot = snapshot with
         {
             Player = snapshot.Player with
             {
@@ -744,32 +778,96 @@ public sealed class BotRuntime : IDisposable
                 MaxMp = hud.MaxMp
             }
         };
+        if (config.ClientProfile != ClientProfile.Baerim)
+            return snapshot;
+        if (nowMs - _entitiesAtMs < 800 && _lastNativeActors.Count > 0)
+        {
+            return snapshot with
+            {
+                Player = snapshot.Player with { X = _lastOriginX, Y = _lastOriginY, Z = _lastOriginZ },
+                Entities = _lastNativeActors
+            };
+        }
+        _entitiesAtMs = nowMs;
+        if (!_sink.TryReadEntities(out var actors) || actors.Count == 0)
+        {
+            if (_lastNativeActors.Count > 0)
+            {
+                return snapshot with
+                {
+                    Player = snapshot.Player with { X = _lastOriginX, Y = _lastOriginY, Z = _lastOriginZ },
+                    Entities = _lastNativeActors
+                };
+            }
+            if (_lastNativeActorCount != 0)
+            {
+                _lastNativeActorCount = 0;
+                _log.Info($"native entities 0 map actors character={hud.Character}");
+            }
+            return snapshot;
+        }
+        var me = actors.FirstOrDefault(item =>
+                     item.Type == ActorType.Player &&
+                     !string.IsNullOrWhiteSpace(hud.Character) &&
+                     string.Equals(item.Name, hud.Character, StringComparison.OrdinalIgnoreCase))
+                 ?? actors.FirstOrDefault(item => item.Type == ActorType.Player);
+        var originX = me?.X ?? snapshot.Player.X;
+        var originY = me?.Y ?? snapshot.Player.Y;
+        var originZ = me?.Z ?? snapshot.Player.Z;
+        var withDistance = actors
+            .Select(item => item with
+            {
+                Distance = WorldGeometry.Distance(originX, originY, item.X, item.Y)
+            })
+            .ToList();
+        _lastNativeActors = withDistance;
+        _lastOriginX = originX;
+        _lastOriginY = originY;
+        _lastOriginZ = originZ;
+        if (_lastNativeActorCount != withDistance.Count)
+        {
+            _lastNativeActorCount = withDistance.Count;
+            _log.Info($"native entities {withDistance.Count} map actors character={hud.Character}");
+        }
+
+        return snapshot with
+        {
+            Player = snapshot.Player with { X = originX, Y = originY, Z = originZ },
+            Entities = withDistance
+        };
     }
 
     private void NoteGamePhase(PlayerHudPoints? hud, long nowMs)
     {
         string phase;
         string line;
+        string inWorld;
+        string character;
         if (hud == null)
         {
             phase = "(unread)";
+            inWorld = "no";
+            character = "-";
             line = "game phase=(unread) inWorld=no pots=off skills=off hud=no";
         }
         else
         {
             phase = string.IsNullOrWhiteSpace(hud.Value.Phase) ? "(empty)" : hud.Value.Phase.Trim();
-            var character = string.IsNullOrWhiteSpace(hud.Value.Character) ? "-" : hud.Value.Character.Trim();
+            inWorld = hud.Value.InWorld ? "yes" : "no";
+            character = string.IsNullOrWhiteSpace(hud.Value.Character) ? "-" : hud.Value.Character.Trim();
             var reason = string.IsNullOrWhiteSpace(hud.Value.Reason) ? "-" : hud.Value.Reason.Trim();
             var hudText = hud.Value.MaxHp > 0
                 ? $"hp {hud.Value.Hp}/{hud.Value.MaxHp} lv {hud.Value.Level}"
                 : "no";
             line =
-                $"game phase={phase} inWorld={(hud.Value.InWorld ? "yes" : "no")} startGame={(hud.Value.StartGame ? "yes" : "no")} pots={(hud.Value.InWorld ? "on" : "off")} skills={(hud.Value.InWorld ? "on" : "off")} hud={hudText} character={character} reason={reason}";
+                $"game phase={phase} inWorld={inWorld} startGame={(hud.Value.StartGame ? "yes" : "no")} pots={(hud.Value.InWorld ? "on" : "off")} skills={(hud.Value.InWorld ? "on" : "off")} hud={hudText} character={character} reason={reason}";
         }
 
         _gamePhase = phase;
-        if (string.Equals(line, _phaseLog, StringComparison.Ordinal) && nowMs - _phaseLogAtMs < 3000)
+        var key = $"{phase}|{inWorld}|{character}";
+        if (string.Equals(key, _phaseKey, StringComparison.Ordinal) && nowMs - _phaseLogAtMs < 5000)
             return;
+        _phaseKey = key;
         _phaseLog = line;
         _phaseLogAtMs = nowMs;
         _log.Info(line);

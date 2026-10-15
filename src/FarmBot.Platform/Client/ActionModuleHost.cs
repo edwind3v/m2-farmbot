@@ -159,9 +159,11 @@ public sealed class ActionModuleHost
     private string LoaderArgs(string extraArgs, string dll, string? clientPath)
     {
         var args = $"{extraArgs} --dll \"{dll}\" --token {Token} --pipe {PipeName}";
-        if (Profile != ClientProfile.Arthion)
-            return args;
-        var layout = WriteLayoutFile(clientPath);
+        var layout = Profile == ClientProfile.Arthion
+            ? WriteLayoutFile(clientPath)
+            : Profile == ClientProfile.Baerim
+                ? WriteBaerimLayoutFile(clientPath)
+                : "";
         if (layout.Length > 0)
             args += " --layout \"" + layout + "\"";
         return args;
@@ -245,6 +247,114 @@ public sealed class ActionModuleHost
             AppendHex(text, "graphic", entity.GraphicDisplacement);
             AppendHex(text, "pixelX", entity.PixelXDisplacement);
             AppendHex(text, "pixelY", entity.PixelYDisplacement);
+            AppendHex(text, "mapDisp", entity.MapDisplacement);
+            AppendHex(text, "mapHead", entity.MapHeadDisplacement);
+            AppendHex(text, "nodeLeft", entity.NodeLeft);
+            AppendHex(text, "nodeParent", entity.NodeParent);
+            AppendHex(text, "nodeRight", entity.NodeRight);
+            AppendHex(text, "nodeIsNil", entity.NodeIsNil);
+            AppendHex(text, "nodeKey", entity.NodeKey);
+            AppendHex(text, "nodeValue", entity.NodeValue);
+            var path = Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_" + Guid.NewGuid().ToString("N") + ".cfg");
+            File.WriteAllText(path, text.ToString());
+            return path;
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private string WriteBaerimLayoutFile(string? exePath)
+    {
+        if (Profile != ClientProfile.Baerim)
+            return "";
+        if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
+            return "";
+        try
+        {
+            var recovered = BaerimActionLayoutRecoverer.Recover(exePath);
+            var player = recovered.Player;
+            var entity = recovered.Entity;
+            var text = new StringBuilder(recovered.Login.ToNativeConfig());
+            text.Append("profile=baerim\n");
+            AppendHex(text, "player", player.PlayerSingletonRva);
+            AppendHex(text, "playerName", player.PlayerNameDisplacement);
+            AppendHex(text, "charMgr", entity.SingletonRva);
+            AppendHex(text, "thisAdj", player.SetTargetThisAdjustment);
+            AppendHex(text, "setTarget", player.SetTargetRva);
+            AppendHex(text, "setTargetSlot", player.SetTargetVtableSlot);
+            AppendHex(text, "targetDisp", player.TargetVidDisplacement);
+            AppendHex(text, "attackKey", player.SetAttackKeyStateRva);
+            AppendHex(text, "newAttack", player.NewAttackRva);
+            AppendHex(text, "pickClose", player.PickCloseItemRva);
+            AppendHex(text, "getStatus", player.GetStatusRva);
+            AppendHex(text, "getStatusSlot", player.GetStatusVtableSlot);
+            AppendHex(text, "getNameSlot", 0x14u);
+            AppendHex(text, "sendAttack", player.SendAttackPacketRva);
+            AppendHex(text, "sendState", player.SendStatePacketRva);
+            AppendHex(text, "sendPickup", player.SendPickupPacketRva);
+            AppendHex(text, "sendUse", player.SendItemUsePacketRva);
+            if (recovered.GetItemIndexVtableSlot == 0)
+                AppendHex(text, "getItemIndex", player.GetItemIndexRva);
+            AppendHex(text, "getItemIndexSlot", recovered.GetItemIndexVtableSlot);
+            if (recovered.GetItemCountVtableSlot == 0)
+                AppendHex(text, "getItemCount", player.GetItemCountRva);
+            AppendHex(text, "getItemCountSlot", recovered.GetItemCountVtableSlot);
+            AppendHex(text, "selectItem", player.SelectItemRva);
+            AppendHex(text, "itemMgr", player.ItemManagerRva);
+            AppendHex(text, "getSelected", player.GetSelectedRva);
+            AppendHex(text, "getItemName", player.GetItemNameRva);
+            AppendHex(text, "getItemType", player.GetItemTypeRva);
+            AppendHex(text, "getItemSubType", player.GetItemSubTypeRva);
+            AppendHex(text, "getAffect", player.GetAffectRva);
+            AppendHex(text, "getValue", player.GetValueRva);
+            AppendHex(text, "getIconImage", player.GetIconImageRva);
+            AppendHex(text, "packMgr", recovered.PackMgrRva);
+            AppendHex(text, "packGet", recovered.PackGetRva);
+            AppendHex(text, "useItem", player.UseItemRva);
+            AppendHex(text, "getSkillIndex", player.GetSkillIndexRva);
+            AppendHex(text, "getSkillLevel", player.GetSkillLevelRva);
+            AppendHex(text, "clickSkill", player.ClickSkillSlotRva);
+            AppendHex(text, "getSkillCool", player.GetSkillCoolTimeRva);
+            AppendHex(text, "isSkillCool", recovered.IsSkillCoolTimeRva);
+            AppendHex(text, "sendUseSkill", player.SendUseSkillPacketRva);
+            AppendHex(text, "skillMgr", player.SkillManagerRva);
+            AppendHex(text, "getSkillData", player.GetSkillDataRva);
+            AppendHex(text, "isStanding", player.IsStandingSkillRva);
+            AppendHex(text, "isNeedTarget", player.IsNeedTargetRva);
+            AppendHex(text, "isAttackSkill", player.IsAttackSkillRva);
+            AppendHex(text, "combo", player.ComboAttackRva);
+            AppendHex(text, "setAuto", player.SetAutoRva);
+            AppendHex(text, "reserve", player.ReserveClickRva);
+            AppendHex(text, "reservedMode", player.ReservedModeDisplacement);
+            AppendHex(text, "vidReserved", player.VidReservedDisplacement);
+            AppendHex(text, "moveTo", player.MoveToDestRva);
+            AppendHex(text, "movePixel", player.MoveToPixelRva);
+            AppendHex(text, "getMain", player.GetMainActorRva);
+            AppendHex(text, "pressActor", player.OnPressActorRva);
+            AppendHex(text, "chase", player.ChaseActorRva);
+            AppendHex(text, "approachInst", player.ApproachInstRva);
+            AppendHex(text, "playerUpdate", player.PlayerUpdateRva);
+            AppendHex(text, "getPixel", player.GetPixelRva);
+            AppendHex(text, "inRange", player.InRangeRva);
+            AppendHex(text, "item", player.ItemSingletonRva);
+            AppendHex(text, "getClose", player.GetCloseItemRva);
+            AppendHex(text, "points", player.StatusPointsDisplacement);
+            if (player.StatusPointsDisplacement != 0)
+                text.Append("xor=").Append(player.PointXorMask.ToString("X")).Append('\n');
+            AppendHex(text, "mainPtr", entity.MainPointerDisplacement);
+            AppendHex(text, "graphic", entity.GraphicDisplacement);
+            AppendHex(text, "pixelX", entity.PixelXDisplacement);
+            AppendHex(text, "pixelY", entity.PixelYDisplacement);
+            AppendHex(text, "pixelZ", entity.PixelZDisplacement);
+            AppendHex(text, "actorType", entity.ActorTypeDisplacement);
+            AppendHex(text, "race", entity.RaceDisplacement);
+            AppendHex(text, "vnum", entity.VirtualNumberDisplacement);
+            AppendHex(text, "instName", entity.InstanceNameDisplacement);
+            AppendHex(text, "selfVid", entity.SelfVidDisplacement);
+            if (entity.NegatePixelY)
+                text.Append("negateY=1\n");
             AppendHex(text, "mapDisp", entity.MapDisplacement);
             AppendHex(text, "mapHead", entity.MapHeadDisplacement);
             AppendHex(text, "nodeLeft", entity.NodeLeft);

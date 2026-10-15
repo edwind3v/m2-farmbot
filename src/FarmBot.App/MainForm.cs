@@ -64,8 +64,20 @@ public sealed class MainForm : Form
         _timer.Stop();
         UnregisterHotkeys();
         _shell.PersistOnExit();
-        SessionClosing?.Invoke();
-        _shell.Dispose();
+        try
+        {
+            SessionClosing?.Invoke();
+        }
+        catch
+        {
+        }
+        try
+        {
+            _shell.Dispose();
+        }
+        catch
+        {
+        }
         base.OnFormClosing(e);
     }
 
