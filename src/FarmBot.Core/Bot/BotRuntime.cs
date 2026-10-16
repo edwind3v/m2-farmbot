@@ -842,28 +842,32 @@ public sealed class BotRuntime : IDisposable
         if (hud.CastRemoved != null)
             _castRemoved = hud.CastRemoved;
         NoteGamePhase(hud, nowMs);
-        if (!_inWorld || hud.MaxHp <= 0)
-            return snapshot;
-        snapshot = snapshot with
-        {
-            Player = snapshot.Player with
-            {
-                Level = hud.Level,
-                Exp = hud.Exp,
-                NextExp = hud.NextExp,
-                Hp = hud.Hp,
-                MaxHp = hud.MaxHp,
-                Mp = hud.Mp,
-                MaxMp = hud.MaxMp,
-                Race = hud.Race ?? snapshot.Player.Race
-            }
-        };
-        if (config.ClientProfile != ClientProfile.Baerim)
-            return snapshot;
-        // Never scan native entities on the login/select screens.
+        // Baerim GetStatus can lag a few seconds after GameWindow is up. Still treat
+        // in-world as live so entities/pots aren't blocked on MaxHp.
         if (!_inWorld)
             return snapshot;
-        if (nowMs - _entitiesAtMs < 800 && _lastNativeActors.Count > 0)
+        if (hud.MaxHp > 0)
+        {
+            snapshot = snapshot with
+            {
+                Player = snapshot.Player with
+                {
+                    Level = hud.Level,
+                    Exp = hud.Exp,
+                    NextExp = hud.NextExp,
+                    Hp = hud.Hp,
+                    MaxHp = hud.MaxHp,
+                    Mp = hud.Mp,
+                    MaxMp = hud.MaxMp,
+                    Race = hud.Race ?? snapshot.Player.Race
+                }
+            };
+        }
+        if (config.ClientProfile != ClientProfile.Baerim)
+            return snapshot;
+        // Poll immediately while empty; soft-throttle only once we have a list.
+        var entityGap = _lastNativeActors.Count > 0 ? 200 : 0;
+        if (nowMs - _entitiesAtMs < entityGap)
         {
             return snapshot with
             {

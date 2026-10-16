@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Text;
 using FarmBot.Core.Combat;
 using FarmBot.Core.Configuration;
@@ -271,8 +270,6 @@ public sealed class ActionModuleHost
         }
     }
 
-    private const int BaerimLayoutRecovererVersion = 5;
-
     private string WriteBaerimLayoutFile(string? exePath)
     {
         if (Profile != ClientProfile.Baerim)
@@ -281,7 +278,7 @@ public sealed class ActionModuleHost
             return "";
         try
         {
-            var cachePath = BaerimLayoutCachePath(exePath);
+            var cachePath = BaerimActionLayoutRecoverer.LayoutCachePath(exePath);
             if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 64 &&
                 BaerimLayoutCacheHasCriticalKeys(cachePath))
                 return cachePath;
@@ -395,15 +392,6 @@ public sealed class ActionModuleHost
         {
             return "";
         }
-    }
-
-    private static string BaerimLayoutCachePath(string exePath)
-    {
-        var info = new FileInfo(exePath);
-        var key = info.FullName + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks.ToString() +
-                  "|v" + BaerimLayoutRecovererVersion;
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..16];
-        return Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_baerim_" + hash + ".cfg");
     }
 
     private static bool BaerimLayoutCacheHasCriticalKeys(string cachePath)

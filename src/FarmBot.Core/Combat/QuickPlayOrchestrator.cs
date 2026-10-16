@@ -191,9 +191,9 @@ public sealed class QuickPlayOrchestrator
 
         if (NeedsCharacterSelect(CurrentPhase()) && !ReallyInWorld())
         {
-            // Give the account character list a moment to arrive so slot names populate.
+            // Brief name probe — don't stall enter if the list is slow.
             Report("reading characters...");
-            for (var i = 0; i < 8 && NeedsCharacterSelect(CurrentPhase()) && !ReallyInWorld(); i++)
+            for (var i = 0; i < 4 && NeedsCharacterSelect(CurrentPhase()) && !ReallyInWorld(); i++)
             {
                 var selectInfo = _sink.GetSession();
                 var slotNames = LiveChannelList.CharacterNamesFromResponse(selectInfo);
@@ -203,7 +203,7 @@ public sealed class QuickPlayOrchestrator
                     break;
                 }
 
-                Thread.Sleep(250);
+                Thread.Sleep(100);
             }
 
             // SelectSlot -> StartGame only. LoadingWindow then sends SelectCharacterPacket.
@@ -219,7 +219,7 @@ public sealed class QuickPlayOrchestrator
                 _log.Info("quick play select attempt " + selectAttempts + ": ok=" + select.Ok + " " + reason);
                 if (IsLoginScreen(reason) || IsLoginScreen(CurrentPhase()))
                 {
-                    Thread.Sleep(400);
+                    Thread.Sleep(250);
                     continue;
                 }
                 // Only leave the loop after StartGame ("select sent") or phase left Select.
@@ -231,10 +231,10 @@ public sealed class QuickPlayOrchestrator
                     break;
                 if (select.Ok && !NeedsCharacterSelect(CurrentPhase()))
                     break;
-                Thread.Sleep(400);
+                Thread.Sleep(250);
             }
             // StartGame schedules DirectEnter after SELECT_CHAR_NO_DELAY (~0.5s).
-            Thread.Sleep(1200);
+            Thread.Sleep(600);
         }
 
         Report("entering the world...");

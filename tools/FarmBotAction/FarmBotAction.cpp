@@ -1642,10 +1642,17 @@ static void InferBaerimPhaseFromWindow()
         MarkBaerimInGame(why);
         return;
     }
-    // Or a short grace after select even before the name string shows up.
-    if (g_selectSent && g_selectSentAtMs && GetTickCount() - g_selectSentAtMs >= 1200)
+    // Short grace after select — LoadingWindow self-phases; don't wait seconds.
+    if (g_selectSent && g_selectSentAtMs && GetTickCount() - g_selectSentAtMs >= 400)
     {
-        MarkBaerimInGame("1.2s after select StartGame");
+        MarkBaerimInGame("0.4s after select StartGame");
+        return;
+    }
+    // Load phase after StartGame means the world stream is already up.
+    if (g_selectSent && (PhaseHas("Load") || PhaseHas("Game")) &&
+        !PyPhaseWindowIs("LoginWindow") && !PyPhaseWindowIs("SelectCharacterWindow"))
+    {
+        MarkBaerimInGame("Load/Game after select");
         return;
     }
 
@@ -6921,7 +6928,9 @@ static void ScanActors()
     static unsigned lastKept = 0;
     static DWORD lastAt = 0;
     const DWORD now = GetTickCount();
-    if (lastAt != 0 && now - lastAt < 800 && g_actorsJson.size() > 2)
+    // No throttle while empty so the UI fills on the first in-world tick.
+    const DWORD gap = (g_actorsJson.size() > 2) ? 200 : 0;
+    if (lastAt != 0 && gap > 0 && now - lastAt < gap)
         return;
     lastAt = now;
     if (g_baerim && !g_sessionCharacter.empty())
@@ -8273,8 +8282,10 @@ static void Execute(const Command& cmd)
             g_inWorld = ComputeInWorld();
         if (!g_inWorld)
         {
-            // One more chance: HUD already proves we are in game (Baerim HandShake lie).
-            if (g_hudOk && g_hudMaxHp > 0 && !g_sessionCharacter.empty())
+            // Don't wait on GetStatus — character after select / Load is enough.
+            if ((g_hudOk && g_hudMaxHp > 0 && !g_sessionCharacter.empty()) ||
+                (g_selectSent && !g_sessionCharacter.empty()) ||
+                (g_selectSent && (PhaseHas("Load") || PhaseHas("Game"))))
             {
                 g_inWorld = 1;
                 g_openedGameWindow = 1;

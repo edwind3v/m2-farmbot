@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using FarmBot.Core.Entities;
 
@@ -19,6 +21,161 @@ public sealed record BaerimNativeLayout(
 
 public static class BaerimActionLayoutRecoverer
 {
+    /// <summary>Bump when cached cfg keys/semantics change (shared with ActionModuleHost).</summary>
+    public const int LayoutCacheVersion = 5;
+
+    public static string LayoutCachePath(string exePath)
+    {
+        var info = new FileInfo(exePath);
+        var key = info.FullName + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture) +
+                  "|v" + LayoutCacheVersion;
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..16];
+        return Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_baerim_" + hash + ".cfg");
+    }
+
+    /// <summary>
+    /// Instant load of the cfg written at inject time. Never parses the PE — that takes ~30s
+    /// on baerim.exe and must not run on the bot tick thread.
+    /// </summary>
+    public static bool TryLoadCachedLayouts(string exePath, out ReleaseLayout entity, out PlayerActionLayout player)
+    {
+        entity = FallbackEntityLayout(exePath);
+        player = FallbackPlayerLayout();
+        try
+        {
+            var cachePath = LayoutCachePath(exePath);
+            if (!File.Exists(cachePath) || new FileInfo(cachePath).Length < 64)
+                return false;
+            var map = ParseCfgHex(File.ReadAllText(cachePath));
+            if (Hex(map, "charMgr") == 0 || Hex(map, "graphic") == 0 || Hex(map, "mapDisp") == 0)
+                return false;
+            entity = EntityFromCfg(exePath, map);
+            player = PlayerFromCfg(map);
+            return entity.CanEnumerate;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static ReleaseLayout FallbackEntityLayout(string path) =>
+        EntityFromCfg(path, new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["charMgr"] = 0x3C0FCC0,
+            ["graphic"] = 0x3F4,
+            ["pixelX"] = 0x514,
+            ["pixelY"] = 0x518,
+            ["pixelZ"] = 0x51C,
+            ["actorType"] = 0x470,
+            ["race"] = 0x338,
+            ["vnum"] = 0x33C,
+            ["instName"] = 0x60,
+            ["selfVid"] = 0x334,
+            ["negateY"] = 1,
+            ["mapDisp"] = 0x84,
+            ["nodeParent"] = 4,
+            ["nodeRight"] = 8,
+            ["nodeIsNil"] = 0xD,
+            ["nodeKey"] = 0x10,
+            ["nodeValue"] = 0x14
+        });
+
+    public static PlayerActionLayout FallbackPlayerLayout() =>
+        PlayerFromCfg(new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["player"] = 0x3C0FCBC,
+            ["playerName"] = 0x14,
+            ["getStatusSlot"] = 0x10,
+            ["thisAdj"] = 4
+        });
+
+    private static ReleaseLayout EntityFromCfg(string path, IReadOnlyDictionary<string, uint> map) =>
+        new(
+            path,
+            PreferredImageBase: 0,
+            CreateInstanceRva: 0,
+            MapDisplacement: Hex(map, "mapDisp"),
+            SingletonRva: Hex(map, "charMgr"),
+            MainPointerDisplacement: Hex(map, "mainPtr"),
+            GraphicDisplacement: Hex(map, "graphic"),
+            RaceDisplacement: Hex(map, "race"),
+            VirtualNumberDisplacement: Hex(map, "vnum"),
+            ActorTypeDisplacement: Hex(map, "actorType"),
+            SelfVidDisplacement: Hex(map, "selfVid"),
+            PixelXDisplacement: Hex(map, "pixelX"),
+            PixelYDisplacement: Hex(map, "pixelY"),
+            PixelZDisplacement: Hex(map, "pixelZ"),
+            NegatePixelY: Hex(map, "negateY") != 0,
+            ProbeStringRva: 0,
+            MapHeadDisplacement: Hex(map, "mapHead"),
+            MapSizeDisplacement: Hex(map, "mapSize"),
+            NodeLeft: Hex(map, "nodeLeft"),
+            NodeParent: Hex(map, "nodeParent"),
+            NodeRight: Hex(map, "nodeRight"),
+            NodeIsNil: Hex(map, "nodeIsNil"),
+            NodeKey: Hex(map, "nodeKey"),
+            NodeValue: Hex(map, "nodeValue"),
+            InstanceNameDisplacement: Hex(map, "instName"),
+            Methods: Array.Empty<ReleaseMethod>(),
+            Evidence: new[] { "baerim layout cfg/cache" });
+
+    private static PlayerActionLayout PlayerFromCfg(IReadOnlyDictionary<string, uint> map) =>
+        new(
+            PreferredImageBase: 0,
+            PlayerSingletonRva: Hex(map, "player"),
+            SetTargetRva: Hex(map, "setTarget"),
+            GetTargetVidRva: 0,
+            SetAttackKeyStateRva: Hex(map, "attackKey"),
+            ComboAttackRva: Hex(map, "combo"),
+            PickCloseItemRva: Hex(map, "pickClose"),
+            TargetVidDisplacement: Hex(map, "targetDisp"),
+            SetTargetThisAdjustment: Hex(map, "thisAdj"),
+            SetTargetVtableSlot: Hex(map, "setTargetSlot"),
+            SetTargetPrologue: "",
+            StatusPointsDisplacement: Hex(map, "points"),
+            PlayerNameDisplacement: Hex(map, "playerName"),
+            PointXorMask: Hex(map, "xor"),
+            Evidence: new[] { "baerim layout cfg/cache" })
+        {
+            GetStatusVtableSlot = Hex(map, "getStatusSlot"),
+            GetStatusRva = Hex(map, "getStatus"),
+            SendAttackPacketRva = Hex(map, "sendAttack"),
+            SendPickupPacketRva = Hex(map, "sendPickup"),
+            SendItemUsePacketRva = Hex(map, "sendUse"),
+            OnPressActorRva = Hex(map, "pressActor"),
+            MoveToDestRva = Hex(map, "moveTo"),
+            MoveToPixelRva = Hex(map, "movePixel"),
+            GetPixelRva = Hex(map, "getPixel"),
+            SendChatPacketRva = Hex(map, "sendChat"),
+            ItemManagerRva = Hex(map, "itemMgr"),
+            SkillManagerRva = Hex(map, "skillMgr")
+        };
+
+    private static uint Hex(IReadOnlyDictionary<string, uint> map, string key) =>
+        map.TryGetValue(key, out var value) ? value : 0;
+
+    private static Dictionary<string, uint> ParseCfgHex(string text)
+    {
+        var map = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = raw.Trim();
+            var eq = line.IndexOf('=');
+            if (eq <= 0)
+                continue;
+            var key = line[..eq].Trim();
+            var value = line[(eq + 1)..].Trim();
+            if (key.Equals("layout", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("profile", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hex))
+                map[key] = hex;
+        }
+
+        return map;
+    }
+
     public static BaerimNativeLayout Recover(string path)
     {
         var player = PlayerActionLayoutRecoverer.Recover(path);

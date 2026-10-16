@@ -53,6 +53,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
     private float _lastY;
     private float _facingDeg;
     private bool _hasLastPos;
+    private int _baerimRecoverStarted;
 
     public LiveGameStateProvider(IBotLog? log = null, int targetPid = 0)
     {
@@ -247,15 +248,31 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 
         if (SlotStore.IsBaerimPath(path))
         {
-            var recovered = BaerimActionLayoutRecoverer.Recover(path);
-            _layout = recovered.Entity;
-            _playerLayout = recovered.Player;
+            // Never BaerimActionLayoutRecoverer.Recover on the tick thread — it re-parses
+            // ~70MB PE for ~30s and blocks HUD/entity IPC the whole time.
+            if (BaerimActionLayoutRecoverer.TryLoadCachedLayouts(path, out var cachedEntity, out var cachedPlayer))
+            {
+                _layout = cachedEntity;
+                _playerLayout = cachedPlayer;
+                _layoutPath = path;
+                status =
+                    $"layout cache from {path} singletonRva=0x{_layout.SingletonRva:X} map=+0x{_layout.MapDisplacement:X}";
+                Log(status);
+                return true;
+            }
+
+            _layout = BaerimActionLayoutRecoverer.FallbackEntityLayout(path);
+            _playerLayout = BaerimActionLayoutRecoverer.FallbackPlayerLayout();
+            _layoutPath = path;
+            status =
+                $"baerim layout fallback (PE deferred) singletonRva=0x{_layout.SingletonRva:X} map=+0x{_layout.MapDisplacement:X}";
+            Log(status);
+            BeginDeferredBaerimRecover(path);
+            return _layout.CanEnumerate || _playerLayout is { PlayerSingletonRva: > 0x1000 };
         }
-        else
-        {
-            _layout = ClientReleaseLayout.Recover(path);
-            _playerLayout = PlayerActionLayoutRecoverer.Recover(path);
-        }
+
+        _layout = ClientReleaseLayout.Recover(path);
+        _playerLayout = PlayerActionLayoutRecoverer.Recover(path);
         _layoutPath = path;
         if (_layout.CanEnumerate)
         {
@@ -274,6 +291,36 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         }
 
         return false;
+    }
+
+    private void BeginDeferredBaerimRecover(string path)
+    {
+        if (Interlocked.CompareExchange(ref _baerimRecoverStarted, 1, 0) != 0)
+            return;
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                var recovered = BaerimActionLayoutRecoverer.Recover(path);
+                lock (_gate)
+                {
+                    // Only replace if we are still on this image and still using fallback/cache.
+                    if (!string.Equals(_layoutPath, path, StringComparison.OrdinalIgnoreCase))
+                        return;
+                    if (recovered.Entity.CanEnumerate)
+                        _layout = recovered.Entity;
+                    if (recovered.Player.PlayerSingletonRva > 0x1000)
+                        _playerLayout = recovered.Player;
+                }
+
+                Log(
+                    $"layout recovered (background) from {path} singletonRva=0x{recovered.Entity.SingletonRva:X} map=+0x{recovered.Entity.MapDisplacement:X}");
+            }
+            catch (Exception ex)
+            {
+                _log?.Warn("baerim background layout recover failed: " + ex.Message);
+            }
+        });
     }
 
     private static string ResolveLayoutPath(ProcessMemory memory)
