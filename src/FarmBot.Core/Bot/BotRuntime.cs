@@ -60,6 +60,7 @@ public sealed class BotRuntime : IDisposable
     private readonly SkillMountPlanner _skillMount = new();
     private bool _mounted;
     private IReadOnlyList<int> _affects = Array.Empty<int>();
+    private IReadOnlyList<int> _castRemoved = Array.Empty<int>();
     private IReadOnlyList<PotionStack> _potionStacks = Array.Empty<PotionStack>();
     private IReadOnlyList<LearnedSkill> _learnedSkills = Array.Empty<LearnedSkill>();
     private int _greenRemain;
@@ -589,22 +590,15 @@ public sealed class BotRuntime : IDisposable
                 PersistKit();
             }
             _affects = Array.Empty<int>();
+            _castRemoved = Array.Empty<int>();
             if (_skillMount.Busy)
                 _skillMount.Reset();
             return;
         }
 
-        IReadOnlyList<LearnedSkill> cached;
-        lock (_gate)
-            cached = _learnedSkills;
-        if (!_skillsSeenLive && cached.Count > 0)
-        {
-            _skillsSeenLive = true;
-            _skillsInGame = true;
-            return;
-        }
+        // Always refresh from the live client (kit cache alone had IsToggle/IsActive=false forever).
         var interval = !_skillsInGame ? 0 : CharacterKitStore.SkillPollMs;
-        if (!_skillsSeenLive && nowMs - _skillsAtMs >= interval && _sink.TryReadSkills(out var scan))
+        if (nowMs - _skillsAtMs >= interval && _sink.TryReadSkills(out var scan))
         {
             var first = !_skillsInGame;
             _skillsAtMs = nowMs;
@@ -620,13 +614,20 @@ public sealed class BotRuntime : IDisposable
                 lock (_gate)
                     _learnedSkills = merged;
                 if (first)
-                    _log.Info($"skills loaded {merged.Count}");
+                {
+                    var toggles = merged.Count(s => s.IsToggle);
+                    var lit = merged.Count(s => s.IsActive);
+                    _log.Info($"skills loaded {merged.Count} toggles={toggles} active={lit}");
+                }
             }
             else if (_skillsSeenLive || _skillsEmptyTries++ >= 8)
             {
                 _skillsSeenLive = true;
-                lock (_gate)
-                    _learnedSkills = Array.Empty<LearnedSkill>();
+                if (previous.Count == 0)
+                {
+                    lock (_gate)
+                        _learnedSkills = Array.Empty<LearnedSkill>();
+                }
             }
             else if (first)
                 _log.Info("skills scan empty, will retry after stats");
@@ -676,12 +677,27 @@ public sealed class BotRuntime : IDisposable
     {
         if (_sink == null)
             return;
-        var skillIndex = due?.Index ?? _skillMount.Skill?.Index ?? 0;
+        var skill = due ?? _skillMount.Skill;
+        var skillIndex = skill?.Index ?? 0;
         var hasAffect = skillIndex != 0 && _affects.Contains((int)skillIndex);
         var isBuff = skillIndex != 0
             && config.SkillBuffIndexes != null
             && config.SkillBuffIndexes.Contains(skillIndex);
-        var action = _skillMount.Tick(due, _mounted, hasAffect, isBuff, nowMs);
+        // Recast decision: buff slot currently highlighted (IsSkillActive). Do not trust
+        // IsToggleSkill from kit cache — it was stuck false and skipped the second click.
+        var toggleWasActive = false;
+        if (due != null && !_skillMount.Busy && isBuff)
+        {
+            if (_sink.TryIsSkillActive(due.Slot, out var active))
+                toggleWasActive = active;
+            else
+                toggleWasActive = due.IsActive || due.IsToggle;
+            _log.Info($"skill prep index={due.Index} slot={due.Slot} buff=1 toggleFlag={due.IsToggle} highlight={toggleWasActive}");
+        }
+        var affectRemoved = isBuff && _castRemoved.Count > 0
+            || skillIndex != 0 && _castRemoved.Contains((int)skillIndex);
+        // Planner "isToggle" here means "may need second click" = buff with highlight on.
+        var action = _skillMount.Tick(due, _mounted, hasAffect, affectRemoved, isToggle: isBuff, nowMs, toggleWasActive);
 
         switch (action.Command)
         {
@@ -702,7 +718,7 @@ public sealed class BotRuntime : IDisposable
                     break;
                 var buff = config.SkillBuffIndexes != null && config.SkillBuffIndexes.Contains(action.Skill.Index);
                 if (_sink.TryUseSkill(action.Skill.Slot, 0))
-                    _log.Info($"use skill slot={action.Skill.Slot} index={action.Skill.Index} buff={buff} mounted={_mounted} affect={hasAffect} phase={action.Phase}");
+                    _log.Info($"use skill slot={action.Skill.Slot} index={action.Skill.Index} buff={buff} highlight={toggleWasActive} mounted={_mounted} phase={action.Phase}");
                 else
                     _log.Warn($"use skill failed slot={action.Skill.Slot} index={action.Skill.Index}");
                 break;
@@ -823,6 +839,8 @@ public sealed class BotRuntime : IDisposable
         _mounted = hud.Mounted;
         if (hud.Affects != null)
             _affects = hud.Affects;
+        if (hud.CastRemoved != null)
+            _castRemoved = hud.CastRemoved;
         NoteGamePhase(hud, nowMs);
         if (!_inWorld || hud.MaxHp <= 0)
             return snapshot;

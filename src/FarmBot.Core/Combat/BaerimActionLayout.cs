@@ -71,6 +71,23 @@ public static class BaerimActionLayoutRecoverer
             evidence.Add("Baerim IsSkillCoolTime python helper discarded.");
         }
 
+        var active = RecoverPlayerMethod(pe, "IsSkillActive", player.PlayerSingletonRva, evidence);
+        var activeDirect = FirstCallAfterSingleton(pe, active.wrapper, player.PlayerSingletonRva == 0 ? 0 : pe.ImageBase + player.PlayerSingletonRva);
+        var activeWrapOff = active.wrapper == 0 ? -1 : pe.VaToFile(pe.ImageBase + active.wrapper);
+        var activePy = activeWrapOff < 0 ? 0 : RelativeCall(pe, activeWrapOff, activeWrapOff + 0x28);
+        var activePy2 = activeWrapOff < 0 ? 0 : RelativeCall(pe, activeWrapOff + 0x14, activeWrapOff + 0x2C);
+        var activeRva = player.IsSkillActiveRva;
+        if (activeDirect != 0 && activeDirect != activePy && activeDirect != activePy2)
+        {
+            activeRva = activeDirect;
+            evidence.Add($"Baerim IsSkillActive thiscall 0x{activeDirect:X}.");
+        }
+        else if (activeRva == activePy || activeRva == activePy2)
+        {
+            activeRva = 0;
+            evidence.Add("Baerim IsSkillActive python helper discarded.");
+        }
+
         // SendChatPacket / IsMountingHorse recovery often lands on Python helpers (0x41D7xx).
         // Known-good Baerim natives from the real wrappers:
         //   net.SendChatPacket → CPythonNetworkStream::SendChatPacket @ 0x250230 (ret 12)
@@ -92,6 +109,7 @@ public static class BaerimActionLayoutRecoverer
         player = player with
         {
             IsSkillCoolTimeRva = coolRva,
+            IsSkillActiveRva = activeRva,
             SendChatPacketRva = chatRva,
             IsMountingHorseRva = mountRva
         };

@@ -71,13 +71,16 @@ public sealed record PlayerActionLayout(
     public uint ClickSkillSlotRva { get; init; }
     public uint GetSkillCoolTimeRva { get; init; }
     public uint IsSkillCoolTimeRva { get; init; }
+    public uint IsSkillActiveRva { get; init; }
     public uint SendUseSkillPacketRva { get; init; }
     public uint SkillManagerRva { get; init; }
     public uint GetSkillDataRva { get; init; }
     public uint IsStandingSkillRva { get; init; }
+    public uint IsToggleSkillRva { get; init; }
     public uint IsNeedTargetRva { get; init; }
     public uint IsAttackSkillRva { get; init; }
     public uint IsMountingHorseRva { get; init; }
+    public uint IsAffectRva { get; init; }
     public uint SendChatPacketRva { get; init; }
 }
 
@@ -341,6 +344,7 @@ public static class PlayerActionLayoutRecoverer
         var clickSkill = RecoverItemMethod(pe, "ClickSkillSlot", singleton, evidence);
         var getSkillCool = RecoverItemMethod(pe, "GetSkillCoolTime", singleton, evidence);
         var isSkillCool = RecoverItemMethod(pe, "IsSkillCoolTime", singleton, evidence);
+        var isSkillActive = RecoverItemMethod(pe, "IsSkillActive", singleton, evidence);
         var sendUseSkill = RecoverLoginExport(pe, "SendUseSkillPacket", evidence);
         if (sendUseSkill.native == 0)
         {
@@ -349,9 +353,11 @@ public static class PlayerActionLayoutRecoverer
         }
         var getSkillName = RecoverItemMethod(pe, "GetSkillName", 0, evidence);
         var isStanding = RecoverItemMethod(pe, "IsStandingSkill", getSkillName.singleton, evidence);
+        var isToggle = RecoverItemMethod(pe, "IsToggleSkill", getSkillName.singleton, evidence);
         var isNeedTarget = RecoverItemMethod(pe, "IsNeedTarget", getSkillName.singleton, evidence);
         var isAttackSkill = RecoverItemMethod(pe, "IsAttackSkill", getSkillName.singleton, evidence);
         var standingFn = CallOnLocalEcx(pe, isStanding.wrapper, evidence, "IsStandingSkill");
+        var toggleFn = CallOnLocalEcx(pe, isToggle.wrapper, evidence, "IsToggleSkill");
         var needTargetFn = CallOnLocalEcx(pe, isNeedTarget.wrapper, evidence, "IsNeedTarget");
         var attackSkillFn = CallOnLocalEcx(pe, isAttackSkill.wrapper, evidence, "IsAttackSkill");
         var isMounting = RecoverItemMethod(pe, "IsMountingHorse", singleton, evidence);
@@ -359,8 +365,9 @@ public static class PlayerActionLayoutRecoverer
             isMounting = RecoverItemMethod(pe, "IsMounting", singleton, evidence);
         if (isMounting.native == 0)
             isMounting = RecoverItemMethod(pe, "IsRiding", singleton, evidence);
+        var isAffect = RecoverItemMethod(pe, "IsAffect", singleton, evidence);
         var sendChat = RecoverLoginExport(pe, "SendChatPacket", evidence);
-        evidence.Add($"skills getIndex=0x{getSkillIndex.native:X} getLevel=0x{getSkillLevel.native:X} click=0x{clickSkill.native:X} cool=0x{getSkillCool.native:X} isCool=0x{isSkillCool.native:X} sendUse=0x{sendUseSkill.native:X} skillMgr=0x{getSkillName.singleton:X} getData=0x{getSkillName.native:X} standing=0x{standingFn:X} mount=0x{isMounting.native:X} chat=0x{sendChat.native:X}.");
+        evidence.Add($"skills getIndex=0x{getSkillIndex.native:X} getLevel=0x{getSkillLevel.native:X} click=0x{clickSkill.native:X} cool=0x{getSkillCool.native:X} isCool=0x{isSkillCool.native:X} isActive=0x{isSkillActive.native:X} sendUse=0x{sendUseSkill.native:X} skillMgr=0x{getSkillName.singleton:X} getData=0x{getSkillName.native:X} standing=0x{standingFn:X} toggle=0x{toggleFn:X} mount=0x{isMounting.native:X} isAffect=0x{isAffect.native:X} chat=0x{sendChat.native:X}.");
 
         return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKeyRva, combo.native, pickClose.native, targetDisp, virt.thisAdj != 0 ? virt.thisAdj : attackVirt.thisAdj, setTargetSlot, prologue, hud.points, hud.name != 0 ? hud.name : 0x14, hud.xor, evidence)
         {
@@ -410,13 +417,16 @@ public static class PlayerActionLayoutRecoverer
             ClickSkillSlotRva = clickSkill.native,
             GetSkillCoolTimeRva = getSkillCool.native,
             IsSkillCoolTimeRva = isSkillCool.native,
+            IsSkillActiveRva = isSkillActive.native,
             SendUseSkillPacketRva = sendUseSkill.native,
             SkillManagerRva = getSkillName.singleton,
             GetSkillDataRva = getSkillName.native,
             IsStandingSkillRva = standingFn,
+            IsToggleSkillRva = toggleFn,
             IsNeedTargetRva = needTargetFn,
             IsAttackSkillRva = attackSkillFn,
             IsMountingHorseRva = isMounting.native,
+            IsAffectRva = isAffect.native,
             SendChatPacketRva = sendChat.native
         };
     }

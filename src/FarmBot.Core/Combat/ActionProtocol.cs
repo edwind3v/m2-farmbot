@@ -58,6 +58,8 @@ public sealed class ActionResponse
     public int PurpleRemain { get; set; }
     public bool Mounted { get; set; }
     public System.Text.Json.JsonElement Affects { get; set; }
+    /// <summary>Affect types removed since the last use_skill arm (toggle detection).</summary>
+    public System.Text.Json.JsonElement CastRemoved { get; set; }
 }
 
 public static class ActionProtocol
@@ -87,6 +89,7 @@ public static class ActionProtocol
     public const string GetSkills = "get_skills";
     public const string GetEntities = "get_entities";
     public const string UseSkill = "use_skill";
+    public const string IsSkillActive = "is_skill_active";
     public const string ToggleMount = "toggle_mount";
     public const string DumpCaptchaBg = "dump_captcha_bg";
     public const int Version = 1;

@@ -29,6 +29,13 @@ public interface INativeActionSink
 
     bool TryUseSkill(int slot, uint targetVid) => false;
 
+    /// <summary>Toggle highlight / aSkill[slot].bActive.</summary>
+    bool TryIsSkillActive(int slot, out bool active)
+    {
+        active = false;
+        return false;
+    }
+
     /// <param name="wantMounted">false = dismount, true = remount.</param>
     bool TryToggleMount(bool wantMounted = false) => false;
 

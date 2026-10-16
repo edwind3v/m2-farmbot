@@ -17,7 +17,8 @@ public readonly record struct PlayerHudPoints(
     bool StartGame = false,
     uint? Race = null,
     bool Mounted = false,
-    IReadOnlyList<int>? Affects = null);
+    IReadOnlyList<int>? Affects = null,
+    IReadOnlyList<int>? CastRemoved = null);
 
 public static class PlayerHudDecoder
 {

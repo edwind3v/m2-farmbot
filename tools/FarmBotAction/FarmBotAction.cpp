@@ -77,13 +77,16 @@ static unsigned kGetSkillLevelRva = 0;
 static unsigned kClickSkillRva = 0;
 static unsigned kGetSkillCoolRva = 0;
 static unsigned kIsSkillCoolRva = 0;
+static unsigned kIsSkillActiveRva = 0;
 static unsigned kSendUseSkillRva = 0;
 static unsigned kSkillMgrRva = 0;
 static unsigned kGetSkillDataRva = 0;
 static unsigned kIsStandingRva = 0;
+static unsigned kIsToggleRva = 0;
 static unsigned kIsNeedTargetRva = 0;
 static unsigned kIsAttackSkillRva = 0;
 static unsigned kIsMountingRva = 0;
+static unsigned kIsAffectRva = 0;
 static unsigned kSendChatRva = 0;
 static unsigned kSendClickRva = 0xCE930;
 static unsigned kItemSingletonRva = 0x482CAC;
@@ -5800,6 +5803,7 @@ typedef int (__thiscall* FnSendUseSkill)(void* self, unsigned index, unsigned vi
 typedef int (__thiscall* FnGetSkillData)(void* self, unsigned index, void** out);
 typedef int (__thiscall* FnSkillPred)(void* data);
 typedef int (__thiscall* FnIsMounting)(void* self);
+typedef int (__thiscall* FnIsAffect)(void* self, unsigned type);
 typedef void (__thiscall* FnSendChat)(void* self, const char* text, unsigned char type);
 
 static void* SkillMgr()
@@ -5852,6 +5856,21 @@ static int NativeIsSkillCool(unsigned slot)
     __try { v = fn(player, slot); }
     __except (EXCEPTION_EXECUTE_HANDLER) { v = 0; }
     return v;
+}
+
+// Highlight / aSkill[slot].bActive — toggle currently on.
+static int NativeIsSkillActive(unsigned slot)
+{
+    void* player = Player();
+    if (!player || !kIsSkillActiveRva || !g_base)
+        return -1;
+    FnSkillSlotI fn = (FnSkillSlotI)(g_base + kIsSkillActiveRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return -1;
+    int v = 0;
+    __try { v = fn(player, slot); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    return v ? 1 : 0;
 }
 
 static int NativeSkillCoolSec(unsigned slot)
@@ -6327,146 +6346,52 @@ static int CallIsMounted()
     return ActorTypeOf(CallGetMainActor()) == 8 ? 1 : 0;
 }
 
-// Mirrors BINARY_NEW_AddAffect / RemoveAffect via uiAffectShower only.
-// Never use gc.get_objects() — that crashed the client on get_hud.
-static int g_affectHookTried;
-static int g_affectHookOk;
+// Buff toggle re-cast is handled entirely in SkillMountPlanner (always double-click).
+// No Python affect hooks / IsSkillActive polling — those crashed Baerim and never worked.
+static HMODULE g_selfModule = nullptr;
+static const int kMaxWatchAffects = 64;
+static int g_watchAffectTypes[kMaxWatchAffects];
+static int g_watchAffectCount;
+static std::string g_castRemovedJson = "[]";
 
 static void ClearAffectMirror()
 {
     g_affectsJson = "[]";
-    DeleteFileA("C:\\Temp\\farmbot-affects.json");
+    g_castRemovedJson = "[]";
 }
 
-static void LoadAffectMirrorFile()
+static void WatchSkill(unsigned slot, int index)
 {
-    FILE* f = nullptr;
-    if (fopen_s(&f, "C:\\Temp\\farmbot-affects.json", "rb") != 0 || !f)
+    (void)slot;
+    if (index <= 0 || g_watchAffectCount >= kMaxWatchAffects)
         return;
-    char buf[2048];
-    const size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    if (n == 0)
-        return;
-    buf[n] = 0;
-    if (buf[0] == '[')
-        g_affectsJson = buf;
+    for (int i = 0; i < g_watchAffectCount; ++i)
+    {
+        if (g_watchAffectTypes[i] == index)
+            return;
+    }
+    g_watchAffectTypes[g_watchAffectCount++] = index;
 }
 
-static void EnsureAffectMirror()
+static void WatchAffectType(int type)
 {
-    if (!g_affectHookOk)
-    {
-        // Retry install at most every few seconds; never scan all Python objects.
-        static DWORD lastTryMs;
-        const DWORD now = GetTickCount();
-        if (!g_affectHookTried || now - lastTryMs > 5000)
-        {
-            lastTryMs = now;
-            g_affectHookTried = 1;
-            // Never open/write files inside Add/RemoveAffect — that runs on the game
-            // thread for every buff tick and freezes the client under load.
-            static const char* kInstall =
-                "import constInfo\n"
-                "def _flush():\n"
-                " d=getattr(constInfo,'_farmbot_affects',None)\n"
-                " if d is None: d={}\n"
-                " try:\n"
-                "  f=open(r'C:\\Temp\\farmbot-affects.json','wb')\n"
-                "  f.write('[%s]'%(','.join(str(int(k)) for k in d.keys())))\n"
-                "  f.close()\n"
-                " except: pass\n"
-                "def _hook_cls(cls):\n"
-                " if not cls or getattr(cls,'_farmbot_aff_hook',0): return 0\n"
-                " add=getattr(cls,'BINARY_NEW_AddAffect',None)\n"
-                " rem=getattr(cls,'BINARY_NEW_RemoveAffect',None)\n"
-                " if not callable(add): return 0\n"
-                " if getattr(constInfo,'_farmbot_affects',None) is None: constInfo._farmbot_affects={}\n"
-                " def _add(self,type,*a,**k):\n"
-                "  try: constInfo._farmbot_affects[int(type)]=1\n"
-                "  except: pass\n"
-                "  return add(self,type,*a,**k)\n"
-                " def _rem(self,type,*a,**k):\n"
-                "  try: constInfo._farmbot_affects.pop(int(type),None)\n"
-                "  except: pass\n"
-                "  return rem(self,type,*a,**k) if callable(rem) else None\n"
-                " try:\n"
-                "  cls.BINARY_NEW_AddAffect=_add\n"
-                "  if callable(rem): cls.BINARY_NEW_RemoveAffect=_rem\n"
-                "  cls._farmbot_aff_hook=1\n"
-                "  return 1\n"
-                " except: return 0\n"
-                "n=0\n"
-                "try:\n"
-                " import uiAffectShower as uas\n"
-                " for name in dir(uas):\n"
-                "  try:\n"
-                "   cls=getattr(uas,name)\n"
-                "   if isinstance(cls,type): n+=_hook_cls(cls)\n"
-                "  except: pass\n"
-                "except: pass\n"
-                "try:\n"
-                " import __main__\n"
-                " for name in ('GameWindow','Interface','game'):\n"
-                "  try:\n"
-                "   cls=getattr(__main__,name,None)\n"
-                "   if isinstance(cls,type): n+=_hook_cls(cls)\n"
-                "  except: pass\n"
-                "except: pass\n"
-                "if getattr(constInfo,'_farmbot_affects',None) is None: constInfo._farmbot_affects={}\n"
-                "try:\n"
-                " import uiAffectShower as uas\n"
-                " for name in dir(uas):\n"
-                "  try:\n"
-                "   cls=getattr(uas,name)\n"
-                "   if not isinstance(cls,type): continue\n"
-                "   for inst in getattr(cls,'_instances',[]) or []:\n"
-                "    for attr in ('affectImageDict','affectDict','affectList','dictAffect'):\n"
-                "     d=getattr(inst,attr,None)\n"
-                "     if isinstance(d,dict):\n"
-                "      for k in d.keys():\n"
-                "       try: constInfo._farmbot_affects[int(k)]=1\n"
-                "       except: pass\n"
-                "  except: pass\n"
-                "except: pass\n"
-                "constInfo._farmbot_affect_hook=1 if n else 0\n"
-                "open(r'C:\\Temp\\farmbot-affect-hook.txt','wb').write(b'1' if n else b'0')\n"
-                "_flush()\n";
-            SafePyRun(kInstall);
-            FILE* hf = nullptr;
-            if (fopen_s(&hf, "C:\\Temp\\farmbot-affect-hook.txt", "rb") == 0 && hf)
-            {
-                char c = 0;
-                fread(&c, 1, 1, hf);
-                fclose(hf);
-                if (c == '1')
-                {
-                    g_affectHookOk = 1;
-                    NativeLog("affect mirror hooked via uiAffectShower");
-                }
-            }
-        }
-    }
+    WatchSkill(0, type);
+}
 
-    // Snapshot dict → file on get_hud only (throttled). Never from affect hooks.
-    {
-        static DWORD lastFlushMs;
-        const DWORD nowFlush = GetTickCount();
-        if (nowFlush - lastFlushMs >= 250)
-        {
-            lastFlushMs = nowFlush;
-            SafePyRun(
-                "import constInfo\n"
-                "d=getattr(constInfo,'_farmbot_affects',None)\n"
-                "if d is None: d={}\n"
-                "try:\n"
-                " f=open(r'C:\\Temp\\farmbot-affects.json','wb')\n"
-                " f.write('[%s]'%(','.join(str(int(k)) for k in d.keys())))\n"
-                " f.close()\n"
-                "except: pass\n");
-        }
-    }
-    LoadAffectMirrorFile();
+extern "C" __declspec(dllexport) void FarmBot_NoteAffect(int type, int present)
+{
+    (void)type;
+    (void)present;
+}
+
+static void PublishNoteAffectPtr()
+{
+}
+
+static void RefreshAffectsReadonly()
+{
+    g_affectsJson = "[]";
+    g_castRemovedJson = "[]";
 }
 
 static unsigned EffectiveSendChatRva()
@@ -6550,8 +6475,8 @@ static bool CallClickSkill(unsigned slot)
     FnClickSkill fn = (FnClickSkill)(g_base + kClickSkillRva);
     if (IsBadCodePtr((FARPROC)fn))
         return false;
-    // Baerim ClickSkillSlot wrapper: mov ecx,[player]; push slot; call — NOT player+4.
-    // Trying +4 first SEH-safe no-ops and logs click=1 with no cast.
+    // Baerim ClickSkillSlot: ecx = player (not +4). Never fall back to SafePyRun —
+    // GIL/ctypes from the game thread causes delayed CRT aborts.
     if (g_baerim)
     {
         __try
@@ -6561,10 +6486,8 @@ static bool CallClickSkill(unsigned slot)
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {
+            return false;
         }
-        char code[96];
-        _snprintf_s(code, _TRUNCATE, "import player\nplayer.ClickSkillSlot(%u)\n", slot);
-        return SafePyRunAfterPeek(code) != 0;
     }
     void* selves[2];
     FillPlayerSelves(player, selves);
@@ -6610,9 +6533,13 @@ static void ScanSkills()
     const DWORD now = GetTickCount();
     if (g_chaseVid && g_skillsJson.size() > 2)
         return;
-    if (g_skillsReady && g_lastSkillsMs && now - g_lastSkillsMs < 10000 && g_skillsJson.size() > 2)
+    // Baerim: after first good scan, reuse JSON for 3 minutes. Repeated GetSkillData /
+    // IsToggleSkill probes were a prime suspect for delayed CRT heap aborts.
+    const DWORD minGap = g_baerim ? 180000u : 10000u;
+    if (g_skillsReady && g_lastSkillsMs && now - g_lastSkillsMs < minGap && g_skillsJson.size() > 2)
         return;
     g_skillsJson = "[]";
+    g_watchAffectCount = 0;
     if (!kGetSkillIndexRva)
         return;
     const int extractIcons = !g_baerim && !g_skillsReady;
@@ -6635,32 +6562,51 @@ static void ScanSkills()
         if (index <= 0 || level <= 0)
             continue;
         ++seen;
-        void* data = NativeSkillData((unsigned)index);
+        void* data = nullptr;
         char name[160] = { 0 };
         char icon[260] = { 0 };
-        const int type = data ? SafeByte(data) : 0;
-        if (data)
+        int type = 0;
+        // Baerim: skip GetSkillData / name walks / IsToggle on rescans — index+level enough.
+        const int needData = !g_baerim || !g_skillsReady;
+        if (needData)
         {
-            for (int off = 0x10; off <= 0x40; off += 4)
+            data = NativeSkillData((unsigned)index);
+            type = data ? SafeByte(data) : 0;
+            if (data)
             {
-                if (SafeStdString((char*)data + off, name, 160) && name[0] && !LooksLikeSkillPath(name))
-                    break;
-                name[0] = 0;
+                for (int off = 0x10; off <= 0x40; off += 4)
+                {
+                    if (SafeStdString((char*)data + off, name, 160) && name[0] && !LooksLikeSkillPath(name))
+                        break;
+                    name[0] = 0;
+                }
             }
         }
         SanitizeName(name);
         if (SkillJunk((unsigned)index, name, type))
             continue;
+        WatchSkill(slot, index);
         const char* kind = "skill";
         if (!name[0])
             _snprintf_s(name, _TRUNCATE, "skill %d", index);
-        if (extractIcons)
-            CollectSkillIcon(data, (unsigned)index, icon, 260);
-        const int coolDur = NativeSkillCoolSec(slot);
+        int toggle = 0;
         int cool = 0;
-        if (NativeIsSkillCool(slot))
-            cool = coolDur > 0 ? coolDur : 1;
-        const int duration = coolDur > 0 ? coolDur : 0;
+        int duration = 0;
+        if (!g_baerim)
+        {
+            if (data && kIsToggleRva)
+            {
+                const int t = NativeSkillPred(kIsToggleRva, data);
+                if (t > 0)
+                    toggle = 1;
+            }
+            if (extractIcons)
+                CollectSkillIcon(data, (unsigned)index, icon, 260);
+            const int coolDur = NativeSkillCoolSec(slot);
+            if (NativeIsSkillCool(slot))
+                cool = coolDur > 0 ? coolDur : 1;
+            duration = coolDur > 0 ? coolDur : 0;
+        }
         char tga[MAX_PATH];
         _snprintf_s(tga, _TRUNCATE, "%s\\skill-%u.sub", iconDir, (unsigned)index);
         char iconPath[MAX_PATH];
@@ -6673,9 +6619,9 @@ static void ScanSkills()
         JsonEscape(iconPath, iconEsc, (int)sizeof(iconEsc));
         char item[900];
         _snprintf_s(item, _TRUNCATE,
-            "%s{\"x\":%d,\"s\":%u,\"n\":\"%s\",\"k\":\"%s\",\"l\":%d,\"c\":%d,\"r\":0,\"d\":%d,\"i\":\"%s\"}",
+            "%s{\"x\":%d,\"s\":%u,\"n\":\"%s\",\"k\":\"%s\",\"l\":%d,\"c\":%d,\"r\":0,\"d\":%d,\"i\":\"%s\",\"t\":%d,\"a\":0}",
             first ? "" : ",",
-            index, slot, nameEsc, kind, level, cool, duration, iconEsc);
+            index, slot, nameEsc, kind, level, cool, duration, iconEsc, toggle);
         json += item;
         first = false;
         ++kept;
@@ -6818,6 +6764,7 @@ static void Execute(const Command& cmd)
         const unsigned slot = cmd.slot >= 0 ? (unsigned)cmd.slot : 0;
         const unsigned vid = cmd.vid;
         const int index = NativeSkillIndex(slot);
+        WatchSkill(slot, index);
         NativeLog("use_skill slot=%u index=%d vid=%u click=0x%X send=0x%X",
             slot, index, vid, kClickSkillRva, kSendUseSkillRva);
         const int clicked = CallClickSkill(slot) ? 1 : 0;
@@ -6830,6 +6777,32 @@ static void Execute(const Command& cmd)
         }
         else
             g_lastReason = "skill use missing";
+        return;
+    }
+
+    if (cmd.type == "is_skill_active")
+    {
+        RefreshSession();
+        if (!g_inWorld)
+        {
+            g_lastReason = "not in world";
+            return;
+        }
+        const unsigned slot = cmd.slot >= 0 ? (unsigned)cmd.slot : 0;
+        // Native only — Python ctypes callbacks into the inject DLL crash Baerim CRT.
+        const int active = NativeIsSkillActive(slot);
+        if (active < 0)
+        {
+            g_lastOk = false;
+            g_lastVid = 0;
+            g_lastReason = "IsSkillActive missing";
+            NativeLog("is_skill_active slot=%u fail rva=0x%X", slot, kIsSkillActiveRva);
+            return;
+        }
+        g_lastOk = true;
+        g_lastVid = (unsigned)(active ? 1 : 0);
+        g_lastReason = active ? "active" : "inactive";
+        NativeLog("is_skill_active slot=%u active=%d", slot, active);
         return;
     }
 
@@ -6920,7 +6893,7 @@ static void Execute(const Command& cmd)
         g_inWorld = ComputeInWorld();
         if (g_inWorld)
         {
-            EnsureAffectMirror();
+            RefreshAffectsReadonly();
             if (g_sessionPhase.empty())
                 g_sessionPhase = "Game";
         }
@@ -7665,13 +7638,16 @@ static void ClearLoginRvas()
     kClickSkillRva = 0;
     kGetSkillCoolRva = 0;
     kIsSkillCoolRva = 0;
+    kIsSkillActiveRva = 0;
     kSendUseSkillRva = 0;
     kSkillMgrRva = 0;
     kGetSkillDataRva = 0;
     kIsStandingRva = 0;
+    kIsToggleRva = 0;
     kIsNeedTargetRva = 0;
     kIsAttackSkillRva = 0;
     kIsMountingRva = 0;
+    kIsAffectRva = 0;
     kSendChatRva = 0;
     kGetStatusRva = 0;
     kGetStatusSlot = 0;
@@ -7893,6 +7869,8 @@ static void LoadConfig()
             kGetSkillCoolRva = ParseHex(line + 13);
         else if (strncmp(line, "isSkillCool=", 12) == 0)
             kIsSkillCoolRva = ParseHex(line + 12);
+        else if (strncmp(line, "isSkillActive=", 14) == 0)
+            kIsSkillActiveRva = ParseHex(line + 14);
         else if (strncmp(line, "sendUseSkill=", 13) == 0)
             kSendUseSkillRva = ParseHex(line + 13);
         else if (strncmp(line, "skillMgr=", 9) == 0)
@@ -7901,12 +7879,16 @@ static void LoadConfig()
             kGetSkillDataRva = ParseHex(line + 13);
         else if (strncmp(line, "isStanding=", 11) == 0)
             kIsStandingRva = ParseHex(line + 11);
+        else if (strncmp(line, "isToggle=", 9) == 0)
+            kIsToggleRva = ParseHex(line + 9);
         else if (strncmp(line, "isNeedTarget=", 13) == 0)
             kIsNeedTargetRva = ParseHex(line + 13);
         else if (strncmp(line, "isAttackSkill=", 14) == 0)
             kIsAttackSkillRva = ParseHex(line + 14);
         else if (strncmp(line, "isMounting=", 11) == 0)
             kIsMountingRva = ParseHex(line + 11);
+        else if (strncmp(line, "isAffect=", 9) == 0)
+            kIsAffectRva = ParseHex(line + 9);
         else if (strncmp(line, "sendChat=", 9) == 0)
             kSendChatRva = ParseHex(line + 9);
         else if (strncmp(line, "mainPtr=", 8) == 0)
@@ -8147,7 +8129,7 @@ static void Serve()
                 cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game" ||
                 cmd.type == "skip_intro" || cmd.type == "get_atlas" || cmd.type == "get_hud" ||
                 cmd.type == "get_entities" || cmd.type == "get_skills" || cmd.type == "use_item" ||
-                cmd.type == "use_skill" || cmd.type == "toggle_mount";
+                cmd.type == "use_skill" || cmd.type == "is_skill_active" || cmd.type == "toggle_mount";
             if (waitReply)
             {
                 const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
@@ -8220,6 +8202,8 @@ static void Serve()
         reply += (cmd.type == "get_entities" && !g_actorsJson.empty()) ? g_actorsJson : "[]";
         reply += ",\"affects\":";
         reply += (cmd.type == "get_hud" && !g_affectsJson.empty()) ? g_affectsJson : "[]";
+        reply += ",\"castRemoved\":";
+        reply += (cmd.type == "get_hud" && !g_castRemovedJson.empty()) ? g_castRemovedJson : "[]";
         char extra[96];
         _snprintf_s(extra, _TRUNCATE, ",\"greenRemain\":%d,\"purpleRemain\":%d,\"mounted\":%s}",
             g_greenRemain, g_purpleRemain, g_mounted ? "true" : "false");
@@ -8233,6 +8217,7 @@ static void Serve()
 static DWORD WINAPI InitThread(void*)
 {
     LoadConfig();
+    PublishNoteAffectPtr();
     HMODULE client = FindClient();
     g_base = (BYTE*)client;
     InitAtlasMap();
@@ -8270,12 +8255,14 @@ static DWORD WINAPI InitThread(void*)
             kSendChatRva = 0x250230;
         if (kIsMountingRva >= 0x410000 && kIsMountingRva < 0x420000)
             kIsMountingRva = 0;
+        if (kIsAffectRva >= 0x410000 && kIsAffectRva < 0x420000)
+            kIsAffectRva = 0;
         if (!kNetStreamRva)
             kNetStreamRva = 0x3B74EC8;
         if (!kClickSkillRva)
             kClickSkillRva = 0x1B8A50;
-        NativeLog("baerim chat=0x%X mountHelper=0x%X clickSkill=0x%X net=0x%X",
-            kSendChatRva, kIsMountingRva, kClickSkillRva, kNetStreamRva);
+        NativeLog("baerim chat=0x%X mountHelper=0x%X isAffect=0x%X clickSkill=0x%X net=0x%X",
+            kSendChatRva, kIsMountingRva, kIsAffectRva, kClickSkillRva, kNetStreamRva);
     }
     InstallLoopHooks(client);
     NativeLog("loaded base=%p profile=%s pressActor=0x%X moveTo=0x%X movePixel=0x%X instAtk=0x%X inRange=0x%X getPixel=0x%X hooks=%d",
@@ -8288,6 +8275,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
     {
+        g_selfModule = module;
         DisableThreadLibraryCalls(module);
         InitializeCriticalSection(&g_lock);
         g_done = CreateEventA(nullptr, FALSE, FALSE, nullptr);

@@ -279,9 +279,10 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         var reason = response.Reason ?? "";
         uint? race = response.Race is >= 0 and <= 8 ? (uint)response.Race : null;
         var affects = ParseAffects(response.Affects);
+        var castRemoved = ParseAffects(response.CastRemoved);
         if (response.MaxHp <= 0 || response.Level is < 1 or > 250)
         {
-            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame, race, response.Mounted, affects);
+            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame, race, response.Mounted, affects, castRemoved);
             return true;
         }
 
@@ -300,7 +301,8 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
             response.StartGame,
             race,
             response.Mounted,
-            affects);
+            affects,
+            castRemoved);
         return true;
     }
 
@@ -418,6 +420,24 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
             Vid = targetVid,
             Force = true
         }, updateStatus: false).Ok;
+    }
+
+    public bool TryIsSkillActive(int slot, out bool active)
+    {
+        active = false;
+        Ensure();
+        if (!_client.Connected || slot < 0)
+            return false;
+        var response = _client.Submit(new ActionRequest
+        {
+            Type = ActionProtocol.IsSkillActive,
+            Slot = slot,
+            Force = true
+        }, updateStatus: false);
+        if (!response.Ok)
+            return false;
+        active = response.TargetVid != 0;
+        return true;
     }
 
     public bool TryToggleMount(bool wantMounted = false)
@@ -570,7 +590,9 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
                     CoolRemain = row.C,
                     AffectRemain = row.R,
                     DurationSec = row.D,
-                    Icon = ClientIconStore.DataUri(row.I, row.X)
+                    Icon = ClientIconStore.DataUri(row.I, row.X),
+                    IsToggle = row.T != 0,
+                    IsActive = row.A != 0
                 });
             }
 
@@ -650,6 +672,8 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         public int R { get; set; }
         public int D { get; set; }
         public string? I { get; set; }
+        public int T { get; set; }
+        public int A { get; set; }
     }
 
     private sealed class PotionWire

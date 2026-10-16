@@ -16,7 +16,8 @@ public sealed class CharacterKit
 public static class CharacterKitStore
 {
     public const int PotionPollMs = 250;
-    public const int SkillPollMs = 10000;
+    // Rare refresh — native skill table walks on Baerim are crash-sensitive if spammed.
+    public const int SkillPollMs = 120000;
 
     public static string Root(string baseDirectory) => Path.Combine(baseDirectory, "cache");
 
@@ -124,7 +125,8 @@ public static class CharacterKitStore
         CoolRemain = 0,
         AffectRemain = 0,
         DurationSec = skill.DurationSec,
-        Icon = skill.Icon ?? ""
+        Icon = skill.Icon ?? "",
+        IsToggle = skill.IsToggle
     };
 
     public static IReadOnlyList<PotionStack> MergePots(
@@ -175,7 +177,8 @@ public static class CharacterKitStore
                 CoolRemain = skill.CoolRemain,
                 AffectRemain = skill.AffectRemain,
                 DurationSec = skill.DurationSec != 0 ? skill.DurationSec : old?.DurationSec ?? 0,
-                Icon = First(skill.Icon, old?.Icon)
+                Icon = First(skill.Icon, old?.Icon),
+                IsToggle = skill.IsToggle || (old?.IsToggle ?? false)
             });
         }
 
