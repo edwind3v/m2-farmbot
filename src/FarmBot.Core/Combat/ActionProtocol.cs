@@ -23,6 +23,7 @@ public sealed class ActionRequest
     public string AuthHost { get; set; } = "";
     public int AuthPort { get; set; }
     public int Slot { get; set; }
+    public int ChannelIndex { get; set; } = -1;
 }
 
 public sealed class ActionResponse
@@ -51,6 +52,8 @@ public sealed class ActionResponse
     public int CharacterSlot { get; set; } = -1;
     public bool StartGame { get; set; }
     public bool InWorld { get; set; }
+    public System.Text.Json.JsonElement Channels { get; set; }
+    public System.Text.Json.JsonElement Characters { get; set; }
     public System.Text.Json.JsonElement Pots { get; set; }
     public System.Text.Json.JsonElement Skills { get; set; }
     public System.Text.Json.JsonElement Entities { get; set; }
@@ -80,6 +83,7 @@ public static class ActionProtocol
     public const string GetAtlas = "get_atlas";
     public const string GetPhase = "get_phase";
     public const string GetSession = "get_session";
+    public const string GetChannels = "get_channels";
     public const string SkipIntro = "skip_intro";
     public const string Login = "login";
     public const string SelectCharacter = "select_character";

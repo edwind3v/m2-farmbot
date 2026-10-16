@@ -75,7 +75,18 @@ public sealed class ActionAdapterClient : IDisposable
     public ActionResponse SkipIntro() =>
         Submit(ActionProtocol.SkipIntro, 0, true);
 
-    public ActionResponse Login(string account, string password, string host, int port, string authHost, int authPort, int slot) =>
+    public ActionResponse GetChannels() =>
+        Submit(ActionProtocol.GetChannels, 0, true, updateStatus: false);
+
+    public ActionResponse Login(
+        string account,
+        string password,
+        string host,
+        int port,
+        string authHost,
+        int authPort,
+        int slot,
+        int channelIndex = -1) =>
         Submit(new ActionRequest
         {
             Type = ActionProtocol.Login,
@@ -85,7 +96,8 @@ public sealed class ActionAdapterClient : IDisposable
             Port = port,
             AuthHost = authHost,
             AuthPort = authPort,
-            Slot = slot
+            Slot = slot,
+            ChannelIndex = channelIndex
         });
 
     public ActionResponse SelectCharacter(int slot) =>
@@ -348,12 +360,28 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
     public ActionResponse SkipIntro() => Session(_client.SkipIntro);
     public ActionResponse EnterGame(bool setGamePhase = false) => Session(() => _client.EnterGame(setGamePhase));
 
-    public ActionResponse Login(string account, string password, string host, int port, string authHost, int authPort, int slot)
+    public ActionResponse GetChannels()
     {
         Ensure();
         if (!_client.Connected && !_client.TryConnect(500))
             return new ActionResponse { Reason = Status };
-        return _client.Login(account, password, host, port, authHost, authPort, slot);
+        return _client.GetChannels();
+    }
+
+    public ActionResponse Login(
+        string account,
+        string password,
+        string host,
+        int port,
+        string authHost,
+        int authPort,
+        int slot,
+        int channelIndex = -1)
+    {
+        Ensure();
+        if (!_client.Connected && !_client.TryConnect(500))
+            return new ActionResponse { Reason = Status };
+        return _client.Login(account, password, host, port, authHost, authPort, slot, channelIndex);
     }
 
     public ActionResponse SelectCharacter(int slot)

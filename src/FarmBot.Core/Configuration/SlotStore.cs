@@ -20,6 +20,7 @@ public sealed class ClientSlot
     public string PasswordProtected { get; set; } = "";
     public int CharacterSlot { get; set; }
     public string CharacterName { get; set; } = "";
+    public List<string> CharacterNames { get; set; } = new();
     public uint? Race { get; set; }
     public int ChannelIndex { get; set; }
     public string ChannelName { get; set; } = "";
@@ -295,10 +296,48 @@ public static class SlotStore
         slot.PasswordProtected ??= "";
         slot.CharacterName = (slot.CharacterName ?? "").Trim();
         slot.ChannelName = (slot.ChannelName ?? "").Trim();
+        slot.CharacterNames ??= new List<string>();
+        while (slot.CharacterNames.Count < 5)
+            slot.CharacterNames.Add("");
+        if (slot.CharacterNames.Count > 5)
+            slot.CharacterNames.RemoveRange(5, slot.CharacterNames.Count - 5);
+        for (var i = 0; i < slot.CharacterNames.Count; i++)
+            slot.CharacterNames[i] = (slot.CharacterNames[i] ?? "").Trim();
         slot.CharacterSlot = Math.Clamp(slot.CharacterSlot, 0, 4);
         slot.ChannelIndex = Math.Max(0, slot.ChannelIndex);
         if (slot.Race is > 8)
             slot.Race = null;
+    }
+
+    public static bool ApplyCharacterNames(ClientSlot slot, IReadOnlyList<string>? names)
+    {
+        if (slot == null || names == null || names.Count == 0)
+            return false;
+        slot.CharacterNames ??= new List<string>();
+        while (slot.CharacterNames.Count < 5)
+            slot.CharacterNames.Add("");
+        var dirty = false;
+        for (var i = 0; i < 5 && i < names.Count; i++)
+        {
+            var name = (names[i] ?? "").Trim();
+            if (string.Equals(slot.CharacterNames[i], name, StringComparison.Ordinal))
+                continue;
+            slot.CharacterNames[i] = name;
+            dirty = true;
+        }
+
+        var selected = Math.Clamp(slot.CharacterSlot, 0, 4);
+        if (selected < slot.CharacterNames.Count)
+        {
+            var pick = slot.CharacterNames[selected];
+            if (pick.Length > 0 && !string.Equals(slot.CharacterName, pick, StringComparison.Ordinal))
+            {
+                slot.CharacterName = pick;
+                dirty = true;
+            }
+        }
+
+        return dirty;
     }
 
     private static bool PhaseLooksInWorld(string phase) =>

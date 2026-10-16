@@ -247,6 +247,7 @@ struct Command
     int port;
     int authPort;
     int slot;
+    int channelIndex;
 };
 
 static BYTE* g_base;
@@ -262,6 +263,12 @@ static std::string g_potsJson = "[]";
 static std::string g_skillsJson = "[]";
 static std::string g_actorsJson = "[]";
 static std::string g_affectsJson = "[]";
+static std::string g_channelsJson = "[]";
+static std::string g_charactersJson = "[]";
+static std::string g_resolvedHost;
+static std::string g_resolvedAuthHost;
+static int g_resolvedPort;
+static int g_resolvedAuthPort;
 static int g_mounted;
 static int g_greenRemain;
 static int g_purpleRemain;
@@ -343,6 +350,10 @@ static std::string g_sessionCharacter;
 static std::string g_sessionAccount;
 static std::string g_capturedAccount;
 static std::string g_capturedPassword;
+static char g_pyPhaseWindow[48];
+static DWORD g_pyPhaseWindowMs;
+static void* g_cachedMainStream;
+static DWORD g_cachedMainStreamMs;
 static int g_sessionCharacterSlot = -1;
 static int g_startGame;
 static int g_inWorld;
@@ -356,6 +367,7 @@ static int g_maxLoadSteps;
 static int g_loginSent;
 static int g_baerimAutoOff;
 static int g_selectSent;
+static DWORD g_selectSentAtMs;
 static int g_layoutRecovered;
 static int g_arthion;
 static int g_baerim;
@@ -1533,8 +1545,19 @@ static int IsPythonGameWindow();
 static int LoadingStepCount();
 static int WindowClassIs(const char* name);
 static int ComputeInWorld();
+static int SafePyRun(const char* code);
+static int SafePyRunAfterPeek(const char* code);
+static int SafePyProbePhaseWindow();
+static int PyPhaseWindowIs(const char* name);
 static void* SafePyGetAttr(void* obj, const char* name);
+static int EnsurePythonGil(int* outState);
+static void ReleasePythonGil(int took, int state);
+static int PyCanRun();
+static void PyDec(void* obj);
+static HMODULE PythonDll();
 static int SafePyTypeName(void* obj, char* out, int cap);
+static std::string JsonString(const std::string& src, const char* key);
+static unsigned JsonU32(const std::string& src, const char* key);
 
 static void* AccountConnector()
 {
@@ -1586,7 +1609,378 @@ static bool PhaseHas(const char* name)
 static bool IsPastIntro()
 {
     return PhaseHas("Login") || PhaseHas("Select") || PhaseHas("Hand") ||
-           PhaseHas("Load") || PhaseHas("Game");
+           PhaseHas("Load") || PhaseHas("Game") ||
+           WindowClassIs("LoginWindow") || WindowClassIs("SelectCharacterWindow");
+}
+
+static void MarkBaerimInGame(const char* why)
+{
+    g_sessionPhase = "Game";
+    g_openedGameWindow = 1;
+    g_inWorld = 1;
+    g_loadFinished = 1;
+    lstrcpynA(g_pyPhaseWindow, "GameWindow", (int)sizeof(g_pyPhaseWindow));
+    if (why && why[0])
+        NativeLog("baerim in-game: %s", why);
+}
+
+static void InferBaerimPhaseFromWindow()
+{
+    if (!g_baerim)
+        return;
+    // Once Game is confirmed, never touch Python phase windows again.
+    if (g_inWorld || g_openedGameWindow || PyPhaseWindowIs("GameWindow"))
+    {
+        MarkBaerimInGame(nullptr);
+        return;
+    }
+    // Fast path after StartGame: character name means the world stream is live.
+    if (g_selectSent && !g_sessionCharacter.empty())
+    {
+        char why[96];
+        _snprintf_s(why, _TRUNCATE, "character=%s after select", g_sessionCharacter.c_str());
+        MarkBaerimInGame(why);
+        return;
+    }
+    // Or a short grace after select even before the name string shows up.
+    if (g_selectSent && g_selectSentAtMs && GetTickCount() - g_selectSentAtMs >= 1200)
+    {
+        MarkBaerimInGame("1.2s after select StartGame");
+        return;
+    }
+
+    static DWORD s_probeMs;
+    const DWORD now = GetTickCount();
+    // At most one probe / 750ms. Never probe every RefreshSession tick (that crashed).
+    if (!s_probeMs || now - s_probeMs >= 750)
+    {
+        s_probeMs = now;
+        SafePyProbePhaseWindow();
+    }
+
+    if (PyPhaseWindowIs("GameWindow"))
+    {
+        MarkBaerimInGame("GameWindow");
+        return;
+    }
+    if (PyPhaseWindowIs("LoadingWindow"))
+    {
+        g_sessionPhase = "Load";
+        return;
+    }
+    if (PyPhaseWindowIs("SelectCharacterWindow"))
+    {
+        g_sessionPhase = "Select";
+        return;
+    }
+    if (PyPhaseWindowIs("LoginWindow"))
+    {
+        g_sessionPhase = "Login";
+        return;
+    }
+    if ((PhaseHas("Off") || PhaseHas("Hand") || g_sessionPhase.empty()) &&
+        g_channelsJson.size() > 2)
+        g_sessionPhase = "Login";
+}
+
+static bool IsLoopbackHost(const char* host)
+{
+    if (!host || !host[0])
+        return true;
+    return _stricmp(host, "127.0.0.1") == 0 ||
+           _stricmp(host, "localhost") == 0 ||
+           _stricmp(host, "::1") == 0;
+}
+
+static std::string ReadTempUtf8(const char* fileName)
+{
+    char path[MAX_PATH];
+    if (!GetTempPathA(MAX_PATH, path))
+        return "";
+    char full[MAX_PATH];
+    _snprintf_s(full, _TRUNCATE, "%s%s", path, fileName);
+    FILE* f = nullptr;
+    if (fopen_s(&f, full, "rb") != 0 || !f)
+        return "";
+    std::string out;
+    char buf[1024];
+    size_t n = 0;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        out.append(buf, n);
+    fclose(f);
+    return out;
+}
+
+static int EscapePyPath(const char* full, char* pyPath, int cap)
+{
+    if (!full || !pyPath || cap < 4)
+        return 0;
+    int j = 0;
+    for (int i = 0; full[i] && j < cap - 2; ++i)
+    {
+        if (full[i] == '\\')
+            pyPath[j++] = '\\';
+        pyPath[j++] = full[i];
+    }
+    pyPath[j] = 0;
+    return j > 0 ? 1 : 0;
+}
+
+static int SafePyDumpChannels()
+{
+    // Cache — get_phase used to re-dump on every tick and abort python27.
+    static DWORD s_lastDumpMs;
+    const DWORD now = GetTickCount();
+    if (g_channelsJson.size() > 2 && s_lastDumpMs && now - s_lastDumpMs < 5000)
+        return 1;
+    char path[MAX_PATH];
+    if (!GetTempPathA(MAX_PATH, path))
+        return 0;
+    char full[MAX_PATH];
+    _snprintf_s(full, _TRUNCATE, "%sfarmbot-channels.json", path);
+    DeleteFileA(full);
+    char errFull[MAX_PATH];
+    _snprintf_s(errFull, _TRUNCATE, "%sfarmbot-channels.err", path);
+    DeleteFileA(errFull);
+    char pyPath[MAX_PATH * 2];
+    char pyErr[MAX_PATH * 2];
+    if (!EscapePyPath(full, pyPath, (int)sizeof(pyPath)) ||
+        !EscapePyPath(errFull, pyErr, (int)sizeof(pyErr)))
+        return 0;
+    // Baerim: auth is not nested under REGION_DICT channel entries. Auth is the
+    // first authlist host (firewall.baerim.eu) on port 30001. Prefer live attrs
+    // (AUTH_PORT / AUTH_SERVER / authlist) then fall back to 30001.
+    char code[6500];
+    _snprintf_s(
+        code,
+        _TRUNCATE,
+        "import json\n"
+        "out=[];err=''\n"
+        "def _auth_pair(auth):\n"
+        " if not isinstance(auth,dict) or not auth: return '',0\n"
+        " if ('ip' in auth) or ('host' in auth) or ('port' in auth) or ('tcp_port' in auth):\n"
+        "  a=auth\n"
+        " else:\n"
+        "  ak=sorted(auth.keys())[0]\n"
+        "  a=auth.get(ak) if isinstance(auth.get(ak),dict) else {}\n"
+        " if not isinstance(a,dict): return '',0\n"
+        " return (a.get('ip') or a.get('host') or ''), int(a.get('port') or a.get('tcp_port') or 0)\n"
+        "def _pick_region(d):\n"
+        " if not isinstance(d,dict) or not d: return {}\n"
+        " for k in (0,'0',1,'1'):\n"
+        "  if k in d and isinstance(d[k],dict): return d[k]\n"
+        " k=sorted(d.keys())[0]\n"
+        " return d[k] if isinstance(d.get(k),dict) else {}\n"
+        "try:\n"
+        " import serverInfo as si\n"
+        " rd=getattr(si,'REGION_DICT',None) or getattr(si,'SERVER_DICT',None) or {}\n"
+        " ra=getattr(si,'REGION_AUTH_SERVER_DICT',None) or getattr(si,'AUTH_SERVER_DICT',None) or {}\n"
+        " r=_pick_region(rd)\n"
+        " ra0=_pick_region(ra) if isinstance(ra,dict) else {}\n"
+        " def_auth_host='';def_auth_port=0\n"
+        " for name in ('AUTH_PORT','ACCOUNT_PORT','LOGIN_PORT','auth_port'):\n"
+        "  v=getattr(si,name,None)\n"
+        "  if v is not None:\n"
+        "   try: def_auth_port=int(v); break\n"
+        "   except: pass\n"
+        " for name in ('AUTH_SERVER','ACCOUNT_SERVER','SERVER_IP','SERVER_IP_PROD'):\n"
+        "  v=getattr(si,name,None)\n"
+        "  if isinstance(v,str) and v and v not in ('127.0.0.1','localhost'):\n"
+        "   def_auth_host=v; break\n"
+        " al=getattr(si,'authlist',None) or getattr(si,'AUTH_LIST',None) or getattr(si,'AUTHLIST',None)\n"
+        " if isinstance(al,(list,tuple)) and al:\n"
+        "  for item in al:\n"
+        "   if isinstance(item,str) and item and item not in ('127.0.0.1','localhost'):\n"
+        "    def_auth_host=item; break\n"
+        "   if isinstance(item,dict):\n"
+        "    h=item.get('ip') or item.get('host') or ''\n"
+        "    p=int(item.get('port') or item.get('tcp_port') or 0)\n"
+        "    if h and h not in ('127.0.0.1','localhost'):\n"
+        "     def_auth_host=h\n"
+        "     if p>0: def_auth_port=p\n"
+        "     break\n"
+        " if def_auth_port<=0: def_auth_port=30001\n"
+        " for sk in sorted(r.keys()):\n"
+        "  s=r[sk]\n"
+        "  if not isinstance(s,dict): continue\n"
+        "  ch=s.get('channel') or s.get('channels') or {}\n"
+        "  if not isinstance(ch,dict): ch={}\n"
+        "  auth=s.get('auth') or s.get('account') or {}\n"
+        "  if (not auth) and isinstance(ra0,dict):\n"
+        "   auth=ra0.get(sk) or ra0.get(str(sk)) or {}\n"
+        "  aip,aport=_auth_pair(auth if isinstance(auth,dict) else {})\n"
+        "  if not aip: aip=def_auth_host\n"
+        "  if aport<=0: aport=def_auth_port\n"
+        "  sip=(s.get('ip') or s.get('host') or '')\n"
+        "  for ck in sorted(ch.keys()):\n"
+        "   c=ch[ck]\n"
+        "   if not isinstance(c,dict): continue\n"
+        "   ip=(c.get('ip') or c.get('host') or sip or aip or '')\n"
+        "   port=int(c.get('tcp_port') or c.get('port') or 0)\n"
+        "   name=(c.get('name') or ('CH-'+str(ck)))\n"
+        "   ah=(aip or ip)\n"
+        "   ap=aport if aport>0 else def_auth_port\n"
+        "   if not ip or port<=0: continue\n"
+        "   if ip in ('127.0.0.1','localhost','::1'): continue\n"
+        "   if ap==port: ap=def_auth_port\n"
+        "   out.append({'index':len(out),'name':str(name),'host':str(ip),'port':port,'authHost':str(ah),'authPort':int(ap)})\n"
+        "except Exception as e:\n"
+        " err=str(e)\n"
+        "try:\n"
+        " open(r'%s','wb').write(json.dumps(out))\n"
+        "except Exception as e2:\n"
+        " err=(err+'; '+str(e2)).strip()\n"
+        "try:\n"
+        " open(r'%s','wb').write(err or ('ok count=%%d'%%len(out)))\n"
+        "except Exception:\n"
+        " pass\n",
+        pyPath,
+        pyErr);
+    if (!SafePyRunAfterPeek(code))
+    {
+        NativeLog("baerim channels: SafePyRunAfterPeek failed");
+        g_channelsJson = "[]";
+        return 0;
+    }
+    g_channelsJson = ReadTempUtf8("farmbot-channels.json");
+    if (g_channelsJson.empty())
+        g_channelsJson = "[]";
+    s_lastDumpMs = now;
+    const std::string dumpErr = ReadTempUtf8("farmbot-channels.err");
+    if (!dumpErr.empty() && dumpErr.find("ok count=") == std::string::npos)
+        NativeLog("baerim channels dump: %s json=%s", dumpErr.c_str(), g_channelsJson.c_str());
+    else if (g_channelsJson.size() > 2)
+        NativeLog("baerim channels ready: %s", dumpErr.empty() ? g_channelsJson.c_str() : dumpErr.c_str());
+    return g_channelsJson.size() > 2 ? 1 : 0;
+}
+
+static int SafePyDumpCharacterNames()
+{
+    char path[MAX_PATH];
+    if (!GetTempPathA(MAX_PATH, path))
+        return 0;
+    char full[MAX_PATH];
+    _snprintf_s(full, _TRUNCATE, "%sfarmbot-characters.json", path);
+    DeleteFileA(full);
+    char pyPath[MAX_PATH * 2];
+    int j = 0;
+    for (int i = 0; full[i] && j < (int)sizeof(pyPath) - 2; ++i)
+    {
+        if (full[i] == '\\')
+            pyPath[j++] = '\\';
+        pyPath[j++] = full[i];
+    }
+    pyPath[j] = 0;
+    char code[1600];
+    _snprintf_s(
+        code,
+        _TRUNCATE,
+        "import net,json\n"
+        "names=[]\n"
+        "for i in range(5):\n"
+        " n=''\n"
+        " try:\n"
+        "  n=net.GetAccountCharacterSlotDataString(i,0) or ''\n"
+        " except Exception:\n"
+        "  try: n=net.GetAccountCharacterSlotData(i,0) or ''\n"
+        "  except Exception: n=''\n"
+        " if not isinstance(n,str): n=str(n) if n else ''\n"
+        " names.append(n)\n"
+        "open(r'%s','wb').write(json.dumps(names))\n",
+        pyPath);
+    if (!SafePyRunAfterPeek(code))
+        return 0;
+    g_charactersJson = ReadTempUtf8("farmbot-characters.json");
+    if (g_charactersJson.empty())
+        g_charactersJson = "[]";
+    return g_charactersJson.size() > 2 ? 1 : 0;
+}
+
+static bool JsonPickChannel(const std::string& json, int channelIndex, int preferPort,
+    std::string* host, int* port, std::string* authHost, int* authPort)
+{
+    if (!host || !port || !authHost || !authPort || json.size() < 2 || json[0] != '[')
+        return false;
+    // Prefer matching channelIndex, else preferPort, else first non-loopback.
+    int bestScore = -1;
+    std::string bestHost, bestAuth;
+    int bestPort = 0, bestAuthPort = 0;
+    size_t i = 0;
+    int seen = 0;
+    while (i < json.size())
+    {
+        size_t obj = json.find('{', i);
+        if (obj == std::string::npos)
+            break;
+        size_t end = json.find('}', obj);
+        if (end == std::string::npos)
+            break;
+        std::string piece = json.substr(obj, end - obj + 1);
+        const int idx = (int)JsonU32(piece, "index");
+        const int p = (int)JsonU32(piece, "port");
+        const int ap = (int)JsonU32(piece, "authPort");
+        std::string h = JsonString(piece, "host");
+        std::string ah = JsonString(piece, "authHost");
+        if (ah.empty())
+            ah = h;
+        int score = 0;
+        if (channelIndex >= 0 && idx == channelIndex)
+            score = 300;
+        else if (preferPort > 0 && p == preferPort)
+            score = 200;
+        else if (seen == 0)
+            score = 50;
+        if (!IsLoopbackHost(h.c_str()))
+            score += 20;
+        else
+            score -= 100;
+        if (score > bestScore && !h.empty() && p > 0)
+        {
+            bestScore = score;
+            bestHost = h;
+            bestAuth = ah;
+            bestPort = p;
+            bestAuthPort = ap > 0 ? ap : p;
+        }
+        ++seen;
+        i = end + 1;
+    }
+    if (bestScore < 0 || IsLoopbackHost(bestHost.c_str()))
+        return false;
+    *host = bestHost;
+    *port = bestPort;
+    *authHost = bestAuth.empty() ? bestHost : bestAuth;
+    // Baerim: never use the channel TCP port as auth — auth is 30001.
+    if (bestAuthPort <= 0 || bestAuthPort == bestPort)
+        bestAuthPort = g_baerim ? 30001 : bestPort;
+    *authPort = bestAuthPort;
+    return true;
+}
+
+static bool ResolveBaerimLoginHosts(Command* cmd)
+{
+    if (!cmd)
+        return false;
+    SafePyDumpChannels();
+    std::string host, authHost;
+    int port = 0, authPort = 0;
+    if (!JsonPickChannel(g_channelsJson, cmd->channelIndex, cmd->port, &host, &port, &authHost, &authPort))
+    {
+        NativeLog("baerim login: no live channel from serverInfo (channels=%s)",
+            g_channelsJson.c_str());
+        return false;
+    }
+    cmd->host = host;
+    cmd->port = port;
+    cmd->authHost = authHost;
+    cmd->authPort = authPort;
+    g_resolvedHost = host;
+    g_resolvedPort = port;
+    g_resolvedAuthHost = authHost;
+    g_resolvedAuthPort = authPort;
+    NativeLog("baerim login resolved host=%s:%d auth=%s:%d chIdx=%d",
+        host.c_str(), port, authHost.c_str(), authPort, cmd->channelIndex);
+    return true;
 }
 
 static void ReadLoginSession()
@@ -1630,47 +2024,64 @@ static void RefreshSession()
 {
     char phase[64];
     ReadPhase(phase, 64);
-    ReadLoginSession();
     void* player = Player();
     char name[64];
     if (player && ReadPlayerName(player, name, 64) && name[0])
         g_sessionCharacter = name;
-    if (PhaseHas("Load") || PhaseHas("Game"))
+    // Read character before phase inference so select→Game can flip immediately.
+    InferBaerimPhaseFromWindow();
+    if (g_openedGameWindow || g_inWorld)
     {
-        const int loading = WindowClassIs("LoadingWindow");
-        const int gameWnd = WindowClassIs("GameWindow");
-        if (loading)
-        {
-            const int steps = LoadingStepCount();
-            if (steps > g_maxLoadSteps)
-                g_maxLoadSteps = steps;
-            if (steps > 0)
-                g_sawLoadSteps = 1;
-            if (steps > 0 && steps <= 3 && g_maxLoadSteps >= 8)
-                g_loadNearEnd = 1;
-            if (g_loadNearEnd && steps == 0)
-                g_loadFinished = 1;
-        }
-        if (gameWnd && g_loadFinished)
-            g_openedGameWindow = 1;
+        g_sessionPhase = "Game";
+        g_openedGameWindow = 1;
+        g_inWorld = 1;
+        g_startGame = 1;
+        return; // no WindowClassIs / LoadingStepCount / char dumps in-world
     }
-    g_startGame = g_loadFinished;
+    ReadLoginSession();
+    if (g_baerim && (PhaseHas("Select") || PyPhaseWindowIs("SelectCharacterWindow")))
+    {
+        static DWORD s_lastCharDumpMs;
+        const DWORD now = GetTickCount();
+        if (!s_lastCharDumpMs || now - s_lastCharDumpMs > 2000)
+        {
+            s_lastCharDumpMs = now;
+            SafePyDumpCharacterNames();
+        }
+    }
+    // Baerim: do not run LoadingStepCount/WindowClassIs — GIL from PeekMessage crashed.
+    g_startGame = g_loadFinished || g_openedGameWindow;
     g_inWorld = ComputeInWorld();
+    if (g_inWorld)
+    {
+        g_sessionPhase = "Game";
+        g_openedGameWindow = 1;
+    }
 }
 
 static int ComputeInWorld()
 {
-    if (WindowClassIs("LoadingWindow") || WindowClassIs("LoginWindow") ||
-        WindowClassIs("SelectCharacterWindow") || PhaseHas("Load") ||
-        PhaseHas("Login") || PhaseHas("Select") || PhaseHas("Hand") ||
-        PhaseHas("Logo") || PhaseHas("Intro"))
+    // Baerim often leaves native phase on HandShake/Load while GameWindow is up.
+    if (g_openedGameWindow || PyPhaseWindowIs("GameWindow"))
+        return 1;
+    if (g_selectSent && !g_sessionCharacter.empty() &&
+        !PyPhaseWindowIs("LoginWindow") && !PyPhaseWindowIs("SelectCharacterWindow"))
+        return 1;
+    if (PyPhaseWindowIs("LoginWindow") || PyPhaseWindowIs("SelectCharacterWindow"))
         return 0;
-    if (PhaseHas("Game") || WindowClassIs("GameWindow") || HasGameWindow())
+    // Sticky "Load" from a stale LoadingWindow cache must not block entities.
+    if (PhaseHas("Login") || PhaseHas("Select") ||
+        PhaseHas("Logo") || PhaseHas("Intro") || PhaseHas("Cine") || PhaseHas("EMPIRE"))
+        return 0;
+    if (PhaseHas("Game") && (HasGameWindow() ||
+        (g_hudOk && g_hudMaxHp > 0 && g_hudLevel >= 1 && g_hudLevel <= 250)))
         return 1;
     if (g_hudOk && g_hudMaxHp > 0 && g_hudLevel >= 1 && g_hudLevel <= 250 &&
         !g_sessionCharacter.empty())
         return 1;
-    return g_inWorld;
+    if (g_inWorld)
+        return 1;
+    return 0;
 }
 
 static int SafePhase(FnPhase fn, void* self)
@@ -1837,15 +2248,93 @@ static void* PythonHandler(void* net)
 {
     if (!net)
         return nullptr;
-    __try
+    // Cache the live MainStream — rescanning offsets + GetAttr every PeekMessage tick
+    // is what made Baerim laggy/crashy after select.
+    if (g_cachedMainStream && UserPtr(g_cachedMainStream))
     {
-        void* handler = *(void**)((char*)net + kPythonHandlerDisp);
-        return UserPtr(handler) ? handler : nullptr;
+        const DWORD now = GetTickCount();
+        if (g_inWorld || g_openedGameWindow || now - g_cachedMainStreamMs < 3000)
+            return g_cachedMainStream;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+    // Baerim MainStream is at +0x178; stock Metin2 uses +0x160.
+    static const unsigned kHandlerCandidates[] = {
+        0x178, kPythonHandlerDisp, 0x160, 0x174, 0x17C, 0x170, 0x168, 0x15C, 0x164, 0x14C, 0x148, 0x158
+    };
+    void* bestMain = nullptr;
+    void* stock = nullptr;
+    for (unsigned i = 0; i < sizeof(kHandlerCandidates) / sizeof(kHandlerCandidates[0]); ++i)
     {
-        return nullptr;
+        const unsigned disp = kHandlerCandidates[i];
+        void* handler = nullptr;
+        __try
+        {
+            handler = *(void**)((char*)net + disp);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            handler = nullptr;
+        }
+        if (!UserPtr(handler))
+            continue;
+        if (!PyCanRun())
+        {
+            if ((disp == kPythonHandlerDisp || disp == 0x160) && !stock)
+                stock = handler;
+            continue;
+        }
+        // MainStream has SetSelectCharacterPhase / isAutoSelect. Prefer that over a random ptr
+        // that merely has some curPhaseWindow-like slot (integer 0 still GetAttr-succeeds).
+        void* setSel = SafePyGetAttr(handler, "SetSelectCharacterPhase");
+        void* isAuto = SafePyGetAttr(handler, "isAutoSelect");
+        void* wnd = SafePyGetAttr(handler, "curPhaseWindow");
+        const int isMain = (setSel != nullptr) || (isAuto != nullptr);
+        if (setSel)
+            PyDec(setSel);
+        if (isAuto)
+            PyDec(isAuto);
+        if (isMain && !bestMain)
+            bestMain = handler;
+        if (wnd)
+        {
+            char cls[48];
+            cls[0] = 0;
+            if (SafePyTypeName(wnd, cls, 48) && cls[0] &&
+                (strstr(cls, "Select") || strstr(cls, "Login") || strstr(cls, "Load") ||
+                 strstr(cls, "Game") || strstr(cls, "Logo") || strstr(cls, "Empire")))
+            {
+                PyDec(wnd);
+                g_cachedMainStream = handler;
+                g_cachedMainStreamMs = GetTickCount();
+                return handler;
+            }
+            PyDec(wnd);
+        }
+        else
+        {
+            FnPyErrClear errClear = nullptr;
+            HMODULE py = PythonDll();
+            errClear = py ? (FnPyErrClear)GetProcAddress(py, "PyErr_Clear") : nullptr;
+            if (errClear)
+                errClear();
+        }
+        if ((disp == kPythonHandlerDisp || disp == 0x160) && !stock)
+            stock = handler;
     }
+    // Prefer a verified MainStream (has isAutoSelect / SetSelectCharacterPhase).
+    // Bare +0x160 without those attrs is often wrong on Baerim and breaks select.
+    void* found = bestMain ? bestMain : stock;
+    if (found && bestMain)
+    {
+        g_cachedMainStream = found;
+        g_cachedMainStreamMs = GetTickCount();
+    }
+    else if (found && !bestMain)
+    {
+        // Only keep unverified stock briefly — do not cache it.
+        g_cachedMainStream = nullptr;
+        g_cachedMainStreamMs = 0;
+    }
+    return found;
 }
 
 static HMODULE PythonDll()
@@ -2077,13 +2566,19 @@ static int SafePySetInt(void* obj, const char* name, long value)
     if (!obj || !py || !name || !PyCanRun())
         return 0;
     FnPyIntFromLong fromLong = (FnPyIntFromLong)GetProcAddress(py, "PyInt_FromLong");
+    if (!fromLong)
+        fromLong = (FnPyIntFromLong)GetProcAddress(py, "PyLong_FromLong");
+    typedef void* (__cdecl* FnPyBuildValue)(const char*, ...);
+    FnPyBuildValue build = (FnPyBuildValue)GetProcAddress(py, "Py_BuildValue");
     FnPySetAttrString setAttr = (FnPySetAttrString)GetProcAddress(py, "PyObject_SetAttrString");
     FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
-    if (!fromLong || !setAttr)
+    if (!setAttr || (!fromLong && !build))
         return 0;
     __try
     {
-        void* boxed = fromLong(value);
+        void* boxed = fromLong ? fromLong(value) : nullptr;
+        if (!boxed && build)
+            boxed = build("i", (int)value);
         if (!boxed)
             return 0;
         const int ok = setAttr(obj, name, boxed) == 0;
@@ -2154,30 +2649,69 @@ static int SafePyCallMethod(void* obj, const char* name, const char* format, int
     }
 }
 
+static int SafePyCallMethodStr(void* obj, const char* name, const char* arg)
+{
+    HMODULE py = PythonDll();
+    if (!obj || !py || !name || !arg || !PyCanRun())
+        return 0;
+    FnPyCallMethod call = (FnPyCallMethod)GetProcAddress(py, "PyObject_CallMethod");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!call)
+        return 0;
+    char method[64];
+    lstrcpynA(method, name, 64);
+    __try
+    {
+        void* result = call(obj, method, "s", arg);
+        if (errClear)
+            errClear();
+        return result ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
 static int SafePyAutoSelect(void* net, unsigned slot)
 {
     void* handler = PythonHandler(net);
     if (!handler)
         return 0;
-    SafePySetInt(handler, "isAutoSelect", 1);
+    SafePySetInt(handler, "isAutoSelect", 0);
     SafePySetInt(handler, "isAutoLogin", 0);
     return SafePyCallMethod(handler, "SetCharacterSlot", "i", (int)slot);
 }
 
 static int SafePyPrepareLogin(const Command& cmd)
 {
-    void* handler = PythonHandler(NetStream());
-    if (!handler)
+    int gilState = 0;
+    const int took = EnsurePythonGil(&gilState);
+    if (took < 0)
         return 0;
-    const char* authHost = cmd.authHost.empty() ? cmd.host.c_str() : cmd.authHost.c_str();
-    const int authPort = cmd.authPort > 0 ? cmd.authPort : cmd.port;
-    SafePySetString(handler, "addr", cmd.host.c_str());
-    SafePySetInt(handler, "port", cmd.port);
-    SafePySetString(handler, "account_addr", authHost);
-    SafePySetInt(handler, "account_port", authPort);
-    SafePySetString(handler, "id", cmd.account.c_str());
-    SafePySetString(handler, "pwd", cmd.password.c_str());
-    return SafePyAutoSelect(NetStream(), (unsigned)cmd.slot);
+    void* handler = PythonHandler(NetStream());
+    int ok = 0;
+    if (handler)
+    {
+        const char* authHost = cmd.authHost.empty() ? cmd.host.c_str() : cmd.authHost.c_str();
+        int authPort = cmd.authPort > 0 ? cmd.authPort : 0;
+        if (g_baerim && (authPort <= 0 || authPort == cmd.port))
+            authPort = 30001;
+        if (authPort <= 0)
+            authPort = cmd.port;
+        SafePySetString(handler, "addr", cmd.host.c_str());
+        SafePySetInt(handler, "port", cmd.port);
+        SafePySetString(handler, "account_addr", authHost);
+        SafePySetInt(handler, "account_port", authPort);
+        SafePySetString(handler, "id", cmd.account.c_str());
+        SafePySetString(handler, "pwd", cmd.password.c_str());
+        // Baerim stock auto_login: isAutoSelect=1 so Open() presses Enter.
+        SafePySetInt(handler, "isAutoLogin", 0);
+        SafePySetInt(handler, "isAutoSelect", g_baerim ? 1 : 0);
+        ok = SafePyCallMethod(handler, "SetCharacterSlot", "i", (int)cmd.slot);
+    }
+    ReleasePythonGil(took, gilState);
+    return ok;
 }
 
 static int SafePyClickStart(void* net)
@@ -2185,25 +2719,188 @@ static int SafePyClickStart(void* net)
     void* handler = PythonHandler(net);
     if (!handler)
         return 0;
-    HMODULE py = PythonDll();
-    FnPyGetAttrString getAttr = py ? (FnPyGetAttrString)GetProcAddress(py, "PyObject_GetAttrString") : nullptr;
-    FnPyErrClear errClear = py ? (FnPyErrClear)GetProcAddress(py, "PyErr_Clear") : nullptr;
-    if (!getAttr || !PyCanRun())
-        return 0;
-    void* wnd = nullptr;
-    __try
-    {
-        wnd = getAttr(handler, "curPhaseWindow");
-        if (errClear)
-            errClear();
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-        wnd = nullptr;
-    }
+    void* wnd = SafePyGetAttr(handler, "curPhaseWindow");
     if (!wnd)
         return 0;
     return SafePyCallMethod(wnd, "StartGame", "", 0);
+}
+
+// PeekMessage hook often has no Python TLS — C API GetAttr/SetAttr/CallMethod no-op
+// without GIL. Mirror WindowClassIs: Ensure GIL, then use MainStream @ net+0x160.
+static int EnsurePythonGil(int* outState)
+{
+    if (outState)
+        *outState = 0;
+    if (PyCanRun())
+        return 0; // already runnable; caller must not Release
+    HMODULE py = PythonDll();
+    FnPyGilEnsure gilEnsure = py ? (FnPyGilEnsure)GetProcAddress(py, "PyGILState_Ensure") : nullptr;
+    FnPyGilRelease gilRelease = py ? (FnPyGilRelease)GetProcAddress(py, "PyGILState_Release") : nullptr;
+    (void)gilRelease;
+    if (!gilEnsure)
+        return -1;
+    int state = 0;
+    __try
+    {
+        state = gilEnsure();
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return -1;
+    }
+    if (!PyCanRun())
+        return -1;
+    if (outState)
+        *outState = state;
+    return 1; // took GIL; caller must Release
+}
+
+static void ReleasePythonGil(int took, int state)
+{
+    if (!took)
+        return;
+    HMODULE py = PythonDll();
+    FnPyGilRelease gilRelease = py ? (FnPyGilRelease)GetProcAddress(py, "PyGILState_Release") : nullptr;
+    if (!gilRelease)
+        return;
+    __try { gilRelease(state); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+// Baerim MainStream lives at net+0x178 (not stock 0x160). Prefer that, then a short scan.
+static unsigned g_baerimHandlerDisp = 0x178;
+
+static int TryStartGameOnHandler(void* handler, unsigned slot, char* clsOut, int clsCap)
+{
+    if (!handler)
+        return 0;
+    void* wnd = SafePyGetAttr(handler, "curPhaseWindow");
+    if (!wnd)
+        wnd = SafePyGetAttr(handler, "newPhaseWindow");
+    if (!wnd)
+        return 0;
+    char cls[48];
+    cls[0] = 0;
+    SafePyTypeName(wnd, cls, 48);
+    if (cls[0] && (_stricmp(cls, "int") == 0 || _stricmp(cls, "long") == 0 ||
+                   _stricmp(cls, "NoneType") == 0))
+    {
+        PyDec(wnd);
+        return 0;
+    }
+    if (cls[0] && !strstr(cls, "Select"))
+    {
+        PyDec(wnd);
+        return 0;
+    }
+    SafePySetInt(handler, "isAutoSelect", 1);
+    SafePyCallMethod(handler, "SetCharacterSlot", "i", (int)slot);
+    SafePyCallMethod(wnd, "SelectSlot", "i", (int)slot);
+    const int ok = SafePyCallMethod(wnd, "StartGame", "", 0) ||
+                   SafePyCallMethod(wnd, "OnIMEReturn", "", 0);
+    if (ok && clsOut && clsCap > 0)
+        lstrcpynA(clsOut, cls[0] ? cls : "Select", clsCap);
+    PyDec(wnd);
+    return ok;
+}
+
+// Manual Enter = SelectCharacterWindow.StartGame.
+static int SafePyBaerimSelectCharacter(unsigned slot)
+{
+    int gilState = 0;
+    const int took = EnsurePythonGil(&gilState);
+    if (took < 0)
+    {
+        NativeLog("baerim select: no GIL");
+        return 0;
+    }
+
+    void* net = NetStream();
+    int ok = 0;
+    unsigned foundDisp = 0;
+    char foundCls[48];
+    foundCls[0] = 0;
+    if (net)
+    {
+        // Known Baerim offset first (from successful select), then tiny fallback list.
+        static const unsigned kDisp[] = { 0x178, 0x160, 0x174, 0x17C, 0x170, 0x168 };
+        if (g_baerimHandlerDisp)
+        {
+            void* handler = nullptr;
+            __try { handler = *(void**)((char*)net + g_baerimHandlerDisp); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { handler = nullptr; }
+            if (UserPtr(handler) && TryStartGameOnHandler(handler, slot, foundCls, 48))
+            {
+                ok = 1;
+                foundDisp = g_baerimHandlerDisp;
+                g_cachedMainStream = handler;
+                g_cachedMainStreamMs = GetTickCount();
+            }
+        }
+        for (unsigned i = 0; !ok && i < sizeof(kDisp) / sizeof(kDisp[0]); ++i)
+        {
+            if (kDisp[i] == g_baerimHandlerDisp)
+                continue;
+            void* handler = nullptr;
+            __try { handler = *(void**)((char*)net + kDisp[i]); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { handler = nullptr; }
+            if (!UserPtr(handler))
+                continue;
+            if (!TryStartGameOnHandler(handler, slot, foundCls, 48))
+                continue;
+            ok = 1;
+            foundDisp = kDisp[i];
+            g_baerimHandlerDisp = foundDisp;
+            g_cachedMainStream = handler;
+            g_cachedMainStreamMs = GetTickCount();
+        }
+    }
+    if (ok)
+        NativeLog("baerim select StartGame disp=0x%X cls=%s slot=%u", foundDisp, foundCls, slot);
+    else
+        NativeLog("baerim select waiting for SelectCharacterWindow phase=%s",
+            g_sessionPhase.empty() ? "?" : g_sessionPhase.c_str());
+    ReleasePythonGil(took, gilState);
+    return ok;
+}
+
+// Stock introLogin auto_login: isAutoSelect=1 + SetCharacterSlot before select Open().
+static int SafePyBaerimArmAutoSelect(int slot)
+{
+    int gilState = 0;
+    const int took = EnsurePythonGil(&gilState);
+    if (took < 0)
+        return 0;
+    void* net = NetStream();
+    int ok = 0;
+    unsigned foundDisp = 0;
+    static const unsigned kDisp[] = { 0x178, 0x160, 0x174, 0x17C, 0x170, 0x168 };
+    if (net)
+    {
+        for (unsigned i = 0; i < sizeof(kDisp) / sizeof(kDisp[0]) && !ok; ++i)
+        {
+            const unsigned disp = kDisp[i];
+            void* handler = nullptr;
+            __try { handler = *(void**)((char*)net + disp); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { handler = nullptr; }
+            if (!UserPtr(handler))
+                continue;
+            if (!SafePySetInt(handler, "isAutoSelect", 1))
+                continue;
+            SafePyCallMethod(handler, "SetCharacterSlot", "i", slot);
+            g_cachedMainStream = handler;
+            g_cachedMainStreamMs = GetTickCount();
+            g_baerimHandlerDisp = disp;
+            foundDisp = disp;
+            ok = 1;
+        }
+    }
+    if (ok)
+        NativeLog("baerim arm isAutoSelect=1 disp=0x%X slot=%d", foundDisp, slot);
+    else
+        NativeLog("baerim arm isAutoSelect: no MainStream slot accepted SetInt");
+    ReleasePythonGil(took, gilState);
+    return ok;
 }
 
 static void* SafePyGetAttr(void* obj, const char* name)
@@ -2236,42 +2933,84 @@ static int SafePyTypeName(void* obj, char* out, int cap)
     out[0] = 0;
     FnPyGetAttrString getAttr = (FnPyGetAttrString)GetProcAddress(py, "PyObject_GetAttrString");
     FnPyStringAsString asString = (FnPyStringAsString)GetProcAddress(py, "PyString_AsString");
+    typedef const char* (__cdecl* FnUtf8)(void*);
+    FnUtf8 asUtf8 = (FnUtf8)GetProcAddress(py, "PyUnicode_AsUTF8");
+    if (!asUtf8)
+        asUtf8 = (FnUtf8)GetProcAddress(py, "PyBytes_AsString");
     FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
-    if (!getAttr || !asString)
+    if (!getAttr || (!asString && !asUtf8))
         return 0;
+    void* cls = nullptr;
+    void* name = nullptr;
+    int ok = 0;
     __try
     {
-        void* cls = getAttr(obj, "__class__");
+        cls = getAttr(obj, "__class__");
         if (!cls)
             return 0;
-        void* name = getAttr(cls, "__name__");
+        name = getAttr(cls, "__name__");
         if (!name)
+        {
+            PyDec(cls);
             return 0;
-        const char* text = asString(name);
-        if (!text)
-            return 0;
-        lstrcpynA(out, text, cap);
-        return out[0] ? 1 : 0;
+        }
+        const char* text = asString ? asString(name) : nullptr;
+        if (!text && asUtf8)
+            text = asUtf8(name);
+        if (text)
+        {
+            lstrcpynA(out, text, cap);
+            ok = out[0] ? 1 : 0;
+        }
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
         if (errClear)
             errClear();
-        return 0;
+        ok = 0;
     }
+    PyDec(name);
+    PyDec(cls);
+    return ok;
 }
 
 static int WindowClassIs(const char* name)
 {
     if (!name || !name[0])
         return 0;
+    HMODULE py = PythonDll();
+    FnPyGilEnsure gilEnsure = py ? (FnPyGilEnsure)GetProcAddress(py, "PyGILState_Ensure") : nullptr;
+    FnPyGilRelease gilRelease = py ? (FnPyGilRelease)GetProcAddress(py, "PyGILState_Release") : nullptr;
+    int gil = 0;
+    int took = 0;
+    if (!PyCanRun() && gilEnsure && gilRelease)
+    {
+        __try
+        {
+            gil = gilEnsure();
+            took = 1;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            took = 0;
+        }
+        if (!took || !PyCanRun())
+            return 0;
+    }
+    else if (!PyCanRun())
+        return 0;
     char cls[40];
     cls[0] = 0;
     void* handler = PythonHandler(NetStream());
     void* wnd = handler ? SafePyGetAttr(handler, "curPhaseWindow") : nullptr;
-    if (!wnd || !SafePyTypeName(wnd, cls, 40) || !cls[0])
-        return 0;
-    return strcmp(cls, name) == 0 ? 1 : 0;
+    const int match = (wnd && SafePyTypeName(wnd, cls, 40) && cls[0] && _stricmp(cls, name) == 0) ? 1 : 0;
+    PyDec(wnd);
+    if (took && gilRelease)
+    {
+        __try { gilRelease(gil); }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    return match;
 }
 
 static int IsPythonGameWindow()
@@ -2290,6 +3029,7 @@ static int LoadingStepCount()
     if (!wnd)
         return -1;
     void* steps = SafePyGetAttr(wnd, "loadStepList");
+    PyDec(wnd);
     if (!steps)
         return -1;
     HMODULE py = PythonDll();
@@ -2299,18 +3039,23 @@ static int LoadingStepCount()
         size = py ? (FnPyListSize)GetProcAddress(py, "PyObject_Size") : nullptr;
     FnPyErrClear errClear = py ? (FnPyErrClear)GetProcAddress(py, "PyErr_Clear") : nullptr;
     if (!size || !PyCanRun())
+    {
+        PyDec(steps);
         return -1;
+    }
+    int n = -1;
     __try
     {
-        const int n = size(steps);
+        n = size(steps);
         if (n < 0 && errClear)
             errClear();
-        return n;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        return -1;
+        n = -1;
     }
+    PyDec(steps);
+    return n;
 }
 
 static int SafePyRun(const char* code)
@@ -2381,6 +3126,64 @@ static int SafePyRunAfterPeek(const char* code)
     return ok;
 }
 
+static int PyPhaseWindowIs(const char* name)
+{
+    if (!name || !name[0] || !g_pyPhaseWindow[0])
+        return 0;
+    return _stricmp(g_pyPhaseWindow, name) == 0 ? 1 : 0;
+}
+
+static int SafePyProbePhaseWindow()
+{
+    // Baerim has no net.GetMainStream — use GIL + PythonHandler (net+0x160).
+    const DWORD now = GetTickCount();
+    if (now - g_pyPhaseWindowMs < 400)
+        return g_pyPhaseWindow[0] ? 1 : 0;
+    g_pyPhaseWindowMs = now;
+    int gilState = 0;
+    const int took = EnsurePythonGil(&gilState);
+    if (took < 0)
+        return g_pyPhaseWindow[0] ? 1 : 0;
+    void* handler = PythonHandler(NetStream());
+    char cls[48];
+    cls[0] = 0;
+    void* wnd = handler ? SafePyGetAttr(handler, "curPhaseWindow") : nullptr;
+    if (!wnd && handler)
+        wnd = SafePyGetAttr(handler, "newPhaseWindow");
+    int found = 0;
+    if (wnd && SafePyTypeName(wnd, cls, 48) && cls[0])
+    {
+        if (_stricmp(g_pyPhaseWindow, cls) != 0)
+            NativeLog("baerim phase window=%s nativePhase=%s",
+                cls, g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
+        lstrcpynA(g_pyPhaseWindow, cls, (int)sizeof(g_pyPhaseWindow));
+        found = 1;
+    }
+    PyDec(wnd);
+    ReleasePythonGil(took, gilState);
+    return found || g_pyPhaseWindow[0] ? 1 : 0;
+}
+
+static int EscapePySingleQuoted(const char* in, char* out, int cap)
+{
+    if (!out || cap < 4)
+        return 0;
+    int j = 0;
+    out[j++] = '\'';
+    if (in)
+    {
+        for (int i = 0; in[i] && j < cap - 3; ++i)
+        {
+            if (in[i] == '\\' || in[i] == '\'')
+                out[j++] = '\\';
+            out[j++] = in[i];
+        }
+    }
+    out[j++] = '\'';
+    out[j] = 0;
+    return 1;
+}
+
 static int SafePyEnsureServerInfo()
 {
     char code[1600];
@@ -2399,18 +3202,191 @@ static int SafePyEnsureServerInfo()
         " if not ok:\n"
         "  k=sorted(r.keys())[0]\n"
         "  s=r[k]\n"
-        "  c=s['channel']\n"
+        "  c=s.get('channel') or s.get('channels') or {}\n"
         "  i=sorted(c.keys())[0]\n"
         "  p=%d\n"
         "  for ck in c.keys():\n"
-        "   if int(c[ck].get('tcp_port',0))==p:\n"
+        "   if int(c[ck].get('tcp_port') or c[ck].get('port') or 0)==p:\n"
         "    i=ck\n"
         "    break\n"
         "  net.SetServerInfo('%%s, %%s' %% (s['name'], c[i]['name']))\n"
         "except:\n"
         " pass\n",
         g_loginPort);
-    return SafePyRun(code);
+    return SafePyRunAfterPeek(code);
+}
+
+static int SafePyCallMethod2Str(void* obj, const char* name, const char* a, const char* b)
+{
+    HMODULE py = PythonDll();
+    if (!obj || !py || !name || !a || !b || !PyCanRun())
+        return 0;
+    FnPyCallMethod call = (FnPyCallMethod)GetProcAddress(py, "PyObject_CallMethod");
+    FnPyErrClear errClear = (FnPyErrClear)GetProcAddress(py, "PyErr_Clear");
+    if (!call)
+        return 0;
+    char method[64];
+    lstrcpynA(method, name, 64);
+    __try
+    {
+        void* result = call(obj, method, "ss", a, b);
+        if (errClear)
+            errClear();
+        return result ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+// Exact channel-select + Log Me In (stock introLogin):
+//   SetServerInfo
+//   SetMarkServer(MARKADDR_DICT[region*1000+server*10])  — NOT the channel port
+//   SetConnectInfo(channelIp, channelPort, authIp, authPort)
+//   SetVersionId (Baerim DYNAMIC_VERSION)
+//   SetLoginInfo + ConnectToAccountServer(channel, auth)
+static int SafePyBaerimUiLogin(const Command& cmd)
+{
+    char acc[384], pwd[384];
+    if (!EscapePySingleQuoted(cmd.account.c_str(), acc, (int)sizeof(acc)) ||
+        !EscapePySingleQuoted(cmd.password.c_str(), pwd, (int)sizeof(pwd)))
+        return 0;
+    const int wantPort = cmd.port > 0 ? cmd.port : 0;
+    const int wantIdx = cmd.channelIndex;
+
+    // Prefer LoginWindow.SetChannel + Connect(id,pwd) — that already does mark/auth correctly.
+    void* handler = PythonHandler(NetStream());
+    if (handler)
+    {
+        SafePyPrepareLogin(cmd);
+        void* wnd = SafePyGetAttr(handler, "curPhaseWindow");
+        char cls[48];
+        cls[0] = 0;
+        if (wnd && SafePyTypeName(wnd, cls, 48) && strstr(cls, "Login"))
+        {
+            if (wantIdx >= 0)
+                SafePyCallMethod(wnd, "SetChannel", "i", wantIdx);
+            void* idEdit = SafePyGetAttr(wnd, "idEditLine");
+            if (!idEdit)
+                idEdit = SafePyGetAttr(wnd, "id");
+            void* pwdEdit = SafePyGetAttr(wnd, "pwdEditLine");
+            if (!pwdEdit)
+                pwdEdit = SafePyGetAttr(wnd, "pwd");
+            if (idEdit)
+                SafePyCallMethodStr(idEdit, "SetText", cmd.account.c_str());
+            if (pwdEdit)
+                SafePyCallMethodStr(pwdEdit, "SetText", cmd.password.c_str());
+            if (SafePyCallMethod2Str(wnd, "Connect", cmd.account.c_str(), cmd.password.c_str()))
+            {
+                NativeLog("baerim login via LoginWindow.Connect");
+                return 1;
+            }
+            if (SafePyCallMethod(wnd, "__OnClickLoginButton", "", 0))
+            {
+                NativeLog("baerim login via LoginWindow.__OnClickLoginButton");
+                return 1;
+            }
+        }
+    }
+
+    char code[4200];
+    _snprintf_s(
+        code,
+        _TRUNCATE,
+        "import net,os\n"
+        "acc=%s;pwd=%s;wantPort=%d;wantIdx=%d\n"
+        "ok=0;err='';detail=''\n"
+        "try:\n"
+        " import serverInfo,constInfo\n"
+        " try:\n"
+        "  if getattr(constInfo,'SEQUENCE_PACKET_ENABLE',0) and hasattr(net,'SetPacketSequenceMode'):\n"
+        "   net.SetPacketSequenceMode()\n"
+        " except: pass\n"
+        " try:\n"
+        "  if hasattr(net,'SetVersionId') and hasattr(constInfo,'GetVersionId'):\n"
+        "   net.SetVersionId(constInfo.GetVersionId())\n"
+        "   detail+='vid;'\n"
+        " except Exception as ve:\n"
+        "  detail+='vidFail;'\n"
+        " rd=getattr(serverInfo,'REGION_DICT',{})\n"
+        " regionID=0\n"
+        " if 0 in rd: regionID=0\n"
+        " elif '0' in rd: regionID='0'\n"
+        " else: regionID=sorted(rd.keys())[0]\n"
+        " r=rd[regionID]\n"
+        " sk=sorted(r.keys())[0]\n"
+        " s=r[sk]\n"
+        " ch=s.get('channel') or s.get('channels') or {}\n"
+        " ck=sorted(ch.keys())[0]\n"
+        " if wantIdx>=0:\n"
+        "  keys=sorted(ch.keys())\n"
+        "  if wantIdx<len(keys): ck=keys[wantIdx]\n"
+        " if wantPort>0:\n"
+        "  for k in ch.keys():\n"
+        "   if int(ch[k].get('tcp_port') or ch[k].get('port') or 0)==wantPort: ck=k;break\n"
+        " c=ch[ck]\n"
+        " chHost=(c.get('ip') or c.get('host') or s.get('ip') or s.get('host') or '')\n"
+        " chPort=int(c.get('tcp_port') or c.get('port') or 0)\n"
+        " authHost=chHost; authPort=30001\n"
+        " try:\n"
+        "  ra=serverInfo.REGION_AUTH_SERVER_DICT[regionID]\n"
+        "  a=ra.get(sk) or ra.get(str(sk)) or ra[sorted(ra.keys())[0]]\n"
+        "  authHost=a.get('ip') or a.get('host') or authHost\n"
+        "  authPort=int(a.get('port') or a.get('tcp_port') or authPort)\n"
+        " except: pass\n"
+        " if authPort==chPort: authPort=30001\n"
+        " markHost=chHost; markPort=chPort\n"
+        " try:\n"
+        "  sid=int(sk)\n"
+        "  markKey=int(regionID)*1000+sid*10\n"
+        "  md=serverInfo.MARKADDR_DICT\n"
+        "  m=md.get(markKey) or md.get(str(markKey)) or md[sorted(md.keys())[0]]\n"
+        "  markHost=m.get('ip') or m.get('host') or markHost\n"
+        "  markPort=int(m.get('tcp_port') or m.get('port') or markPort)\n"
+        "  detail+='mark;'\n"
+        " except: detail+='markFallback;'\n"
+        " try: net.SetServerInfo('%%s, %%s' %% (s.get('name',''), c.get('name','CH')))\n"
+        " except: pass\n"
+        " if hasattr(net,'SetMarkServer'): net.SetMarkServer(markHost,int(markPort))\n"
+        " net.SetLoginInfo(acc,pwd)\n"
+        " net.ConnectToAccountServer(chHost,int(chPort),authHost,int(authPort))\n"
+        " ok=1\n"
+        " detail+='ch=%%s:%%d auth=%%s:%%d mark=%%s:%%d'%%(chHost,chPort,authHost,authPort,markHost,markPort)\n"
+        "except Exception as e:\n"
+        " err=str(e)\n"
+        "try:\n"
+        " t=os.environ.get('TEMP','.')\n"
+        " open(t+'\\\\farmbot-login.ok','wb').write('1' if ok else '0')\n"
+        " open(t+'\\\\farmbot-login.err','wb').write(detail+'|'+err)\n"
+        "except: pass\n",
+        acc, pwd, wantPort, wantIdx);
+    {
+        char dir[MAX_PATH];
+        if (GetTempPathA(MAX_PATH, dir))
+        {
+            char p1[MAX_PATH], p2[MAX_PATH];
+            _snprintf_s(p1, _TRUNCATE, "%sfarmbot-login.err", dir);
+            _snprintf_s(p2, _TRUNCATE, "%sfarmbot-login.ok", dir);
+            DeleteFileA(p1);
+            DeleteFileA(p2);
+        }
+    }
+    if (!SafePyRunAfterPeek(code))
+    {
+        NativeLog("baerim login AfterPeek failed");
+        return 0;
+    }
+    const std::string err = ReadTempUtf8("farmbot-login.err");
+    const std::string ok = ReadTempUtf8("farmbot-login.ok");
+    if (!err.empty())
+        NativeLog("baerim login detail=%s", err.c_str());
+    if (!ok.empty() && ok[0] == '1')
+    {
+        NativeLog("baerim login via channel-select+ConnectToAccountServer");
+        return 1;
+    }
+    return 0;
 }
 
 static int SafePyAskGamePhase(void* net)
@@ -2433,25 +3409,28 @@ static int SafePyAskGamePhase(void* net)
 
 static bool ExecuteSession(const Command& cmd)
 {
-    if (cmd.type != "get_phase" && cmd.type != "get_session" && cmd.type != "skip_intro" &&
+    if (cmd.type != "get_phase" && cmd.type != "get_session" && cmd.type != "get_channels" &&
+        cmd.type != "skip_intro" &&
         cmd.type != "login" && cmd.type != "select_character" && cmd.type != "enter_game")
         return false;
 
-    if (g_baerim && (cmd.type == "skip_intro" || cmd.type == "login" ||
-        cmd.type == "select_character" || cmd.type == "enter_game"))
+    if (cmd.type == "get_channels")
     {
         RefreshSession();
-        g_lastOk = true;
-        g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "baerim manual login";
-        NativeLog("baerim skip auto-login cmd=%s phase=%s", cmd.type.c_str(),
-            g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
+        const int ok = SafePyDumpChannels();
+        g_lastOk = ok != 0;
+        g_lastReason = ok ? "channels" : "serverInfo channels unavailable";
         return true;
     }
 
     if (cmd.type == "get_phase" || cmd.type == "get_session")
     {
         RefreshSession();
-        g_lastOk = !g_sessionPhase.empty() || !g_sessionAccount.empty();
+        if (g_baerim && (PhaseHas("Login") || WindowClassIs("LoginWindow") || PyPhaseWindowIs("LoginWindow")) &&
+            g_channelsJson.size() <= 2)
+            SafePyDumpChannels();
+        g_lastOk = !g_sessionPhase.empty() || !g_sessionAccount.empty() ||
+                   WindowClassIs("LoginWindow") || WindowClassIs("SelectCharacterWindow");
         g_lastReason = !g_sessionPhase.empty()
             ? g_sessionPhase
             : (g_sessionAccount.empty() ? "phase unread" : "account captured");
@@ -2460,9 +3439,14 @@ static bool ExecuteSession(const Command& cmd)
 
     if (cmd.type == "skip_intro")
     {
+        if (g_baerim && g_channelsJson.size() <= 2)
+            SafePyDumpChannels();
         RefreshSession();
-        if (IsPastIntro())
+        if (IsPastIntro() || PhaseHas("Login") || WindowClassIs("LoginWindow") || PyPhaseWindowIs("LoginWindow"))
         {
+            if ((PhaseHas("Off") || g_sessionPhase.empty()) &&
+                (WindowClassIs("LoginWindow") || PyPhaseWindowIs("LoginWindow")))
+                g_sessionPhase = "Login";
             g_lastOk = true;
             g_lastReason = g_sessionPhase;
             return true;
@@ -2473,12 +3457,25 @@ static bool ExecuteSession(const Command& cmd)
             g_lastReason = "network stream is null";
             return true;
         }
-        if (g_sessionPhase.empty() || PhaseHas("Off"))
+        // Baerim shows LoginWindow itself — never call SetLoginPhase (recovered xref traps / corrupts).
+        if (g_baerim)
         {
-            g_lastReason = g_sessionPhase.empty() ? "intro not ready" : g_sessionPhase;
+            if (g_channelsJson.size() <= 2)
+                SafePyDumpChannels();
+            InferBaerimPhaseFromWindow();
+            g_skippedIntro = 1;
+            const bool ready = PhaseHas("Login") || PhaseHas("Select") || PhaseHas("Load") ||
+                               PhaseHas("Game") || g_channelsJson.size() > 2;
+            g_lastOk = ready;
+            if (ready && (PhaseHas("Off") || g_sessionPhase.empty()))
+                g_sessionPhase = "Login";
+            g_lastReason = g_sessionPhase.empty() ? "waiting for LoginWindow" : g_sessionPhase;
             return true;
         }
-        if (!PhaseHas("Logo") && !PhaseHas("Intro") && !PhaseHas("Cine") && !PhaseHas("EMPIRE"))
+        const bool preLogin =
+            g_sessionPhase.empty() || PhaseHas("Off") || PhaseHas("Logo") || PhaseHas("Intro") ||
+            PhaseHas("Cine") || PhaseHas("EMPIRE");
+        if (!preLogin)
         {
             g_lastReason = g_sessionPhase;
             return true;
@@ -2488,20 +3485,22 @@ static bool ExecuteSession(const Command& cmd)
             if (!kSetLoginPhaseRva)
             {
                 RefreshSession();
-                g_lastOk = IsPastIntro();
+                g_lastOk = IsPastIntro() || PhaseHas("Login");
                 g_lastReason = g_sessionPhase.empty() ? "waiting for login phase" : g_sessionPhase;
                 return true;
             }
-            NativeLog("skip_intro SetLoginPhase from %s", g_sessionPhase.c_str());
+            NativeLog("skip_intro SetLoginPhase from %s",
+                g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
             if (!SafePhase((FnPhase)(g_base + kSetLoginPhaseRva), net))
             {
+                g_skippedIntro = 1; // do not hammer a trapping RVA
                 g_lastReason = "SetLoginPhase trapped";
                 return true;
             }
             g_skippedIntro = 1;
         }
         RefreshSession();
-        g_lastOk = IsPastIntro();
+        g_lastOk = IsPastIntro() || PhaseHas("Login");
         g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "skip_intro";
         return true;
     }
@@ -2509,17 +3508,51 @@ static bool ExecuteSession(const Command& cmd)
     if (cmd.type == "login")
     {
         RefreshSession();
-        if (g_loginSent || PhaseHas("Select") || PhaseHas("Load") || PhaseHas("Game") || PhaseHas("Hand"))
+        // HandShake is BEFORE account login completes — never treat it as already logged in.
+        if (g_loginSent || PhaseHas("Select") || PhaseHas("Load") || PhaseHas("Game") ||
+            WindowClassIs("SelectCharacterWindow") || PyPhaseWindowIs("SelectCharacterWindow"))
         {
             g_lastOk = true;
             g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "login already sent";
             return true;
         }
-        if (g_sessionPhase.empty() || PhaseHas("Off") || !PhaseHas("Login"))
+        // Baerim keeps native phase OffLine while LoginWindow is up. Once live
+        // channels exist, SetMarkServer+Connect is safe — do not wait forever on phase.
+        if (g_baerim && g_channelsJson.size() <= 2)
+            SafePyDumpChannels();
+        InferBaerimPhaseFromWindow();
+        if ((PhaseHas("Off") || g_sessionPhase.empty()) &&
+            (WindowClassIs("LoginWindow") || PyPhaseWindowIs("LoginWindow") ||
+             (g_baerim && g_channelsJson.size() > 2)))
+            g_sessionPhase = "Login";
+        const bool onLogin =
+            PhaseHas("Login") || WindowClassIs("LoginWindow") || PyPhaseWindowIs("LoginWindow") ||
+            (g_baerim && g_channelsJson.size() > 2);
+        if (!onLogin)
         {
             g_lastOk = false;
             g_lastReason = g_sessionPhase.empty() ? "login waiting for Login phase" : g_sessionPhase;
-            NativeLog("login blocked phase=%s", g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
+            NativeLog("login blocked phase=%s window=%s channels=%d",
+                g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str(),
+                g_pyPhaseWindow[0] ? g_pyPhaseWindow : "(none)",
+                (int)g_channelsJson.size());
+            return true;
+        }
+
+        Command loginCmd = cmd;
+        if (g_baerim || IsLoopbackHost(loginCmd.host.c_str()) || loginCmd.host.empty() || loginCmd.port <= 0)
+        {
+            if (!ResolveBaerimLoginHosts(&loginCmd))
+            {
+                g_lastOk = false;
+                g_lastReason = "baerim live serverInfo hosts unavailable (refusing 127.0.0.1)";
+                return true;
+            }
+        }
+        if (g_baerim && IsLoopbackHost(loginCmd.host.c_str()))
+        {
+            g_lastOk = false;
+            g_lastReason = "refusing baerim login to loopback";
             return true;
         }
 
@@ -2530,6 +3563,12 @@ static bool ExecuteSession(const Command& cmd)
         g_loadNearEnd = 0;
         g_maxLoadSteps = 0;
         g_selectSent = 0;
+        g_selectSentAtMs = 0;
+        g_cachedMainStream = nullptr;
+        g_cachedMainStreamMs = 0;
+        g_pyPhaseWindow[0] = 0;
+        g_pyPhaseWindowMs = 0;
+        g_baerimWorldAtMs = 0;
         void* net = NetStream();
         void* account = AccountConnector();
         if (!net)
@@ -2542,7 +3581,7 @@ static bool ExecuteSession(const Command& cmd)
             g_lastReason = "account connector is null";
             return true;
         }
-        if (cmd.account.empty() || cmd.password.empty() || cmd.host.empty() || cmd.port <= 0)
+        if (loginCmd.account.empty() || loginCmd.password.empty() || loginCmd.host.empty() || loginCmd.port <= 0)
         {
             g_lastReason = "login needs account, password, host, port";
             return true;
@@ -2558,28 +3597,55 @@ static bool ExecuteSession(const Command& cmd)
             return true;
         }
 
-        CaptureLogin(cmd.account.c_str(), cmd.password.c_str());
-        g_loginPort = cmd.port;
+        CaptureLogin(loginCmd.account.c_str(), loginCmd.password.c_str());
+        g_loginPort = loginCmd.port;
+        const char* authHost = loginCmd.authHost.empty() ? loginCmd.host.c_str() : loginCmd.authHost.c_str();
+        int authPort = loginCmd.authPort > 0 ? loginCmd.authPort : 0;
+        if (g_baerim && (authPort <= 0 || authPort == loginCmd.port))
+            authPort = 30001;
+        if (authPort <= 0)
+            authPort = loginCmd.port;
+        loginCmd.authHost = authHost;
+        loginCmd.authPort = authPort;
         NativeLog("login send account=%s host=%s:%d auth=%s:%d slot=%d",
-            cmd.account.c_str(), cmd.host.c_str(), cmd.port,
-            cmd.authHost.empty() ? cmd.host.c_str() : cmd.authHost.c_str(),
-            cmd.authPort > 0 ? cmd.authPort : cmd.port, cmd.slot);
-        if (!SafeSetLogin(g_setLoginInfo ? g_setLoginInfo : setNet, net, cmd.account.c_str(), cmd.password.c_str()))
-        {
-            g_lastReason = "SetLoginInfo trapped";
-            return true;
-        }
-        SafeSetLogin(setAcc, account, cmd.account.c_str(), cmd.password.c_str());
-        SafePyPrepareLogin(cmd);
+            loginCmd.account.c_str(), loginCmd.host.c_str(), loginCmd.port,
+            authHost, authPort, loginCmd.slot);
+
+        SafePyPrepareLogin(loginCmd);
         SafePyEnsureServerInfo();
 
-        const char* authHost = cmd.authHost.empty() ? cmd.host.c_str() : cmd.authHost.c_str();
-        const int authPort = cmd.authPort > 0 ? cmd.authPort : cmd.port;
-        if (!SafeConnect(connect, account, cmd.host.c_str(), cmd.port, authHost, authPort))
+        int connected = 0;
+        if (g_baerim)
         {
-            g_lastReason = "ConnectToAccountServer failed";
+            // Exact Log Me In path: LoginWindow.Connect(id,pwd) / MainStream.Connect
+            // including SetVersionId + SetPacketSequenceMode.
+            connected = SafePyBaerimUiLogin(loginCmd);
+        }
+        if (!connected && !g_baerim)
+        {
+            if (!SafeSetLogin(g_setLoginInfo ? g_setLoginInfo : setNet, net, loginCmd.account.c_str(), loginCmd.password.c_str()))
+            {
+                g_lastReason = "SetLoginInfo trapped";
+                return true;
+            }
+            SafeSetLogin(setAcc, account, loginCmd.account.c_str(), loginCmd.password.c_str());
+            if (!SafeConnect(connect, account, loginCmd.host.c_str(), loginCmd.port, authHost, authPort))
+            {
+                g_lastReason = "ConnectToAccountServer failed";
+                return true;
+            }
+            connected = 1;
+        }
+        if (!connected)
+        {
+            g_lastOk = false;
+            g_lastReason = "baerim login connect failed";
+            NativeLog("baerim login failed after UI+net paths");
             return true;
         }
+        // Arm stock Open()->StartGame on the real MainStream before select phase opens.
+        if (g_baerim)
+            SafePyBaerimArmAutoSelect(loginCmd.slot);
         g_loginSent = 1;
         RefreshSession();
         g_lastOk = true;
@@ -2641,6 +3707,7 @@ static bool ExecuteSession(const Command& cmd)
         g_lastReason = "network stream is null";
         return true;
     }
+    RefreshSession();
     if (g_inWorld || g_selectSent || PhaseHas("Load") || PhaseHas("Game"))
     {
         g_selectSent = 1;
@@ -2648,25 +3715,53 @@ static bool ExecuteSession(const Command& cmd)
         g_lastReason = g_sessionPhase.empty() ? "already entering" : g_sessionPhase;
         return true;
     }
-    SafePyAutoSelect(net, (unsigned)cmd.slot);
-    if (!WindowClassIs("SelectCharacterWindow"))
+    if (!PhaseHas("Select") && !WindowClassIs("SelectCharacterWindow"))
     {
-        RefreshSession();
-        g_lastOk = true;
-        g_lastReason = "waiting for SelectCharacterWindow";
+        g_lastOk = false;
+        g_lastReason = g_sessionPhase.empty() ? "select waiting for Select phase" : g_sessionPhase;
         return true;
     }
-    if (!SafePyClickStart(net))
+    const unsigned slot = (unsigned)cmd.slot;
+    if (g_baerim)
     {
+        // Prefer stock isAutoSelect Open()->StartGame (armed at login). If already on select,
+        // OnIMEReturn/StartGame or net.DirectEnter (same as introselect OnUpdate).
+        if (SafePyBaerimSelectCharacter(slot))
+        {
+            g_selectSent = 1;
+            g_selectSentAtMs = GetTickCount();
+            RefreshSession();
+            g_lastOk = true;
+            g_lastReason = "select sent";
+            return true;
+        }
         RefreshSession();
-        g_lastOk = true;
-        g_lastReason = "waiting for auto DirectEnter";
+        g_lastOk = false;
+        g_lastReason = "baerim select waiting for window";
         return true;
     }
-    g_selectSent = 1;
+    SafePyAutoSelect(net, slot);
+    if (kDirectEnterModeSetRva)
+        SafeDirectEnter((FnDirectEnterSet)(g_base + kDirectEnterModeSetRva), net, slot);
+    if (kSelectCharacterRva && SafeSelectPacket((FnSelectCharacter)(g_base + kSelectCharacterRva), net, slot))
+    {
+        g_selectSent = 1;
+        RefreshSession();
+        g_lastOk = true;
+        g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "select packet sent";
+        return true;
+    }
+    if (SafePyClickStart(net))
+    {
+        g_selectSent = 1;
+        RefreshSession();
+        g_lastOk = true;
+        g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "select sent";
+        return true;
+    }
     RefreshSession();
     g_lastOk = true;
-    g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "select sent";
+    g_lastReason = "waiting for auto DirectEnter";
     return true;
 }
 
@@ -4489,22 +5584,16 @@ static void CaptchaTick()
 {
     // Event-driven captcha: install hooks once, solve inside SetChallenge/Open.
     // Never poll with gc.get_objects — that aborted python27 after a few minutes.
+    // Never RefreshSession/WindowClassIs from AfterPeek — GIL spam crashed ~1min in-world.
     if (!g_baerim)
         return;
-    RefreshSession();
-    if (!g_inWorld || WindowClassIs("LoadingWindow") ||
-        PhaseHas("Load") || PhaseHas("Login") || PhaseHas("Off") ||
-        PhaseHas("Logo") || PhaseHas("Intro") || PhaseHas("Select"))
-    {
-        g_baerimWorldAtMs = 0;
-        g_captchaHooked = 0;
-        g_captchaInstallAtMs = 0;
+    if (!g_inWorld || !g_openedGameWindow)
         return;
-    }
     const DWORD now = GetTickCount();
     if (!g_baerimWorldAtMs)
         g_baerimWorldAtMs = now;
-    if (now - g_baerimWorldAtMs < 5000)
+    // Wait well after spawn/combat settle before installing Python captcha hooks.
+    if (now - g_baerimWorldAtMs < 20000)
         return;
     if (g_captchaHooked)
     {
@@ -7080,37 +8169,30 @@ static void Execute(const Command& cmd)
     if (cmd.type == "get_hud")
     {
         RefreshSession();
-        // Baerim often leaves the phase string empty at login; infer from the Python window.
-        if (g_baerim && g_sessionPhase.empty())
+        // Skip GetStatus on login/select UI. Once in-world (or character after select),
+        // never WindowClassIs — that GIL path from the HUD poll crashed ~1min in.
+        if (g_baerim && !g_inWorld && !g_openedGameWindow)
         {
-            if (WindowClassIs("LoginWindow"))
-                g_sessionPhase = "Login";
-            else if (WindowClassIs("SelectCharacterWindow"))
-                g_sessionPhase = "Select";
-            else if (WindowClassIs("LoadingWindow"))
-                g_sessionPhase = "Load";
-            else if (WindowClassIs("GameWindow"))
-                g_sessionPhase = "Game";
-        }
-        g_inWorld = ComputeInWorld();
-        // Skip GetStatus on login/select/load UI — never while farming in GameWindow.
-        // (A blanket !inWorld skip broke combat after client patches / phase flicker.)
-        if (g_baerim && (WindowClassIs("LoginWindow") || WindowClassIs("SelectCharacterWindow") ||
-            WindowClassIs("LoadingWindow") || PhaseHas("Load") || PhaseHas("Logo") || PhaseHas("Intro")))
-        {
-            g_hudOk = false;
-            ClearAffectMirror();
-            g_lastOk = true;
-            g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "login ui";
-            return;
+            const int onUi =
+                PhaseHas("Login") || PhaseHas("Select") || PhaseHas("Logo") || PhaseHas("Intro") ||
+                (PhaseHas("Load") && g_sessionCharacter.empty() && !g_selectSent) ||
+                PyPhaseWindowIs("LoginWindow") || PyPhaseWindowIs("SelectCharacterWindow");
+            if (onUi)
+            {
+                g_hudOk = false;
+                ClearAffectMirror();
+                g_lastOk = true;
+                g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "login ui";
+                return;
+            }
         }
         RefreshHud(player);
-        g_inWorld = ComputeInWorld();
-        if (g_inWorld)
+        if (g_inWorld || (g_hudOk && g_hudMaxHp > 0 && !g_sessionCharacter.empty()))
         {
+            g_inWorld = 1;
+            g_openedGameWindow = 1;
+            g_sessionPhase = "Game";
             RefreshAffectsReadonly();
-            if (g_sessionPhase.empty())
-                g_sessionPhase = "Game";
         }
         else
             ClearAffectMirror();
@@ -7125,13 +8207,23 @@ static void Execute(const Command& cmd)
             g_inWorld = ComputeInWorld();
         if (!g_inWorld)
         {
-            g_chaseVid = 0;
-            g_walkVid = 0;
-            InterlockedExchange(&g_allowMelee, 0);
-            g_actorsJson = "[]";
-            g_lastOk = true;
-            g_lastReason = "not in world";
-            return;
+            // One more chance: HUD already proves we are in game (Baerim HandShake lie).
+            if (g_hudOk && g_hudMaxHp > 0 && !g_sessionCharacter.empty())
+            {
+                g_inWorld = 1;
+                g_openedGameWindow = 1;
+                g_sessionPhase = "Game";
+            }
+            else
+            {
+                g_chaseVid = 0;
+                g_walkVid = 0;
+                InterlockedExchange(&g_allowMelee, 0);
+                g_actorsJson = "[]";
+                g_lastOk = true;
+                g_lastReason = "not in world";
+                return;
+            }
         }
         ScanActors();
         g_lastOk = true;
@@ -7318,12 +8410,14 @@ static void SafeDrain()
 
 static void BaerimBlockAutoLogin()
 {
+    // Only kill the client's logininfo auto-Connect. Never clear isAutoSelect —
+    // that flag is how SelectCharacterWindow.Open() presses Enter (stock introLogin).
     if (!g_baerim || g_baerimAutoOff)
         return;
     if (!PythonDll())
         return;
     RefreshSession();
-    if (PhaseHas("Game") || PhaseHas("Load") || PhaseHas("Select") || PhaseHas("Hand"))
+    if (PhaseHas("Game") || PhaseHas("Load") || PhaseHas("Select") || PhaseHas("Hand") || g_loginSent)
     {
         g_baerimAutoOff = 1;
         return;
@@ -7332,9 +8426,8 @@ static void BaerimBlockAutoLogin()
     if (!handler)
         return;
     SafePySetInt(handler, "isAutoLogin", 0);
-    SafePySetInt(handler, "isAutoSelect", 0);
     g_baerimAutoOff = 1;
-    NativeLog("baerim auto-login disabled phase=%s",
+    NativeLog("baerim auto-Connect disabled phase=%s (isAutoSelect kept)",
         g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
 }
 
@@ -7818,6 +8911,7 @@ static void ClearLoginRvas()
     kSetGamePhaseRva = 0;
     kStartGameRva = 0;
     kNotifyGamePhaseRva = 0;
+    kDirectEnterModeSetRva = 0;
     kOnLogoCloseRva = 0;
     kPlayerUpdateRva = 0;
     kSingletonRva = 0;
@@ -7935,6 +9029,9 @@ static void LoadConfig()
         {
             g_arthion = _strnicmp(line + 8, "arthion", 7) == 0 ? 1 : 0;
             g_baerim = _strnicmp(line + 8, "baerim", 6) == 0 ? 1 : 0;
+            // Stock DirectEnterModeSet RVA is a crash landmine on Baerim.
+            if (g_baerim)
+                kDirectEnterModeSetRva = 0;
         }
         else if (strncmp(line, "net=", 4) == 0)
             kNetStreamRva = ParseHex(line + 4);
@@ -8310,6 +9407,9 @@ static void Serve()
         cmd.port = (int)JsonU32(json, "port");
         cmd.authPort = (int)JsonU32(json, "authPort");
         cmd.slot = (int)JsonU32(json, "slot");
+        cmd.channelIndex = json.find("\"channelIndex\"") != std::string::npos
+            ? (int)JsonU32(json, "channelIndex")
+            : -1;
         if (!TokensEqual(JsonString(json, "token"), g_token))
         {
             WriteFrame("{\"ok\":false,\"type\":\"error\",\"reason\":\"unauthorized\",\"targetVid\":0,\"convention\":\"loop-iat\"}");
@@ -8349,7 +9449,10 @@ static void Serve()
                 cmd.type == "use_skill" || cmd.type == "is_skill_active" || cmd.type == "toggle_mount";
             if (waitReply)
             {
-                const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
+                const DWORD waitMs =
+                    (cmd.type == "enter_game" || cmd.type == "login" || cmd.type == "select_character")
+                        ? 15000
+                        : 2000;
                 wait = WaitForSingleObject(g_done, waitMs);
             }
             else if (g_lastReason.empty() || g_lastReason == "not executed")
@@ -8421,6 +9524,14 @@ static void Serve()
         reply += (cmd.type == "get_hud" && !g_affectsJson.empty()) ? g_affectsJson : "[]";
         reply += ",\"castRemoved\":";
         reply += (cmd.type == "get_hud" && !g_castRemovedJson.empty()) ? g_castRemovedJson : "[]";
+        reply += ",\"channels\":";
+        reply += (!g_channelsJson.empty() &&
+                  (cmd.type == "get_channels" || cmd.type == "get_session" || cmd.type == "get_phase"))
+            ? g_channelsJson : "[]";
+        reply += ",\"characters\":";
+        reply += (!g_charactersJson.empty() &&
+                  (cmd.type == "get_session" || cmd.type == "get_phase" || cmd.type == "select_character"))
+            ? g_charactersJson : "[]";
         char extra[96];
         _snprintf_s(extra, _TRUNCATE, ",\"greenRemain\":%d,\"purpleRemain\":%d,\"mounted\":%s}",
             g_greenRemain, g_purpleRemain, g_mounted ? "true" : "false");

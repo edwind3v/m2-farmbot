@@ -271,7 +271,7 @@ public sealed class ActionModuleHost
         }
     }
 
-    private const int BaerimLayoutRecovererVersion = 4;
+    private const int BaerimLayoutRecovererVersion = 5;
 
     private string WriteBaerimLayoutFile(string? exePath)
     {
@@ -413,7 +413,10 @@ public sealed class ActionModuleHost
             var text = File.ReadAllText(cachePath);
             return HasHexKey(text, "pressActor") &&
                    HasHexKey(text, "attackKey") &&
-                   (HasHexKey(text, "sendChat") || HasHexKey(text, "net"));
+                   (HasHexKey(text, "sendChat") || HasHexKey(text, "net")) &&
+                   HasHexKey(text, "setLogin") &&
+                   HasHexKey(text, "account") &&
+                   HasHexKey(text, "connect");
         }
         catch
         {

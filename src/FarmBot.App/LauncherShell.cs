@@ -22,6 +22,7 @@ public sealed class LauncherShell : IDisposable
     private int _launchPid;
     private AdapterActionSink? _launchSink;
     private bool _disposed;
+    private IReadOnlyList<GameChannel> _liveChannels = Array.Empty<GameChannel>();
 
     public LauncherShell()
     {
@@ -77,9 +78,14 @@ public sealed class LauncherShell : IDisposable
     {
         get
         {
+            if (_liveChannels.Count > 0)
+                return _liveChannels;
             var parsed = ServerInfoParser.FromClientPath(_state.ClientPath);
             if (parsed.Count > 0)
                 return parsed;
+            // Baerim has no loose serverinfo.py — never invent 127.0.0.1 channels.
+            if (_state.SelectedProfile == ClientProfile.Baerim)
+                return Array.Empty<GameChannel>();
             var config = BotConfig.CreateDefault();
             return ServerInfoParser.Fallback(config.ServerHost, config.ServerPort, 30001);
         }
@@ -296,12 +302,15 @@ public sealed class LauncherShell : IDisposable
         }
 
         var channel = Channels.FirstOrDefault(item => item.Index == slot.ChannelIndex) ?? Channels.FirstOrDefault();
-        if (channel == null)
+        if (channel == null && _state.SelectedProfile != ClientProfile.Baerim)
         {
             Status = "no channel list was parsed from serverinfo.py";
             Notify();
             return;
         }
+
+        // Baerim: channel hosts come from live serverInfo after the client opens.
+        channel ??= new GameChannel(Math.Max(0, slot.ChannelIndex), "CH-" + (slot.ChannelIndex + 1), "", 0, "", 0);
 
         slot.ChannelName = channel.Name;
         var profile = _state.SelectedProfile;
@@ -384,13 +393,30 @@ public sealed class LauncherShell : IDisposable
             dirty = true;
         }
 
-        if (!dirty)
+        var charNames = LiveChannelList.CharacterNamesFromResponse(info);
+        if (charNames.Count > 0 && SlotStore.ApplyCharacterNames(session.Slot, charNames))
+            dirty = true;
+
+        var liveChannels = LiveChannelList.FromResponse(info);
+        if (liveChannels.Count > 0)
+        {
+            lock (_gate)
+                _liveChannels = liveChannels;
+        }
+
+        if (!dirty && liveChannels.Count == 0)
             return;
 
         if (_busySlotId != session.Slot.Id)
         {
-            if (!string.IsNullOrWhiteSpace(session.Slot.CharacterName))
+            // CharacterName alone is not in-game — names are filled on the select screen.
+            var phase = info.Phase ?? "";
+            if (QuickPlayOrchestrator.LooksInWorld(phase, info.InWorld, info.Character, info.Level, info.MaxHp))
                 session.Status = "in-game";
+            else if (QuickPlayOrchestrator.NeedsCharacterSelect(phase))
+                session.Status = "character select";
+            else if (QuickPlayOrchestrator.IsLoginScreen(phase))
+                session.Status = "login";
             else if (!string.IsNullOrWhiteSpace(session.Slot.Account))
                 session.Status = "account captured";
         }
@@ -563,14 +589,10 @@ public sealed class LauncherShell : IDisposable
                 return;
 
             var password = SlotStore.UnprotectPassword(slot.PasswordProtected);
-            if (profile == ClientProfile.Baerim ||
-                string.IsNullOrWhiteSpace(slot.Account) ||
-                string.IsNullOrWhiteSpace(password))
+            if (string.IsNullOrWhiteSpace(slot.Account) || string.IsNullOrWhiteSpace(password))
             {
                 session.Status = "client opened";
-                Status = profile == ClientProfile.Baerim
-                    ? "client opened — log in in-game, then start the bot"
-                    : "client opened — log in manually, then save the slot";
+                Status = "client opened — log in manually, then save the slot";
                 ClearBusy(ticket, null);
                 Notify();
                 return;
@@ -580,8 +602,47 @@ public sealed class LauncherShell : IDisposable
             session.Status = "logging in...";
             Task.Run(() =>
             {
+                var playChannel = channel;
+                if (profile == ClientProfile.Baerim || LiveChannelList.IsLoopback(playChannel.Host))
+                {
+                    // Best-effort peek only — do not stall on LoginWindow. Native login
+                    // re-reads live serverInfo.REGION_DICT when hosts are still empty.
+                    SetBusy(ticket, "reading live channels...");
+                    session.Status = "reading live channels...";
+                    for (var attempt = 0; attempt < 10 && IsCurrent(ticket); attempt++)
+                    {
+                        var live = sink.GetChannels();
+                        var channels = LiveChannelList.FromResponse(live);
+                        if (channels.Count > 0)
+                        {
+                            lock (_gate)
+                                _liveChannels = channels;
+                            playChannel = channels.FirstOrDefault(c => c.Index == slot.ChannelIndex) ?? channels[0];
+                            slot.ChannelIndex = playChannel.Index;
+                            slot.ChannelName = playChannel.Name;
+                            break;
+                        }
+
+                        Thread.Sleep(400);
+                    }
+
+                    if (LiveChannelList.IsLoopback(playChannel.Host) || string.IsNullOrWhiteSpace(playChannel.Host))
+                    {
+                        playChannel = new GameChannel(
+                            Math.Max(0, slot.ChannelIndex),
+                            string.IsNullOrWhiteSpace(slot.ChannelName) ? "CH-" + (slot.ChannelIndex + 1) : slot.ChannelName,
+                            "",
+                            0,
+                            "",
+                            0);
+                        _log.Info("live channels not ready yet; native login will resolve hosts from serverInfo");
+                    }
+
+                    Notify();
+                }
+
                 var play = new QuickPlayOrchestrator(sink, _log);
-                var ok = play.TryEnter(slot, channel, password, 180000, out var playStatus, message =>
+                var ok = play.TryEnter(slot, playChannel, password, 180000, out var playStatus, message =>
                 {
                     session.Status = message;
                     SetBusy(ticket, message);
@@ -608,10 +669,9 @@ public sealed class LauncherShell : IDisposable
                     catch (InvalidOperationException)
                     {
                     }
-
-                    Persist();
                 }
 
+                Persist();
                 ClearBusy(ticket, null);
                 Notify();
             });

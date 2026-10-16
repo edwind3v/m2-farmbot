@@ -92,13 +92,18 @@
                     <select @bind="editor.CharacterSlot">
                         @for (var i = 0; i < 5; i++)
                         {
-                            <option value="@i">@(i + 1)</option>
+                            var label = CharacterSlotLabel(editor, i);
+                            <option value="@i">@label</option>
                         }
                     </select>
                 </div>
                 <div class="field-row">
                     <label>Channel</label>
                     <select @bind="editor.ChannelIndex">
+                        @if (!Shell.Channels.Any())
+                        {
+                            <option value="0">channels load after Play</option>
+                        }
                         @foreach (var channel in Shell.Channels)
                         {
                             <option value="@channel.Index">@channel.Name</option>
@@ -135,6 +140,14 @@
     }
 
     private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private static string CharacterSlotLabel(ClientSlot slot, int index)
+    {
+        var name = "";
+        if (slot.CharacterNames != null && index >= 0 && index < slot.CharacterNames.Count)
+            name = (slot.CharacterNames[index] ?? "").Trim();
+        return string.IsNullOrEmpty(name) ? $"{index + 1} — empty" : $"{index + 1} — {name}";
+    }
 
     public void Dispose() => Shell.Changed -= OnChanged;
 }
