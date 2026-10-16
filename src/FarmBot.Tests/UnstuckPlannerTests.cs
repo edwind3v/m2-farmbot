@@ -56,7 +56,19 @@ public class UnstuckPlannerTests
         var blocker = Fixtures.Mob(2, "Metin", EntityKind.Metin, 280, 80);
 
         Assert.True(UnstuckPlanner.TryPickWaypoint(player, stone, [stone, blocker], config, 0, out var x, out var y));
-        Assert.True(y < 0, $"expected a step away from +Y blocker, got ({x:0},{y:0})");
+        Assert.True(x < 0, $"expected a backstep off the obstacle first, got ({x:0},{y:0})");
+    }
+
+    [Fact]
+    public void FirstSidestepIsAWidePlayerLikeStep()
+    {
+        var config = Fixtures.Config();
+        var player = Fixtures.Player();
+        var stone = Fixtures.Mob(1, "Metin", EntityKind.Metin, 600, 0);
+
+        Assert.True(UnstuckPlanner.TryPickWaypoint(player, stone, [stone], config, 0, out var x, out var y));
+        var step = MathF.Sqrt(x * x + y * y);
+        Assert.True(step >= 360f && x < 0, $"expected a backstep first, got {step:0}px to ({x:0},{y:0})");
     }
 
     [Fact]

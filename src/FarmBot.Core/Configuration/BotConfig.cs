@@ -46,7 +46,7 @@ public sealed class BotConfig
     public int RangedAttackDelayMs { get; set; } = 400;
     public bool RangedAvoidAttacks { get; set; }
     public int TargetTimeoutMs { get; set; } = 20_000;
-    public int StuckTimeoutMs { get; set; } = 800;
+    public int StuckTimeoutMs { get; set; } = 350;
     public bool AttackAlsoPaths { get; set; } = true;
     public string AttackKey { get; set; } = "space";
     public float FarmRadius { get; set; } = 1500;

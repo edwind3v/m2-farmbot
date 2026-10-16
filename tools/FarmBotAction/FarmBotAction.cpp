@@ -272,12 +272,15 @@ static float g_stuckX;
 static float g_stuckY;
 static DWORD g_stuckAt;
 static int g_nativeSidesteps;
+static float g_sidestepFromX;
+static float g_sidestepFromY;
 static DWORD g_lastSkillsMs;
 static int g_skillsReady;
 static void* g_mainInst;
 static char g_mainName[64];
 static volatile long g_allowMelee;
 static int g_captchaShown;
+static volatile long g_captchaBusy;
 static volatile long g_captchaDumpBusy;
 static volatile long g_captchaDumpStep;
 static DWORD g_captchaDumpLastMs;
@@ -2311,6 +2314,53 @@ static int SafePyRun(const char* code)
     return ok;
 }
 
+static int SafePyRunAfterPeek(const char* code)
+{
+    HMODULE py = PythonDll();
+    if (!py || !code)
+        return 0;
+    typedef int (__cdecl* FnPyRun)(const char*);
+    FnPyRun run = (FnPyRun)GetProcAddress(py, "PyRun_SimpleString");
+    FnPyGilEnsure gilEnsure = (FnPyGilEnsure)GetProcAddress(py, "PyGILState_Ensure");
+    FnPyGilRelease gilRelease = (FnPyGilRelease)GetProcAddress(py, "PyGILState_Release");
+    if (!run)
+        return 0;
+    const int live = PyCanRun();
+    int gil = 0;
+    int took = 0;
+    if (!live)
+    {
+        if (!gilEnsure || !gilRelease)
+            return 0;
+        __try
+        {
+            gil = gilEnsure();
+            took = 1;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            took = 0;
+        }
+        if (!took || !PyCanRun())
+            return 0;
+    }
+    int ok = 0;
+    __try
+    {
+        ok = run(code) == 0 ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok = 0;
+    }
+    if (took && gilRelease)
+    {
+        __try { gilRelease(gil); }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    return ok;
+}
+
 static int SafePyEnsureServerInfo()
 {
     char code[1600];
@@ -3502,6 +3552,77 @@ static bool BaerimSetAttackKey(void* player, bool press)
     return true;
 }
 
+static bool FireNativeSidestep(float mx, float my, float tx, float ty, float dist)
+{
+    float fx = tx - mx;
+    float fy = ty - my;
+    float len = sqrtf(fx * fx + fy * fy);
+    if (len < 1.f)
+    {
+        fx = 1.f;
+        fy = 0.f;
+        len = 1.f;
+    }
+    fx /= len;
+    fy /= len;
+    const float lx = -fy;
+    const float ly = fx;
+    const int n = g_nativeSidesteps;
+    float ox = -fx;
+    float oy = -fy;
+    float step = 420.f;
+    if (n == 1)
+    {
+        ox = -fx + lx;
+        oy = -fy + ly;
+        const float sl = sqrtf(ox * ox + oy * oy);
+        if (sl > 1.f)
+        {
+            ox /= sl;
+            oy /= sl;
+        }
+        step = 640.f;
+    }
+    else if (n == 2)
+    {
+        ox = -fx - lx;
+        oy = -fy - ly;
+        const float sl = sqrtf(ox * ox + oy * oy);
+        if (sl > 1.f)
+        {
+            ox /= sl;
+            oy /= sl;
+        }
+        step = 640.f;
+    }
+    else if (n == 3)
+    {
+        ox = lx;
+        oy = ly;
+        step = 680.f;
+    }
+    else if (n >= 4)
+    {
+        ox = -lx;
+        oy = -ly;
+        step = 680.f;
+    }
+    const float sx = mx + ox * step;
+    const float sy = my + oy * step;
+    const DWORD now = GetTickCount();
+    g_nativeSidesteps++;
+    g_sidestepFromX = mx;
+    g_sidestepFromY = my;
+    g_stuckX = mx;
+    g_stuckY = my;
+    g_stuckAt = now;
+    g_sidestepUntil = now + 1600;
+    const bool walked = CallMoveToPixel(sx, sy);
+    NativeLog("BOT native sidestep try=%d step=%.0f xy=%.0f,%.0f ok=%d stuckDist=%.0f",
+        g_nativeSidesteps, step, sx, sy, walked ? 1 : 0, dist);
+    return walked;
+}
+
 static bool DriveToTarget(void* player, unsigned vid, float x, float y)
 {
     (void)x;
@@ -3510,8 +3631,6 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         return false;
     g_clickVid = vid;
     if (!g_inWorld || PhaseHas("Load"))
-        return false;
-    if (g_sidestepUntil && GetTickCount() < g_sidestepUntil)
         return false;
     void* live = CallGetInstance(g_clickVid);
     if (!LooksInstance(live))
@@ -3547,55 +3666,49 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         {
             g_stuckAt = 0;
             g_nativeSidesteps = 0;
+            g_sidestepUntil = 0;
+        }
+        else if (g_sidestepUntil)
+        {
+            const float slippedX = mx - g_sidestepFromX;
+            const float slippedY = my - g_sidestepFromY;
+            const float slipped2 = slippedX * slippedX + slippedY * slippedY;
+            if (slipped2 >= 140.f * 140.f)
+            {
+                g_sidestepUntil = 0;
+                g_stuckX = mx;
+                g_stuckY = my;
+                g_stuckAt = now;
+            }
+            else if (now >= g_sidestepUntil || (now - g_stuckAt >= 280 && slipped2 < 50.f * 50.f))
+            {
+                g_sidestepUntil = 0;
+                if (kMoveToPixelRva)
+                {
+                    FireNativeSidestep(mx, my, tx, ty, dist);
+                    InterlockedExchange(&g_botCall, 0);
+                    return false;
+                }
+            }
+            else
+            {
+                InterlockedExchange(&g_botCall, 0);
+                return false;
+            }
         }
         else if (LooksInstance(main))
         {
             const float movedX = mx - g_stuckX;
             const float movedY = my - g_stuckY;
-            if (!g_stuckAt || movedX * movedX + movedY * movedY > 30.f * 30.f)
+            if (!g_stuckAt || movedX * movedX + movedY * movedY > 80.f * 80.f)
             {
                 g_stuckX = mx;
                 g_stuckY = my;
                 g_stuckAt = now;
             }
-            else if (now - g_stuckAt >= 800 && kMoveToPixelRva)
+            else if (now - g_stuckAt >= 350 && kMoveToPixelRva)
             {
-                float fx = tx - mx;
-                float fy = ty - my;
-                float len = sqrtf(fx * fx + fy * fy);
-                if (len < 1.f)
-                {
-                    fx = 1.f;
-                    fy = 0.f;
-                    len = 1.f;
-                }
-                const float lx = -fy / len;
-                const float ly = fx / len;
-                const float step = 280.f + 80.f * (float)(g_nativeSidesteps % 2);
-                float sx = mx;
-                float sy = my;
-                const int side = g_nativeSidesteps % 3;
-                if (side == 0)
-                {
-                    sx = mx + lx * step;
-                    sy = my + ly * step;
-                }
-                else if (side == 1)
-                {
-                    sx = mx - lx * step;
-                    sy = my - ly * step;
-                }
-                else
-                {
-                    sx = mx - fx / len * 250.f;
-                    sy = my - fy / len * 250.f;
-                }
-                g_nativeSidesteps++;
-                g_stuckAt = now;
-                g_sidestepUntil = now + 2000;
-                const bool walked = CallMoveToPixel(sx, sy);
-                NativeLog("BOT native sidestep try=%d xy=%.0f,%.0f pixel=0x%X ok=%d stuckDist=%.0f",
-                    g_nativeSidesteps, sx, sy, kMoveToPixelRva, walked ? 1 : 0, dist);
+                FireNativeSidestep(mx, my, tx, ty, dist);
                 InterlockedExchange(&g_botCall, 0);
                 return false;
             }
@@ -3912,8 +4025,6 @@ static void StopCombat(void* player)
 
 static void ChaseTick(void* player)
 {
-    if (g_sidestepUntil && GetTickCount() < g_sidestepUntil)
-        return;
     if (!g_chaseVid || !player)
         return;
     if (!g_inWorld || PhaseHas("Load"))
@@ -4216,20 +4327,21 @@ static void CaptchaTick()
     if (!g_baerim)
         return;
     RefreshSession();
-    if (!g_inWorld || !g_loadFinished)
+    if (!g_inWorld)
         return;
     if (PhaseHas("Load") || PhaseHas("Login") || PhaseHas("Off") ||
         PhaseHas("Logo") || PhaseHas("Intro") || PhaseHas("Select"))
         return;
-    if (!WindowClassIs("GameWindow") && !HasGameWindow())
-        return;
-    if (!PyCanRun())
+    if (InterlockedCompareExchange(&g_captchaBusy, 1, 0) != 0)
         return;
     static DWORD lastMs;
     static int armedLog;
     const DWORD now = GetTickCount();
     if (lastMs && now - lastMs < 1000)
+    {
+        InterlockedExchange(&g_captchaBusy, 0);
         return;
+    }
     lastMs = now;
     if (!armedLog)
     {
@@ -4239,7 +4351,7 @@ static void CaptchaTick()
     }
     static const char kPy[] = R"PY(
 try:
- import constInfo, traceback
+ import constInfo, traceback, gc
  try: import uiCaptcha
  except: uiCaptcha=None
  MAP={1:8,2:5,3:5,4:2,5:5,6:1,7:0,8:2,9:6,10:0,11:2,12:1,13:7,14:5,15:2,16:1,17:7,18:0,19:2,20:0,21:4,22:7,23:6,24:4,25:5,26:1,27:0,28:1,29:1,30:0,31:2,32:3,33:5,34:7,35:8,36:0,37:2,38:4,39:5,40:6,41:7,42:0,43:1,44:3,45:5,46:6,47:8}
@@ -4315,6 +4427,17 @@ try:
     if wnd:
      how='attr '+n
      break
+ if (not wnd) or not _shown(wnd):
+  cls=getattr(uiCaptcha,'CaptchaWindow',None) if uiCaptcha else None
+  if cls:
+   for o in gc.get_objects():
+    try:
+     if isinstance(o, cls) and _shown(o):
+      wnd=o
+      how='scan'
+      constInfo._farmbot_captcha_wnd=o
+      break
+    except: pass
  shown=_shown(wnd)
  _state(shown)
  probe=(shown, how, id(wnd) if wnd else 0)
@@ -4353,7 +4476,7 @@ except Exception:
   f=open(r'C:\Temp\farmbot-captcha.log','ab'); f.write(traceback.format_exc()+'\r\n'); f.close()
  except: pass
 )PY";
-    SafePyRun(kPy);
+    SafePyRunAfterPeek(kPy);
     FILE* sf = nullptr;
     int shown = 0;
     if (fopen_s(&sf, "C:\\Temp\\farmbot-captcha.state", "rb") == 0 && sf)
@@ -4368,6 +4491,7 @@ except Exception:
     if (!shown && g_captchaShown)
         NativeLog("captcha window closed");
     g_captchaShown = shown;
+    InterlockedExchange(&g_captchaBusy, 0);
 }
 
 static bool StartCombat(void* player, unsigned vid, float x, float y, bool click, bool autoAttack)
@@ -6469,7 +6593,7 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "move")
     {
-        PauseChase(player, 2000);
+        PauseChase(player, 800);
         const bool walked = cmd.vid
             ? CallMoveToDest(cmd.vid, cmd.x, cmd.y)
             : CallMoveToPixel(cmd.x, cmd.y);
@@ -6678,7 +6802,6 @@ static void Drain()
         EnterCriticalSection(&g_lock);
     }
     LeaveCriticalSection(&g_lock);
-    CaptchaTick();
     ChaseTick(Player());
     InterlockedExchange(&g_busy, 0);
 }
@@ -6696,11 +6819,17 @@ static void OnLoopPump(HWND hwnd, UINT min, UINT max)
     MaybeAutoLoot(Player());
 }
 
+static void AfterPeek()
+{
+    CaptchaTick();
+    DumpCaptchaStep();
+}
+
 static BOOL WINAPI HookPeekA(LPMSG msg, HWND hwnd, UINT min, UINT max, UINT remove)
 {
     OnLoopPump(hwnd, min, max);
     const BOOL r = g_peekA(msg, hwnd, min, max, remove);
-    DumpCaptchaStep();
+    AfterPeek();
     return r;
 }
 
@@ -6708,7 +6837,7 @@ static BOOL WINAPI HookPeekW(LPMSG msg, HWND hwnd, UINT min, UINT max, UINT remo
 {
     OnLoopPump(hwnd, min, max);
     const BOOL r = g_peekW(msg, hwnd, min, max, remove);
-    DumpCaptchaStep();
+    AfterPeek();
     return r;
 }
 
@@ -6716,7 +6845,7 @@ static BOOL WINAPI HookGetA(LPMSG msg, HWND hwnd, UINT min, UINT max)
 {
     OnLoopPump(hwnd, min, max);
     const BOOL r = g_getA(msg, hwnd, min, max);
-    DumpCaptchaStep();
+    AfterPeek();
     return r;
 }
 
@@ -6724,7 +6853,7 @@ static BOOL WINAPI HookGetW(LPMSG msg, HWND hwnd, UINT min, UINT max)
 {
     OnLoopPump(hwnd, min, max);
     const BOOL r = g_getW(msg, hwnd, min, max);
-    DumpCaptchaStep();
+    AfterPeek();
     return r;
 }
 

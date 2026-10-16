@@ -6,8 +6,8 @@ namespace FarmBot.Core.Combat;
 
 public static class UnstuckPlanner
 {
-    public const float MinStepPx = 200f;
-    public const float MaxStepPx = 500f;
+    public const float MinStepPx = 400f;
+    public const float MaxStepPx = 800f;
     public const float LandClearPx = 90f;
     public const float CorridorPx = 90f;
     public const float PlayerMarginPx = 80f;
@@ -93,8 +93,8 @@ public static class UnstuckPlanner
             }
         }
 
-        x = player.X + (leftFirst ? lx : -lx) * 300f;
-        y = player.Y + (leftFirst ? ly : -ly) * 300f;
+        x = player.X + (leftFirst ? lx : -lx) * 560f;
+        y = player.Y + (leftFirst ? ly : -ly) * 560f;
         ClampToFarm(ref x, ref y, config);
         return Hypot(x - player.X, y - player.Y) > 1f;
     }
@@ -103,16 +103,16 @@ public static class UnstuckPlanner
     {
         if (blocker == null)
             return true;
-        var left = Hypot(player.X + lx * 300f - blocker.X, player.Y + ly * 300f - blocker.Y);
-        var right = Hypot(player.X - lx * 300f - blocker.X, player.Y - ly * 300f - blocker.Y);
+        var left = Hypot(player.X + lx * 560f - blocker.X, player.Y + ly * 560f - blocker.Y);
+        var right = Hypot(player.X - lx * 560f - blocker.X, player.Y - ly * 560f - blocker.Y);
         return left >= right;
     }
 
     private static float[] DistancesFor(int attempt) => attempt switch
     {
-        0 => [300f, 220f, 450f],
-        1 => [350f, 500f, 200f],
-        _ => [250f, 400f, 200f]
+        0 => [420f, 360f, 520f],
+        1 => [640f, 720f, 520f],
+        _ => [680f, 520f, 400f]
     };
 
     private static IEnumerable<(float ox, float oy)> DirectionOrder(
@@ -126,24 +126,33 @@ public static class UnstuckPlanner
         var prefer = leftFirst ? (lx, ly) : (-lx, -ly);
         var other = leftFirst ? (-lx, -ly) : (lx, ly);
         var back = (-fx, -fy);
+        var around = Normalize(prefer.Item1 - fx, prefer.Item2 - fy);
+        var aroundOther = Normalize(other.Item1 - fx, other.Item2 - fy);
         if (attempt <= 0)
         {
-            yield return prefer;
-            yield return other;
             yield return back;
+            yield return around;
+            yield return aroundOther;
         }
         else if (attempt == 1)
         {
-            yield return other;
+            yield return around;
             yield return prefer;
-            yield return back;
+            yield return aroundOther;
         }
         else
         {
-            yield return back;
+            yield return aroundOther;
             yield return other;
             yield return prefer;
+            yield return back;
         }
+    }
+
+    private static (float ox, float oy) Normalize(float x, float y)
+    {
+        var len = Hypot(x, y);
+        return len < 1f ? (0f, 1f) : (x / len, y / len);
     }
 
     private static bool Occupied(float x, float y, uint targetVid, IReadOnlyList<EntityState> entities)
