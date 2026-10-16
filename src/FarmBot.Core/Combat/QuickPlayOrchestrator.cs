@@ -191,6 +191,21 @@ public sealed class QuickPlayOrchestrator
 
         if (NeedsCharacterSelect(CurrentPhase()) && !ReallyInWorld())
         {
+            // Give the account character list a moment to arrive so slot names populate.
+            Report("reading characters...");
+            for (var i = 0; i < 8 && NeedsCharacterSelect(CurrentPhase()) && !ReallyInWorld(); i++)
+            {
+                var selectInfo = _sink.GetSession();
+                var slotNames = LiveChannelList.CharacterNamesFromResponse(selectInfo);
+                if (slotNames.Any(n => !string.IsNullOrWhiteSpace(n)))
+                {
+                    SlotStore.ApplyCharacterNames(slot, slotNames);
+                    break;
+                }
+
+                Thread.Sleep(250);
+            }
+
             // SelectSlot -> StartGame only. LoadingWindow then sends SelectCharacterPacket.
             // Bare net.DirectEnter skips StartGame and crashes in Loading.
             Report("selecting character...");

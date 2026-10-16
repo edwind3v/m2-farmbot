@@ -1863,29 +1863,46 @@ static int SafePyDumpCharacterNames()
     _snprintf_s(full, _TRUNCATE, "%sfarmbot-characters.json", path);
     DeleteFileA(full);
     char pyPath[MAX_PATH * 2];
-    int j = 0;
-    for (int i = 0; full[i] && j < (int)sizeof(pyPath) - 2; ++i)
-    {
-        if (full[i] == '\\')
-            pyPath[j++] = '\\';
-        pyPath[j++] = full[i];
-    }
-    pyPath[j] = 0;
-    char code[1600];
+    if (!EscapePyPath(full, pyPath, (int)sizeof(pyPath)))
+        return 0;
+    // Stock introselect: GetAccountCharacterSlotDataString(slot, ACCOUNT_CHARACTER_SLOT_NAME).
+    // Hardcoding type 0 is wrong on some builds — resolve the constant, then probe.
+    char code[2200];
     _snprintf_s(
         code,
         _TRUNCATE,
         "import net,json\n"
-        "names=[]\n"
-        "for i in range(5):\n"
-        " n=''\n"
+        "def _s(v):\n"
+        " if v is None: return ''\n"
         " try:\n"
-        "  n=net.GetAccountCharacterSlotDataString(i,0) or ''\n"
-        " except Exception:\n"
-        "  try: n=net.GetAccountCharacterSlotData(i,0) or ''\n"
-        "  except Exception: n=''\n"
-        " if not isinstance(n,str): n=str(n) if n else ''\n"
-        " names.append(n)\n"
+        "  if isinstance(v,unicode): return v.encode('utf-8','replace')\n"
+        " except: pass\n"
+        " try: return str(v)\n"
+        " except: return ''\n"
+        "nameTypes=[]\n"
+        "for attr in ('ACCOUNT_CHARACTER_SLOT_NAME','CHARACTER_SLOT_NAME','ACCOUNT_NAME'):\n"
+        " if hasattr(net,attr):\n"
+        "  try: nameTypes.append(int(getattr(net,attr)))\n"
+        "  except: pass\n"
+        "for t in (0,1,2,3,4,5):\n"
+        " if t not in nameTypes: nameTypes.append(t)\n"
+        "names=['']*5\n"
+        "best=0\n"
+        "for t in nameTypes:\n"
+        " cur=[]\n"
+        " filled=0\n"
+        " for i in range(5):\n"
+        "  n=''\n"
+        "  try: n=_s(net.GetAccountCharacterSlotDataString(i,t) or '')\n"
+        "  except:\n"
+        "   try: n=_s(net.GetAccountCharacterSlotData(i,t) or '')\n"
+        "   except: n=''\n"
+        "  if n and n not in ('0','None'): filled+=1\n"
+        "  else: n=''\n"
+        "  cur.append(n)\n"
+        " if filled>best:\n"
+        "  best=filled; names=cur\n"
+        "  if best>0: break\n"
         "open(r'%s','wb').write(json.dumps(names))\n",
         pyPath);
     if (!SafePyRunAfterPeek(code))
@@ -2043,10 +2060,17 @@ static void RefreshSession()
     {
         static DWORD s_lastCharDumpMs;
         const DWORD now = GetTickCount();
-        if (!s_lastCharDumpMs || now - s_lastCharDumpMs > 2000)
+        // Poll faster right after login so the launcher slot list fills before StartGame.
+        const DWORD gap = (g_charactersJson.size() <= 2 || g_charactersJson.find('"') == std::string::npos ||
+                           g_charactersJson == "[\"\",\"\",\"\",\"\",\"\"]")
+                              ? 400
+                              : 2500;
+        if (!s_lastCharDumpMs || now - s_lastCharDumpMs > gap)
         {
             s_lastCharDumpMs = now;
-            SafePyDumpCharacterNames();
+            if (SafePyDumpCharacterNames() && g_charactersJson.size() > 2 &&
+                g_charactersJson != "[\"\",\"\",\"\",\"\",\"\"]")
+                NativeLog("baerim characters: %s", g_charactersJson.c_str());
         }
     }
     // Baerim: do not run LoadingStepCount/WindowClassIs — GIL from PeekMessage crashed.
@@ -3240,12 +3264,11 @@ static int SafePyCallMethod2Str(void* obj, const char* name, const char* a, cons
     }
 }
 
-// Exact channel-select + Log Me In (stock introLogin):
-//   SetServerInfo
-//   SetMarkServer(MARKADDR_DICT[region*1000+server*10])  — NOT the channel port
-//   SetConnectInfo(channelIp, channelPort, authIp, authPort)
-//   SetVersionId (Baerim DYNAMIC_VERSION)
-//   SetLoginInfo + ConnectToAccountServer(channel, auth)
+// Stock introLogin channel+login:
+//   channelList.SelectItem(0-based) → __OnClickSelectServerButton
+//     (SetMarkServer(MARKADDR) + stream.SetConnectInfo(channel, auth))
+//   LoginWindow.Connect(id, pwd) → SetLoginInfo + stream.Connect()
+// Never call nonexistent SetChannel — that left CH1 defaults and crashed CH4.
 static int SafePyBaerimUiLogin(const Command& cmd)
 {
     char acc[384], pwd[384];
@@ -3255,42 +3278,7 @@ static int SafePyBaerimUiLogin(const Command& cmd)
     const int wantPort = cmd.port > 0 ? cmd.port : 0;
     const int wantIdx = cmd.channelIndex;
 
-    // Prefer LoginWindow.SetChannel + Connect(id,pwd) — that already does mark/auth correctly.
-    void* handler = PythonHandler(NetStream());
-    if (handler)
-    {
-        SafePyPrepareLogin(cmd);
-        void* wnd = SafePyGetAttr(handler, "curPhaseWindow");
-        char cls[48];
-        cls[0] = 0;
-        if (wnd && SafePyTypeName(wnd, cls, 48) && strstr(cls, "Login"))
-        {
-            if (wantIdx >= 0)
-                SafePyCallMethod(wnd, "SetChannel", "i", wantIdx);
-            void* idEdit = SafePyGetAttr(wnd, "idEditLine");
-            if (!idEdit)
-                idEdit = SafePyGetAttr(wnd, "id");
-            void* pwdEdit = SafePyGetAttr(wnd, "pwdEditLine");
-            if (!pwdEdit)
-                pwdEdit = SafePyGetAttr(wnd, "pwd");
-            if (idEdit)
-                SafePyCallMethodStr(idEdit, "SetText", cmd.account.c_str());
-            if (pwdEdit)
-                SafePyCallMethodStr(pwdEdit, "SetText", cmd.password.c_str());
-            if (SafePyCallMethod2Str(wnd, "Connect", cmd.account.c_str(), cmd.password.c_str()))
-            {
-                NativeLog("baerim login via LoginWindow.Connect");
-                return 1;
-            }
-            if (SafePyCallMethod(wnd, "__OnClickLoginButton", "", 0))
-            {
-                NativeLog("baerim login via LoginWindow.__OnClickLoginButton");
-                return 1;
-            }
-        }
-    }
-
-    char code[4200];
+    char code[5600];
     _snprintf_s(
         code,
         _TRUNCATE,
@@ -3305,10 +3293,8 @@ static int SafePyBaerimUiLogin(const Command& cmd)
         " except: pass\n"
         " try:\n"
         "  if hasattr(net,'SetVersionId') and hasattr(constInfo,'GetVersionId'):\n"
-        "   net.SetVersionId(constInfo.GetVersionId())\n"
-        "   detail+='vid;'\n"
-        " except Exception as ve:\n"
-        "  detail+='vidFail;'\n"
+        "   net.SetVersionId(constInfo.GetVersionId()); detail+='vid;'\n"
+        " except: detail+='vidFail;'\n"
         " rd=getattr(serverInfo,'REGION_DICT',{})\n"
         " regionID=0\n"
         " if 0 in rd: regionID=0\n"
@@ -3318,12 +3304,11 @@ static int SafePyBaerimUiLogin(const Command& cmd)
         " sk=sorted(r.keys())[0]\n"
         " s=r[sk]\n"
         " ch=s.get('channel') or s.get('channels') or {}\n"
-        " ck=sorted(ch.keys())[0]\n"
-        " if wantIdx>=0:\n"
-        "  keys=sorted(ch.keys())\n"
-        "  if wantIdx<len(keys): ck=keys[wantIdx]\n"
+        " keys=sorted(ch.keys())\n"
+        " ck=keys[0]\n"
+        " if wantIdx>=0 and wantIdx<len(keys): ck=keys[wantIdx]\n"
         " if wantPort>0:\n"
-        "  for k in ch.keys():\n"
+        "  for k in keys:\n"
         "   if int(ch[k].get('tcp_port') or ch[k].get('port') or 0)==wantPort: ck=k;break\n"
         " c=ch[ck]\n"
         " chHost=(c.get('ip') or c.get('host') or s.get('ip') or s.get('host') or '')\n"
@@ -3335,24 +3320,101 @@ static int SafePyBaerimUiLogin(const Command& cmd)
         "  authHost=a.get('ip') or a.get('host') or authHost\n"
         "  authPort=int(a.get('port') or a.get('tcp_port') or authPort)\n"
         " except: pass\n"
-        " if authPort==chPort: authPort=30001\n"
-        " markHost=chHost; markPort=chPort\n"
+        " if authPort==chPort or authPort<=0: authPort=30001\n"
+        " markHost=chHost; markPort=chPort; markHow='ch'\n"
         " try:\n"
-        "  sid=int(sk)\n"
-        "  markKey=int(regionID)*1000+sid*10\n"
-        "  md=serverInfo.MARKADDR_DICT\n"
-        "  m=md.get(markKey) or md.get(str(markKey)) or md[sorted(md.keys())[0]]\n"
-        "  markHost=m.get('ip') or m.get('host') or markHost\n"
-        "  markPort=int(m.get('tcp_port') or m.get('port') or markPort)\n"
-        "  detail+='mark;'\n"
-        " except: detail+='markFallback;'\n"
-        " try: net.SetServerInfo('%%s, %%s' %% (s.get('name',''), c.get('name','CH')))\n"
+        "  sid=int(sk); rid=int(regionID)\n"
+        "  md=getattr(serverInfo,'MARKADDR_DICT',{}) or {}\n"
+        "  for markKey in (rid*1000+sid*10, rid*1000+sid*10+int(ck), 0, '0'):\n"
+        "   m=md.get(markKey) if hasattr(md,'get') else None\n"
+        "   if m is None and hasattr(md,'get'): m=md.get(str(markKey))\n"
+        "   if isinstance(m,dict):\n"
+        "    markHost=m.get('ip') or m.get('host') or markHost\n"
+        "    markPort=int(m.get('tcp_port') or m.get('port') or markPort)\n"
+        "    markHow='key'+str(markKey); break\n"
+        "  if markHow=='ch' and md:\n"
+        "   m=md[sorted(md.keys())[0]]\n"
+        "   if isinstance(m,dict):\n"
+        "    markHost=m.get('ip') or m.get('host') or markHost\n"
+        "    markPort=int(m.get('tcp_port') or m.get('port') or markPort)\n"
+        "    markHow='first'\n"
+        " except: markHow='fail'\n"
+        " try: net.SetServerInfo('%%s, %%s'%%(s.get('name',''), c.get('name','CH')))\n"
         " except: pass\n"
-        " if hasattr(net,'SetMarkServer'): net.SetMarkServer(markHost,int(markPort))\n"
+        " if hasattr(net,'SetMarkServer'):\n"
+        "  try: net.SetMarkServer(markHost,int(markPort))\n"
+        "  except: pass\n"
+        " # Stock stream.SetConnectInfo before Connect — required for non-default channels.\n"
+        " stream=None\n"
+        " try:\n"
+        "  import net as _n\n"
+        "  h=getattr(_n,'GetMainStream',lambda:None)()\n"
+        "  if h is None:\n"
+        "   for name in ('mainStream','stream','MainStream'):\n"
+        "    h=getattr(_n,name,None)\n"
+        "    if h is not None: break\n"
+        "  stream=h\n"
+        " except: pass\n"
+        " try:\n"
+        "  wnd=None\n"
+        "  for cand in (stream, getattr(net,'mainStream',None)):\n"
+        "   if cand is None: continue\n"
+        "   wnd=getattr(cand,'curPhaseWindow',None)\n"
+        "   if wnd is not None: stream=cand; break\n"
+        "  if wnd is not None and hasattr(wnd,'channelList') and wnd.channelList is not None:\n"
+        "   listIdx=wantIdx if wantIdx>=0 else 0\n"
+        "   try:\n"
+        "    # channelList items are keyed by channelID (1..N); SelectItem is 0-based.\n"
+        "    wnd.channelList.SelectItem(int(listIdx))\n"
+        "    detail+='selItem%%d;'%%int(listIdx)\n"
+        "   except Exception as se: detail+='selFail;'\n"
+        "   clicked=0\n"
+        "   for meth in ('_LoginWindow__OnClickSelectServerButton','__OnClickSelectServerButton','OnClickSelectServerButton'):\n"
+        "    fn=getattr(wnd,meth,None)\n"
+        "    if callable(fn):\n"
+        "     try: fn(); clicked=1; detail+='selBtn;'; break\n"
+        "     except Exception as be: detail+='selBtnFail;'\n"
+        "   if not clicked: detail+='noSelBtn;'\n"
+        " except Exception as ue: detail+='uiFail;'\n"
+        " # Always force connect info for the requested channel (UI may keep CH1).\n"
+        " try:\n"
+        "  if stream is not None and hasattr(stream,'SetConnectInfo'):\n"
+        "   stream.SetConnectInfo(chHost,int(chPort),authHost,int(authPort)); detail+='setCI;'\n"
+        "  elif hasattr(net,'SetConnectInfo'):\n"
+        "   net.SetConnectInfo(chHost,int(chPort),authHost,int(authPort)); detail+='netCI;'\n"
+        " except Exception as ce: detail+='ciFail;'\n"
+        " try:\n"
+        "  if stream is not None:\n"
+        "   for a,v in (('addr',chHost),('account_addr',authHost),('id',acc),('pwd',pwd)):\n"
+        "    try: setattr(stream,a,v)\n"
+        "    except: pass\n"
+        "   for a,v in (('port',int(chPort)),('account_port',int(authPort))):\n"
+        "    try: setattr(stream,a,v)\n"
+        "    except: pass\n"
+        " except: pass\n"
         " net.SetLoginInfo(acc,pwd)\n"
-        " net.ConnectToAccountServer(chHost,int(chPort),authHost,int(authPort))\n"
-        " ok=1\n"
-        " detail+='ch=%%s:%%d auth=%%s:%%d mark=%%s:%%d'%%(chHost,chPort,authHost,authPort,markHost,markPort)\n"
+        " used=''\n"
+        " try:\n"
+        "  wnd=getattr(stream,'curPhaseWindow',None) if stream is not None else None\n"
+        "  if wnd is not None and hasattr(wnd,'Connect'):\n"
+        "   try:\n"
+        "    idE=getattr(wnd,'idEditLine',None) or getattr(wnd,'id',None)\n"
+        "    pwE=getattr(wnd,'pwdEditLine',None) or getattr(wnd,'pwd',None)\n"
+        "    if idE is not None and hasattr(idE,'SetText'): idE.SetText(acc)\n"
+        "    if pwE is not None and hasattr(pwE,'SetText'): pwE.SetText(pwd)\n"
+        "   except: pass\n"
+        "   wnd.Connect(acc,pwd); used='LoginWindow.Connect'\n"
+        "  elif stream is not None and hasattr(stream,'Connect'):\n"
+        "   stream.Connect(); used='stream.Connect'\n"
+        "  else:\n"
+        "   net.ConnectToAccountServer(chHost,int(chPort),authHost,int(authPort)); used='ConnectToAccountServer'\n"
+        " except Exception as le:\n"
+        "  err=str(le)\n"
+        "  try:\n"
+        "   net.ConnectToAccountServer(chHost,int(chPort),authHost,int(authPort)); used='ConnectToAccountServer/fallback'\n"
+        "  except Exception as le2: err=str(le2); used='fail'\n"
+        " ok=1 if used and used!='fail' else 0\n"
+        " detail+=used+';ch=%%s:%%d auth=%%s:%%d mark=%%s:%%d(%%s) ck=%%s'%%(chHost,chPort,authHost,authPort,markHost,markPort,markHow,str(ck))\n"
         "except Exception as e:\n"
         " err=str(e)\n"
         "try:\n"
@@ -3372,6 +3434,8 @@ static int SafePyBaerimUiLogin(const Command& cmd)
             DeleteFileA(p2);
         }
     }
+    // Still seed stream attrs from C side (addr/port/auth) before the script runs.
+    SafePyPrepareLogin(cmd);
     if (!SafePyRunAfterPeek(code))
     {
         NativeLog("baerim login AfterPeek failed");
@@ -3383,7 +3447,7 @@ static int SafePyBaerimUiLogin(const Command& cmd)
         NativeLog("baerim login detail=%s", err.c_str());
     if (!ok.empty() && ok[0] == '1')
     {
-        NativeLog("baerim login via channel-select+ConnectToAccountServer");
+        NativeLog("baerim login via stock channel-select+Connect");
         return 1;
     }
     return 0;
@@ -3724,6 +3788,8 @@ static bool ExecuteSession(const Command& cmd)
     const unsigned slot = (unsigned)cmd.slot;
     if (g_baerim)
     {
+        // Snapshot slot names before StartGame so the launcher can show them.
+        SafePyDumpCharacterNames();
         // Prefer stock isAutoSelect Open()->StartGame (armed at login). If already on select,
         // OnIMEReturn/StartGame or net.DirectEnter (same as introselect OnUpdate).
         if (SafePyBaerimSelectCharacter(slot))
