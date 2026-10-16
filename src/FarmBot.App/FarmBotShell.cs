@@ -37,6 +37,9 @@ public sealed class FarmBotShell : IDisposable
     private long _farmedMs;
     private long _farmSegmentStartMs;
     private bool _farmTiming;
+    private EntityState? _killWatch;
+    private int _stoneKills;
+    private int _bossKills;
 
     public FarmBotShell()
         : this(ConfigStore.DefaultPath(AppContext.BaseDirectory), 0, null, null)
@@ -298,6 +301,9 @@ public sealed class FarmBotShell : IDisposable
                 .ToList();
     }
 
+    public int StoneKills => _stoneKills;
+    public int BossKills => _bossKills;
+
     public string FarmedElapsedText
     {
         get
@@ -332,6 +338,7 @@ public sealed class FarmBotShell : IDisposable
                 return;
             View = runtime.Capture();
             SyncFarmClock();
+            TrackKills();
             ArmFoundPots();
             RefreshAtlas();
             Notify();
@@ -705,6 +712,39 @@ public sealed class FarmBotShell : IDisposable
                 _logLines.RemoveRange(0, _logLines.Count - 300);
         }
     }
+
+    private void TrackKills()
+    {
+        var entities = View.Snapshot?.Entities ?? Array.Empty<EntityState>();
+        var bosses = BossVnums().ToHashSet();
+        var target = View.Target;
+
+        if (_killWatch != null && entities.Count > 0)
+        {
+            var stillThere = entities.Any(item => item.Vid == _killWatch.Vid);
+            if (!stillThere)
+            {
+                if (IsBoss(_killWatch, bosses))
+                    _bossKills++;
+                else if (IsStone(_killWatch))
+                    _stoneKills++;
+                _killWatch = null;
+            }
+            else if (target != null && target.Vid != _killWatch.Vid)
+            {
+                _killWatch = null;
+            }
+        }
+
+        if (target != null && (IsBoss(target, bosses) || IsStone(target)))
+            _killWatch = target;
+    }
+
+    private static bool IsStone(EntityState entity) =>
+        entity.Kind == EntityKind.Metin || entity.ResolvedType == ActorType.Stone;
+
+    private static bool IsBoss(EntityState entity, HashSet<uint> bosses) =>
+        entity.Kind == EntityKind.Boss || bosses.Contains(entity.Vnum);
 
     private void SyncFarmClock()
     {

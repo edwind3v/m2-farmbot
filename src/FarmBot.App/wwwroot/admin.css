@@ -402,6 +402,36 @@ a { color: var(--accent-2); text-decoration: none; }
 
 .session-clock.on { color: var(--accent-2); border-color: var(--accent-border); }
 
+.kill-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 7px 0 3px;
+    border-radius: 8px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--text);
+}
+
+.kill-box img {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+.kill-box b {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    min-width: 1.2em;
+}
+
+.kill-box.boss { border-color: rgba(212, 160, 23, 0.35); }
+
 .titlebar .cmd .btn { padding: 3px 9px; font-size: 12px; }
 .titlebar .pill { height: 22px; padding: 0 8px; }
 
