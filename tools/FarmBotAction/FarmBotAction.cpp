@@ -3565,7 +3565,18 @@ static bool BaerimSetAttackKey(void* player, bool press)
     return true;
 }
 
-static bool FireNativeSidestep(float mx, float my, float tx, float ty, float dist)
+static void BaerimReleaseChaseForMove(void* player)
+{
+    if (!g_baerim || !player)
+        return;
+    // PressActor / attack-key hold overrides MoveToPixel unless chase state is cleared first.
+    BaerimSetAttackKey(player, false);
+    BaerimClearMode(player);
+    BaerimSetTargetVid(player, 0);
+    ClearReserved(player);
+}
+
+static bool FireNativeSidestep(void* player, float mx, float my, float tx, float ty, float dist)
 {
     float fx = tx - mx;
     float fy = ty - my;
@@ -3630,9 +3641,10 @@ static bool FireNativeSidestep(float mx, float my, float tx, float ty, float dis
     g_stuckY = my;
     g_stuckAt = now;
     g_sidestepUntil = now + 1600;
+    BaerimReleaseChaseForMove(player);
     const bool walked = CallMoveToPixel(sx, sy);
-    NativeLog("BOT native sidestep try=%d step=%.0f xy=%.0f,%.0f ok=%d stuckDist=%.0f",
-        g_nativeSidesteps, step, sx, sy, walked ? 1 : 0, dist);
+    NativeLog("BOT native sidestep try=%d step=%.0f xy=%.0f,%.0f ok=%d stuckDist=%.0f mode=%u",
+        g_nativeSidesteps, step, sx, sy, walked ? 1 : 0, dist, BaerimReadU32(player, 0x54));
     return walked;
 }
 
@@ -3695,23 +3707,26 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
             const float slipped2 = slippedX * slippedX + slippedY * slippedY;
             if (slipped2 >= 140.f * 140.f)
             {
+                // Moved enough — resume chase via PressActor below.
                 g_sidestepUntil = 0;
                 g_stuckX = mx;
                 g_stuckY = my;
                 g_stuckAt = now;
             }
-            else if (now >= g_sidestepUntil || (now - g_stuckAt >= 280 && slipped2 < 50.f * 50.f))
+            else if (now >= g_sidestepUntil)
             {
+                // Full sidestep window elapsed with no slip — retry move (do not PressActor yet).
                 g_sidestepUntil = 0;
                 if (kMoveToPixelRva)
                 {
-                    FireNativeSidestep(mx, my, tx, ty, dist);
+                    FireNativeSidestep(player, mx, my, tx, ty, dist);
                     InterlockedExchange(&g_botCall, 0);
                     return false;
                 }
             }
             else
             {
+                // Hold still while MoveToPixel runs; PressActor would cancel the sidestep.
                 InterlockedExchange(&g_botCall, 0);
                 return false;
             }
@@ -3728,7 +3743,7 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
             }
             else if (now - g_stuckAt >= 350 && kMoveToPixelRva)
             {
-                FireNativeSidestep(mx, my, tx, ty, dist);
+                FireNativeSidestep(player, mx, my, tx, ty, dist);
                 InterlockedExchange(&g_botCall, 0);
                 return false;
             }
@@ -4019,9 +4034,10 @@ static void ClearReserved(void* player)
 static void PauseChase(void* player, DWORD holdMs)
 {
     g_sidestepUntil = GetTickCount() + holdMs;
-    ClearReserved(player);
     if (g_baerim)
-        BaerimSetAttackKey(player, false);
+        BaerimReleaseChaseForMove(player);
+    else
+        ClearReserved(player);
 }
 
 static void StopCombat(void* player)
@@ -6998,12 +7014,15 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "move")
     {
-        PauseChase(player, 800);
+        PauseChase(player, 1600);
+        // Entity JSON applies negateY for C#; MoveToPixel wants raw client pixels.
+        const float mx = cmd.x;
+        const float my = (g_baerim && kNegateY) ? -cmd.y : cmd.y;
         const bool walked = cmd.vid
-            ? CallMoveToDest(cmd.vid, cmd.x, cmd.y)
-            : CallMoveToPixel(cmd.x, cmd.y);
-        NativeLog("BOT sidestep xy=%.0f,%.0f pixel=0x%X dest=0x%X ok=%d",
-            cmd.x, cmd.y, kMoveToPixelRva, kMoveToDestRva, walked ? 1 : 0);
+            ? CallMoveToDest(cmd.vid, mx, my)
+            : CallMoveToPixel(mx, my);
+        NativeLog("BOT sidestep xy=%.0f,%.0f raw=%.0f,%.0f pixel=0x%X dest=0x%X ok=%d mode=%u",
+            cmd.x, cmd.y, mx, my, kMoveToPixelRva, kMoveToDestRva, walked ? 1 : 0, BaerimReadU32(player, 0x54));
         if (!walked)
         {
             g_lastOk = false;

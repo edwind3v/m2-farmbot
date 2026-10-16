@@ -271,7 +271,7 @@ public sealed class ActionModuleHost
         }
     }
 
-    private const int BaerimLayoutRecovererVersion = 3;
+    private const int BaerimLayoutRecovererVersion = 4;
 
     private string WriteBaerimLayoutFile(string? exePath)
     {

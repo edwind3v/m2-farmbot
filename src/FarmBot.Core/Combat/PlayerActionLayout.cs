@@ -1048,14 +1048,20 @@ public static class PlayerActionLayoutRecoverer
                 continue;
             if (!FunctionHasRetWide(pe, prologue, 4, 0x200))
                 continue;
-            if (CountGetPixelCalls(pe, prologue, getPixelRva) >= 2)
+            var size = FunctionSize(pe, prologue, 0x200);
+            if (size < 0x30 || size > 0x120)
+                continue;
+            // Real MoveToDestPixelPosition calls GetPixel exactly once on `this`.
+            // Must count only inside this function — scanning 0x200 past ret picked sibling RVAs
+            // (e.g. 0x126850) that never move the actor.
+            if (CountGetPixelCalls(pe, prologue, getPixelRva, size) != 1)
                 continue;
             if (GetPixelUsesOtherInstance(pe, prologue, callOff))
                 continue;
-            var size = FunctionSize(pe, prologue, 0x200);
-            if (size < 0x30)
-                continue;
             var score = size + (ReadsDestArg(pe, prologue) ? 80 : 0);
+            // Prefer movers clustered just below GetPixel (typical CInstanceBase layout).
+            if (rva < getPixelRva && getPixelRva - rva < 0x1000)
+                score += 40;
             if (score <= bestScore)
                 continue;
             bestScore = score;
@@ -1076,10 +1082,11 @@ public static class PlayerActionLayoutRecoverer
                pe.Byte(off + 6) == 0x10;
     }
 
-    private static int CountGetPixelCalls(ActionPe pe, int fnOff, uint getPixelRva)
+    private static int CountGetPixelCalls(ActionPe pe, int fnOff, uint getPixelRva, int window = 0x200)
     {
         var n = 0;
-        for (var i = fnOff; i < fnOff + 0x200 && i + 5 < pe.Length; i++)
+        var end = fnOff + Math.Max(0, window);
+        for (var i = fnOff; i < end && i + 5 < pe.Length; i++)
         {
             if (pe.Byte(i) != 0xE8)
                 continue;
