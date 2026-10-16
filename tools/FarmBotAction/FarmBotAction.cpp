@@ -295,6 +295,9 @@ static float g_faceFromY;
 static DWORD g_lastFaceMs;
 static unsigned g_meleeVid;
 static unsigned g_meleeEngageVid;
+static unsigned g_baerimAutoVidDisp; // learned m_dwAutoAttackTargetVID offset (0 = unknown)
+// Kept for future fallback (old Baerim AttackKey sustain). Stock auto-VID path is preferred.
+static int g_baerimUseAttackKeySustain; // 0 = stock MBF_AUTO (default)
 static DWORD g_lastSkillsMs;
 static int g_skillsReady;
 static void* g_mainInst;
@@ -4628,25 +4631,89 @@ static void LogPixels(const char* tag, unsigned vid)
         tag, vid, me, mx, my, you, tx, ty, sqrtf(dx * dx + dy * dy), (int)g_botCall);
 }
 
+static unsigned BaerimReadU32(void* p, unsigned off);
+
 static unsigned AutoAttackVidDisp()
 {
-    return kReservedModeDisp >= 4 ? kReservedModeDisp - 4 : 0x54;
+    if (g_baerim && g_baerimAutoVidDisp)
+        return g_baerimAutoVidDisp;
+    return kReservedModeDisp >= 4 ? kReservedModeDisp - 4 : 0x50;
+}
+
+static unsigned ReadAutoAttackVid(void* player)
+{
+    if (!player)
+        return 0;
+    if (g_baerim && g_baerimAutoVidDisp)
+        return BaerimReadU32(player, g_baerimAutoVidDisp);
+    const unsigned disp = AutoAttackVidDisp();
+    unsigned v = 0;
+    __try
+    {
+        v = *(unsigned*)((char*)player + disp);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+    return v;
+}
+
+// After PressActor(isAuto=1), stock __OnPressActor writes m_dwAutoAttackTargetVID.
+// Learn that displacement so we can re-arm / clear without guessing forever.
+static void BaerimLearnAutoVidDisp(void* player, unsigned expectVid)
+{
+    if (!g_baerim || !player || !expectVid || g_baerimAutoVidDisp)
+        return;
+    for (unsigned off = 0x40; off < 0x180; off += 4)
+    {
+        if (BaerimReadU32(player, off) == expectVid)
+        {
+            g_baerimAutoVidDisp = off;
+            NativeLog("baerim autoAttackTargetVID disp=0x%X", off);
+            return;
+        }
+    }
+    static const unsigned kExtra[] = { 0x41A78, 0x419D4, 0x41AAC, 0x41A80, 0x50, 0x4C, 0x58, 0x60 };
+    for (unsigned i = 0; i < sizeof(kExtra) / sizeof(kExtra[0]); ++i)
+    {
+        if (BaerimReadU32(player, kExtra[i]) == expectVid)
+        {
+            g_baerimAutoVidDisp = kExtra[i];
+            NativeLog("baerim autoAttackTargetVID disp=0x%X (extra)", g_baerimAutoVidDisp);
+            return;
+        }
+    }
 }
 
 static void SetAutoAttackVid(void* player, unsigned vid)
 {
-    if (!player || g_baerim)
+    if (!player)
         return;
-    const unsigned disp = AutoAttackVidDisp();
-    __try
-    {
-        *(unsigned*)((char*)player + disp) = vid;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-    }
+    // Prefer recovered __SetAutoAttackTargetActorID when present.
     if (kSetAutoRva)
         CallRva(kSetAutoRva, player, vid);
+    const unsigned disp = AutoAttackVidDisp();
+    if (disp)
+    {
+        __try
+        {
+            *(unsigned*)((char*)player + disp) = vid;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+    if (g_baerim && g_baerimAutoVidDisp && g_baerimAutoVidDisp != disp)
+    {
+        __try
+        {
+            *(unsigned*)((char*)player + g_baerimAutoVidDisp) = vid;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
 }
 
 static void HoldAttackKeyOff(void* player)
@@ -4744,10 +4811,11 @@ static void BaerimReleaseChaseForMove(void* player)
 {
     if (!g_baerim || !player)
         return;
-    // PressActor / attack-key hold overrides MoveToPixel unless chase state is cleared first.
+    // PressActor / auto-attack overrides MoveToPixel unless chase state is cleared first.
     BaerimSetAttackKey(player, false);
     BaerimClearMode(player);
     BaerimSetTargetVid(player, 0);
+    SetAutoAttackVid(player, 0);
     ClearReserved(player);
 }
 
@@ -4926,6 +4994,7 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         {
             BaerimSetAttackKey(player, false);
             BaerimSetTargetVid(player, 0);
+            SetAutoAttackVid(player, 0);
             ClearReserved(player);
         }
         g_chaseVid = 0;
@@ -4939,9 +5008,12 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
 
     if (g_baerim)
     {
-        // AutoHunt chase/face: SetTarget + PressActor(isAuto). Baerim does not sustain
-        // combo from PressActor alone — once InRange, hold SetAttackKeyState every tick.
-        // MoveToPixel only for stuck sidesteps.
+        // Stock MBF_AUTO click path:
+        //   PressActor(isAuto=1) -> __SetAutoAttackTargetActorID(vid)
+        //   client __Update_AutoAttack -> __ReserveClickActor each frame
+        //   (walk + NEW_AttackToDestInstanceDirection = face + hit)
+        // Do not drive with AttackKey as the main sustain — that caused side-aim whiffs.
+        // FireNativeFace / BaerimSetAttackKey remain available if g_baerimUseAttackKeySustain=1.
         void* main = CallGetMainActor();
         float mx = 0, my = 0, tx = 0, ty = 0;
         if (LooksInstance(main))
@@ -4973,7 +5045,7 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
                 g_stuckX = mx;
                 g_stuckY = my;
                 g_stuckAt = now;
-                g_meleeEngageVid = 0;
+                g_meleeEngageVid = 0; // re-PressActor after sidestep
             }
             else if (now >= g_sidestepUntil)
             {
@@ -5017,48 +5089,60 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
             g_nativeSidesteps = 0;
         }
 
-        const bool needEngage = g_meleeEngageVid != g_clickVid;
-        const bool refreshChase = !inRange && g_lastWalkMs && now - g_lastWalkMs >= 1500;
+        const unsigned autoVid = ReadAutoAttackVid(player);
+        // Until we learn the auto-VID field, trust a single PressActor per target (avoid click spam).
+        const bool canCheckAuto = g_baerimAutoVidDisp != 0 || kSetAutoRva != 0;
+        const bool autoArmed = !canCheckAuto || autoVid == g_clickVid;
+        const bool needEngage = g_meleeEngageVid != g_clickVid || (canCheckAuto && !autoArmed);
+        // Soft refresh while approaching if auto VID dropped; once armed, leave client Update alone.
+        const bool refreshChase = canCheckAuto && !autoArmed && g_lastWalkMs &&
+                                  now - g_lastWalkMs >= 1500;
         if (needEngage || refreshChase)
         {
             g_meleeEngageVid = g_clickVid;
             g_meleeVid = g_clickVid;
             g_faceUntil = 0;
             g_faceVid = g_clickVid;
-            if (!inRange)
-                BaerimSetAttackKey(player, false);
+            // Drop any leftover AttackKey hold so stock auto owns the swings.
+            BaerimSetAttackKey(player, false);
             BaerimSetTargetVid(player, g_clickVid);
             CallSetTarget(player, g_clickVid, 1);
+            SetAutoAttackVid(player, g_clickVid);
             const bool pressed = CallPressActor(player, g_clickVid);
+            BaerimLearnAutoVidDisp(player, g_clickVid);
+            if (pressed)
+                SetAutoAttackVid(player, g_clickVid); // ensure VID sticks if PressActor path skipped write
             g_stuckX = mx;
             g_stuckY = my;
             g_stuckAt = now;
             g_lastWalkMs = now;
-            NativeLog("BOT chase vid=%u press=%d dist=%.0f inRange=%d refresh=%d mode=%u",
-                g_clickVid, pressed ? 1 : 0, dist, inRange ? 1 : 0, refreshChase ? 1 : 0,
-                BaerimReadU32(player, 0x54));
-            if (!inRange)
-            {
-                InterlockedExchange(&g_botCall, 0);
-                return pressed;
-            }
-        }
-
-        if (!inRange)
-        {
+            NativeLog("BOT auto-click vid=%u press=%d auto=0x%X dist=%.0f inRange=%d refresh=%d",
+                g_clickVid, pressed ? 1 : 0, ReadAutoAttackVid(player), dist, inRange ? 1 : 0,
+                refreshChase ? 1 : 0);
             InterlockedExchange(&g_botCall, 0);
-            return false;
+            return pressed;
         }
 
-        // In range: keep AttackKey held — this is what sustains swings on Baerim.
-        BaerimSetTargetVid(player, g_clickVid);
-        const bool keyed = BaerimSetAttackKey(player, true);
-        if (!g_lastAtkMs || now - g_lastAtkMs >= 400)
+        // Optional legacy sustain (disabled by default).
+        if (g_baerimUseAttackKeySustain && inRange)
+        {
+            BaerimSetTargetVid(player, g_clickVid);
+            const bool keyed = BaerimSetAttackKey(player, true);
+            if (!g_lastAtkMs || now - g_lastAtkMs >= 400)
+            {
+                g_lastAtkMs = now;
+                NativeLog("BOT combo(legacy) vid=%u key=%d dist=%.0f", g_clickVid, keyed ? 1 : 0, dist);
+            }
+            InterlockedExchange(&g_botCall, 0);
+            return true;
+        }
+
+        // Stock path: client __Update_AutoAttack sustains chase/face/hit.
+        if (!g_lastAtkMs || now - g_lastAtkMs >= 1200)
         {
             g_lastAtkMs = now;
-            NativeLog("BOT combo vid=%u key=%d dist=%.0f atkKey=%u mode=%u",
-                g_clickVid, keyed ? 1 : 0, dist, BaerimReadU32(player, 0x64) & 0xFF,
-                BaerimReadU32(player, 0x54));
+            NativeLog("BOT auto-hold vid=%u auto=0x%X dist=%.0f inRange=%d",
+                g_clickVid, autoVid, dist, inRange ? 1 : 0);
         }
         InterlockedExchange(&g_botCall, 0);
         return true;
@@ -5346,6 +5430,7 @@ static void StopCombat(void* player)
     {
         BaerimSetAttackKey(player, false);
         BaerimSetTargetVid(player, 0);
+        SetAutoAttackVid(player, 0);
         return;
     }
     CallRva(kSetAutoRva, player, 0);
@@ -5371,9 +5456,11 @@ static void ChaseTick(void* player)
     {
         BaerimSetAttackKey(player, false);
         BaerimSetTargetVid(player, 0);
+        SetAutoAttackVid(player, 0);
         ClearReserved(player);
         g_chaseVid = 0;
         g_walkVid = 0;
+        g_meleeEngageVid = 0;
         InterlockedExchange(&g_allowMelee, 0);
         return;
     }
