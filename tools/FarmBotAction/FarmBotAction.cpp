@@ -8214,6 +8214,31 @@ static void Serve()
     }
 }
 
+static BOOL CALLBACK MatchOwnVisibleWindow(HWND hwnd, LPARAM ctx)
+{
+    DWORD* found = (DWORD*)ctx;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != found[0] || !IsWindowVisible(hwnd))
+        return TRUE;
+    found[1] = 1;
+    return FALSE;
+}
+
+static void WaitForOwnVisibleWindow(DWORD timeoutMs)
+{
+    const DWORD self = GetCurrentProcessId();
+    const DWORD start = GetTickCount();
+    while (GetTickCount() - start < timeoutMs)
+    {
+        DWORD found[2] = { self, 0 };
+        EnumWindows(MatchOwnVisibleWindow, (LPARAM)found);
+        if (found[1])
+            return;
+        Sleep(100);
+    }
+}
+
 static DWORD WINAPI InitThread(void*)
 {
     LoadConfig();
@@ -8263,6 +8288,11 @@ static DWORD WINAPI InitThread(void*)
             kClickSkillRva = 0x1B8A50;
         NativeLog("baerim chat=0x%X mountHelper=0x%X isAffect=0x%X clickSkill=0x%X net=0x%X",
             kSendChatRva, kIsMountingRva, kIsAffectRva, kClickSkillRva, kNetStreamRva);
+        // Suspended inject runs InitThread before DX11/Python are ready. Hooking
+        // PeekMessage that early was crashing the client ~25s into boot.
+        NativeLog("baerim waiting for client window before hooks");
+        WaitForOwnVisibleWindow(12000);
+        Sleep(300);
     }
     InstallLoopHooks(client);
     NativeLog("loaded base=%p profile=%s pressActor=0x%X moveTo=0x%X movePixel=0x%X instAtk=0x%X inRange=0x%X getPixel=0x%X hooks=%d",

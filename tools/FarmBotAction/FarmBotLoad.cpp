@@ -57,23 +57,27 @@ static BOOL CALLBACK MatchPidWindow(HWND hwnd, LPARAM ctx)
     GetWindowThreadProcessId(hwnd, &pid);
     if (pid != found[0] || !IsWindowVisible(hwnd))
         return TRUE;
-    char title[128];
-    if (GetWindowTextA(hwnd, title, 128) <= 0)
-        return TRUE;
+    // found[2] != 0 => require a non-empty title (legacy path for post-window inject).
+    if (found[2])
+    {
+        char title[128];
+        if (GetWindowTextA(hwnd, title, 128) <= 0)
+            return TRUE;
+    }
     found[1] = 1;
     return FALSE;
 }
 
-static bool WaitForWindow(DWORD pid, DWORD timeoutMs)
+static bool WaitForWindow(DWORD pid, DWORD timeoutMs, bool requireTitle)
 {
     const DWORD start = GetTickCount();
     while (GetTickCount() - start < timeoutMs)
     {
-        DWORD found[2] = { pid, 0 };
+        DWORD found[3] = { pid, 0, requireTitle ? 1u : 0u };
         EnumWindows(MatchPidWindow, (LPARAM)found);
         if (found[1])
             return true;
-        Sleep(200);
+        Sleep(100);
     }
     return false;
 }
@@ -181,6 +185,9 @@ int main(int argc, char** argv)
         WriteConfig(pipe, token, pi.dwProcessId, layout);
         if (baerim)
         {
+            // Inject while suspended, resume, then wait for any visible window (title not
+            // required — empty titles used to burn the full 30s). This lets DX11/Python
+            // finish creating the HWND before FarmBot's UI loop starts probing.
             if (!Inject(pi.hProcess, injectDll))
             {
                 printf("inject failed %lu\n", GetLastError());
@@ -190,14 +197,24 @@ int main(int argc, char** argv)
                 return 5;
             }
             ResumeThread(pi.hThread);
+            CloseHandle(pi.hThread);
+            if (!WaitForWindow(pi.dwProcessId, 12000, false))
+            {
+                printf("client window did not appear; continuing anyway\n");
+                fflush(stdout);
+            }
+            CloseHandle(pi.hProcess);
+            printf("launched pid=%lu\n", pi.dwProcessId);
+            fflush(stdout);
+            return 0;
         }
         CloseHandle(pi.hThread);
-        if (!WaitForWindow(pi.dwProcessId, 30000))
+        if (!WaitForWindow(pi.dwProcessId, 15000, true))
         {
             printf("client window did not appear; injecting anyway\n");
             fflush(stdout);
         }
-        if (!baerim && !Inject(pi.hProcess, injectDll))
+        if (!Inject(pi.hProcess, injectDll))
         {
             printf("inject failed %lu\n", GetLastError());
             CloseHandle(pi.hProcess);

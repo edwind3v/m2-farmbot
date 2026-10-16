@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using FarmBot.Core.Combat;
 using FarmBot.Core.Configuration;
@@ -278,6 +279,10 @@ public sealed class ActionModuleHost
             return "";
         try
         {
+            var cachePath = BaerimLayoutCachePath(exePath);
+            if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 64)
+                return cachePath;
+
             var recovered = BaerimActionLayoutRecoverer.Recover(exePath);
             var player = recovered.Player;
             var entity = recovered.Entity;
@@ -375,14 +380,25 @@ public sealed class ActionModuleHost
             AppendHex(text, "nodeIsNil", entity.NodeIsNil);
             AppendHex(text, "nodeKey", entity.NodeKey);
             AppendHex(text, "nodeValue", entity.NodeValue);
-            var path = Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_" + Guid.NewGuid().ToString("N") + ".cfg");
-            File.WriteAllText(path, text.ToString());
-            return path;
+            var payload = text.ToString();
+            var tmp = cachePath + ".tmp";
+            File.WriteAllText(tmp, payload);
+            File.Copy(tmp, cachePath, overwrite: true);
+            try { File.Delete(tmp); } catch { /* ignore */ }
+            return cachePath;
         }
         catch
         {
             return "";
         }
+    }
+
+    private static string BaerimLayoutCachePath(string exePath)
+    {
+        var info = new FileInfo(exePath);
+        var key = info.FullName + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks.ToString();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..16];
+        return Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_baerim_" + hash + ".cfg");
     }
 
     private static void AppendHex(StringBuilder text, string key, uint value)

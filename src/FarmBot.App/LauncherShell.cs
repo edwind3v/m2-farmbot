@@ -431,7 +431,7 @@ public sealed class LauncherShell : IDisposable
             if (!IsCurrent(ticket))
                 return;
 
-            SetBusy(ticket, "waiting for client to open...");
+            SetBusy(ticket, "starting client...");
             var pipe = LoaderOutput.UniquePipeName(slot.Id);
             var host = new ActionModuleHost(pipe) { Profile = profile };
             if (!host.TryLaunch(path, out var launchStatus, out var pid))
@@ -784,7 +784,7 @@ public sealed class LauncherShell : IDisposable
         if (string.IsNullOrWhiteSpace(name))
             return;
         var deadline = DateTime.UtcNow.AddSeconds(8);
-        var announced = false;
+        var killed = false;
         while (DateTime.UtcNow < deadline)
         {
             var leftover = Process.GetProcessesByName(name)
@@ -792,11 +792,9 @@ public sealed class LauncherShell : IDisposable
                 .ToArray();
             if (leftover.Length == 0)
                 break;
-            if (!announced)
-            {
-                announced = true;
+            if (!killed)
                 phase?.Invoke("closing leftover clients...");
-            }
+            killed = true;
 
             foreach (var process in leftover)
             {
@@ -814,11 +812,12 @@ public sealed class LauncherShell : IDisposable
                 }
             }
 
-            Thread.Sleep(300);
+            Thread.Sleep(200);
         }
 
-        phase?.Invoke("waiting for client to open...");
-        Thread.Sleep(8000);
+        // Only settle when we actually killed something; never burn a fixed 8s on a clean launch.
+        if (killed)
+            Thread.Sleep(400);
     }
 
     private static string WindowTitle(ClientSlot slot)
