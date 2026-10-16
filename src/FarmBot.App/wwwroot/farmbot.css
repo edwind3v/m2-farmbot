@@ -64,8 +64,10 @@
     overflow: hidden;
     background: var(--panel);
     border: 1px solid var(--line-strong);
-    display: grid;
-    place-items: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
     color: var(--muted);
 }
 
@@ -75,11 +77,15 @@
     object-fit: cover;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
+    display: block;
 }
 
 .avatar.empty svg {
     width: 26px;
     height: 26px;
+    display: block;
+    flex: none;
+    margin: 0;
 }
 
 .player-copy { min-width: 0; }
@@ -472,25 +478,92 @@ tr.tgt td { color: var(--accent-2); }
 .slot.on { border-color: var(--ok-border); }
 .slot.busy { border-color: var(--accent-border); }
 
+.slot-row {
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    gap: 10px;
+    align-items: center;
+}
+
+.slot .avatar {
+    width: 52px;
+    height: 52px;
+    flex: none;
+}
+
 .slot-main {
     display: flex;
     justify-content: space-between;
     gap: 8px;
     align-items: baseline;
+    min-width: 0;
 }
 
-.slot-main b { font-size: 13px; }
+.slot-main b {
+    font-size: 13px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .slot-state {
     display: inline-flex;
     align-items: center;
     justify-content: flex-end;
     gap: 6px;
-    max-width: 62%;
+    max-width: 48%;
+    flex: none;
     color: var(--muted);
     font-size: 11px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     text-align: right;
+}
+
+.slot-add {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+    background: transparent;
+    border-style: dashed;
+    border-color: var(--line-strong);
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.slot-add:hover:not(:disabled) {
+    border-color: var(--accent-border);
+    background: var(--panel);
+}
+
+.slot-add:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.slot-add-icon {
+    color: var(--accent-2);
+}
+
+.slot-add-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.slot-add-copy b {
+    font-size: 13px;
+}
+
+.slot-add-copy span {
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.04em;
 }
 
 .slot.busy .slot-state { color: var(--accent-2); }

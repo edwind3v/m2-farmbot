@@ -20,7 +20,6 @@
                     <option value="Normal">Normal</option>
                 </select>
             </label>
-            <button class="btn btn-save" @onclick="Shell.AddSlot">+ Slot</button>
         </Actions>
     </TitleBar>
 
@@ -33,16 +32,33 @@
 
         @foreach (var slot in Shell.VisibleSlots)
         {
+            var avatarSrc = PlayerAvatar.Src(slot.Race);
+            var hasAvatar = avatarSrc.Length > 0;
             <div class="slot @(Shell.IsRunning(slot) ? "on" : null) @(Shell.IsBusy(slot) ? "busy" : null)">
-                <div class="slot-main">
-                    <b>@slot.DisplayName</b>
-                    <span class="slot-state">
-                        @if (Shell.IsBusy(slot))
+                <div class="slot-row">
+                    <div class="avatar @(hasAvatar ? "" : "empty")" title="@(hasAvatar ? PlayerRace.Caption(slot.Race) : "No avatar yet")">
+                        @if (hasAvatar)
                         {
-                            <span class="spinner" aria-hidden="true"></span>
+                            <img src="@avatarSrc" alt="@PlayerRace.Caption(slot.Race)" />
                         }
-                        @Shell.SessionStatus(slot)
-                    </span>
+                        else
+                        {
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                                <circle cx="12" cy="9" r="3.2" />
+                                <path d="M6.2 18.2c.9-3.1 3.2-4.6 5.8-4.6s4.9 1.5 5.8 4.6" />
+                            </svg>
+                        }
+                    </div>
+                    <div class="slot-main">
+                        <b>@slot.DisplayName</b>
+                        <span class="slot-state">
+                            @if (Shell.IsBusy(slot))
+                            {
+                                <span class="spinner" aria-hidden="true"></span>
+                            }
+                            @Shell.SessionStatus(slot)
+                        </span>
+                    </div>
                 </div>
                 <div class="slot-cmd">
                     <button class="btn btn-ok" disabled="@(Shell.SlotsLocked || Shell.IsRunning(slot))" @onclick="() => Shell.Play(slot)">Play</button>
@@ -52,6 +68,18 @@
                 </div>
             </div>
         }
+
+        <button type="button" class="slot slot-add" disabled="@Shell.SlotsLocked" @onclick="Shell.AddSlot">
+            <div class="avatar empty slot-add-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                    <path d="M12 6v12M6 12h12" />
+                </svg>
+            </div>
+            <div class="slot-add-copy">
+                <b>Add slot</b>
+                <span>New account / character</span>
+            </div>
+        </button>
 
         @if (Shell.Editor is { } editor)
         {

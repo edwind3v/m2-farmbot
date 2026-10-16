@@ -29,11 +29,6 @@ public sealed class LauncherShell : IDisposable
         _slotsPath = SlotStore.DefaultPath(_baseDirectory);
         _state = SlotStore.LoadOrCreate(_slotsPath);
         _log = new FileBotLog(Path.Combine(_baseDirectory, "logs"));
-        if (_state.Slots.Count == 0)
-        {
-            _state.Slots.Add(new ClientSlot());
-            Persist();
-        }
     }
 
     public event Action? Changed;
@@ -168,8 +163,6 @@ public sealed class LauncherShell : IDisposable
             EditorPassword = "";
         }
 
-        if (_state.Slots.Count == 0)
-            _state.Slots.Add(new ClientSlot());
         Status = profile switch
         {
             ClientProfile.Baerim => "Baerim mode — walk to the target, then attack.",
@@ -382,8 +375,16 @@ public sealed class LauncherShell : IDisposable
             info = session.Sink.GetSession();
         }
 
-        var name = session.Shell.View.Snapshot?.Player?.Name;
-        if (!SlotStore.ApplyLiveCredentials(session.Slot, info, name))
+        var player = session.Shell.View.Snapshot?.Player;
+        var name = player?.Name;
+        var dirty = SlotStore.ApplyLiveCredentials(session.Slot, info, name);
+        if (player?.Race is uint race and <= 8 && session.Slot.Race != race)
+        {
+            session.Slot.Race = race;
+            dirty = true;
+        }
+
+        if (!dirty)
             return;
 
         if (_busySlotId != session.Slot.Id)

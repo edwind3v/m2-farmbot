@@ -20,6 +20,7 @@ public sealed class ClientSlot
     public string PasswordProtected { get; set; } = "";
     public int CharacterSlot { get; set; }
     public string CharacterName { get; set; } = "";
+    public uint? Race { get; set; }
     public int ChannelIndex { get; set; }
     public string ChannelName { get; set; } = "";
 
@@ -296,6 +297,8 @@ public static class SlotStore
         slot.ChannelName = (slot.ChannelName ?? "").Trim();
         slot.CharacterSlot = Math.Clamp(slot.CharacterSlot, 0, 4);
         slot.ChannelIndex = Math.Max(0, slot.ChannelIndex);
+        if (slot.Race is > 8)
+            slot.Race = null;
     }
 
     private static bool PhaseLooksInWorld(string phase) =>
