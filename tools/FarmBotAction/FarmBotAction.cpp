@@ -281,6 +281,13 @@ static DWORD g_stuckAt;
 static int g_nativeSidesteps;
 static float g_sidestepFromX;
 static float g_sidestepFromY;
+static DWORD g_faceUntil;
+static unsigned g_faceVid;
+static float g_faceFromX;
+static float g_faceFromY;
+static DWORD g_lastFaceMs;
+static unsigned g_meleeVid;
+static unsigned g_meleeEngageVid;
 static DWORD g_lastSkillsMs;
 static int g_skillsReady;
 static void* g_mainInst;
@@ -3576,6 +3583,93 @@ static void BaerimReleaseChaseForMove(void* player)
     ClearReserved(player);
 }
 
+static bool ReadActorRotation(void* inst, float* rot)
+{
+    if (!UserPtr(inst) || !rot || !kGraphicDisp)
+        return false;
+    __try
+    {
+        *rot = *(float*)((char*)inst + kGraphicDisp + 0x4A4);
+        return !std::isnan(*rot);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static float NormalizeDeg(float deg)
+{
+    while (deg >= 360.f)
+        deg -= 360.f;
+    while (deg < 0.f)
+        deg += 360.f;
+    return deg;
+}
+
+static float FacingDegFromRotation(float rot)
+{
+    // Matches LiveGameStateProvider.MinimapFacing: facingDeg = 540 - rotation.
+    return NormalizeDeg(540.f - rot);
+}
+
+static float BearingToTargetDeg(float mx, float my, float tx, float ty)
+{
+    // Same frame as movement-derived facing: Atan2(dx, dy).
+    return NormalizeDeg(atan2f(tx - mx, ty - my) * (180.f / 3.14159265f));
+}
+
+static float AngleDeltaDeg(float a, float b)
+{
+    float d = fabsf(NormalizeDeg(a) - NormalizeDeg(b));
+    if (d > 180.f)
+        d = 360.f - d;
+    return d;
+}
+
+static bool BaerimFacingTarget(void* main, float mx, float my, float tx, float ty, float* outDelta)
+{
+    float rot = 0.f;
+    if (!ReadActorRotation(main, &rot))
+        return false;
+    const float facing = FacingDegFromRotation(rot);
+    const float want = BearingToTargetDeg(mx, my, tx, ty);
+    const float delta = AngleDeltaDeg(facing, want);
+    if (outDelta)
+        *outDelta = delta;
+    return delta <= 50.f;
+}
+
+static bool FireNativeFace(void* player, float mx, float my, float tx, float ty, float dist)
+{
+    float fx = tx - mx;
+    float fy = ty - my;
+    float len = sqrtf(fx * fx + fy * fy);
+    if (len < 1.f)
+        return false;
+    fx /= len;
+    fy /= len;
+    // Short step toward the target so the client turns the mount/body without leaving melee.
+    float step = (len > 180.f) ? 140.f : (len * 0.5f);
+    if (step < 50.f)
+        step = 50.f;
+    if (step > len - 20.f && len > 40.f)
+        step = len - 20.f;
+    const float sx = mx + fx * step;
+    const float sy = my + fy * step;
+    const DWORD now = GetTickCount();
+    g_faceFromX = mx;
+    g_faceFromY = my;
+    g_faceUntil = now + 550;
+    g_faceVid = g_clickVid;
+    g_lastFaceMs = now;
+    BaerimReleaseChaseForMove(player);
+    const bool walked = CallMoveToPixel(sx, sy);
+    NativeLog("BOT face step=%.0f xy=%.0f,%.0f ok=%d dist=%.0f mode=%u",
+        step, sx, sy, walked ? 1 : 0, dist, BaerimReadU32(player, 0x54));
+    return walked;
+}
+
 static bool FireNativeSidestep(void* player, float mx, float my, float tx, float ty, float dist)
 {
     float fx = tx - mx;
@@ -3668,6 +3762,8 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         }
         g_chaseVid = 0;
         g_walkVid = 0;
+        g_meleeVid = 0;
+        g_meleeEngageVid = 0;
         InterlockedExchange(&g_allowMelee, 0);
         return false;
     }
@@ -3675,6 +3771,9 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
 
     if (g_baerim)
     {
+        // AutoHunt chase/face: SetTarget + PressActor(isAuto). Baerim does not sustain
+        // combo from PressActor alone — once InRange, hold SetAttackKeyState every tick.
+        // MoveToPixel only for stuck sidesteps.
         void* main = CallGetMainActor();
         float mx = 0, my = 0, tx = 0, ty = 0;
         if (LooksInstance(main))
@@ -3683,6 +3782,7 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         const float dx = mx - tx;
         const float dy = my - ty;
         const float dist = sqrtf(dx * dx + dy * dy);
+        const DWORD now = GetTickCount();
         bool inRange = false;
         if (LooksInstance(main))
         {
@@ -3693,30 +3793,24 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         }
         InterlockedExchange(&g_allowMelee, inRange ? 1 : 0);
         g_walkVid = g_clickVid;
-        const DWORD now = GetTickCount();
-        if (inRange)
-        {
-            g_stuckAt = 0;
-            g_nativeSidesteps = 0;
-            g_sidestepUntil = 0;
-        }
-        else if (g_sidestepUntil)
+
+        if (g_sidestepUntil)
         {
             const float slippedX = mx - g_sidestepFromX;
             const float slippedY = my - g_sidestepFromY;
             const float slipped2 = slippedX * slippedX + slippedY * slippedY;
             if (slipped2 >= 140.f * 140.f)
             {
-                // Moved enough — resume chase via PressActor below.
                 g_sidestepUntil = 0;
                 g_stuckX = mx;
                 g_stuckY = my;
                 g_stuckAt = now;
+                g_meleeEngageVid = 0;
             }
             else if (now >= g_sidestepUntil)
             {
-                // Full sidestep window elapsed with no slip — retry move (do not PressActor yet).
                 g_sidestepUntil = 0;
+                g_meleeEngageVid = 0;
                 if (kMoveToPixelRva)
                 {
                     FireNativeSidestep(player, mx, my, tx, ty, dist);
@@ -3726,12 +3820,12 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
             }
             else
             {
-                // Hold still while MoveToPixel runs; PressActor would cancel the sidestep.
                 InterlockedExchange(&g_botCall, 0);
                 return false;
             }
         }
-        else if (LooksInstance(main))
+
+        if (!inRange && LooksInstance(main) && !g_sidestepUntil)
         {
             const float movedX = mx - g_stuckX;
             const float movedY = my - g_stuckY;
@@ -3741,34 +3835,62 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
                 g_stuckY = my;
                 g_stuckAt = now;
             }
-            else if (now - g_stuckAt >= 350 && kMoveToPixelRva)
+            else if (now - g_stuckAt >= 450 && kMoveToPixelRva)
             {
                 FireNativeSidestep(player, mx, my, tx, ty, dist);
+                g_meleeEngageVid = 0;
                 InterlockedExchange(&g_botCall, 0);
                 return false;
             }
         }
+        else if (inRange)
+        {
+            g_stuckAt = 0;
+            g_nativeSidesteps = 0;
+        }
+
+        const bool needEngage = g_meleeEngageVid != g_clickVid;
+        const bool refreshChase = !inRange && g_lastWalkMs && now - g_lastWalkMs >= 1500;
+        if (needEngage || refreshChase)
+        {
+            g_meleeEngageVid = g_clickVid;
+            g_meleeVid = g_clickVid;
+            g_faceUntil = 0;
+            g_faceVid = g_clickVid;
+            if (!inRange)
+                BaerimSetAttackKey(player, false);
+            BaerimSetTargetVid(player, g_clickVid);
+            CallSetTarget(player, g_clickVid, 1);
+            const bool pressed = CallPressActor(player, g_clickVid);
+            g_stuckX = mx;
+            g_stuckY = my;
+            g_stuckAt = now;
+            g_lastWalkMs = now;
+            NativeLog("BOT chase vid=%u press=%d dist=%.0f inRange=%d refresh=%d mode=%u",
+                g_clickVid, pressed ? 1 : 0, dist, inRange ? 1 : 0, refreshChase ? 1 : 0,
+                BaerimReadU32(player, 0x54));
+            if (!inRange)
+            {
+                InterlockedExchange(&g_botCall, 0);
+                return pressed;
+            }
+        }
+
         if (!inRange)
         {
-            BaerimSetAttackKey(player, false);
-            const bool pressed = CallPressActor(player, g_clickVid);
-            if (now - g_lastWalkMs >= 400)
-            {
-                g_lastWalkMs = now;
-                NativeLog("BOT walk vid=%u press=%d dist=%.0f mode=%u me=%p you=%p",
-                    g_clickVid, pressed ? 1 : 0, dist, BaerimReadU32(player, 0x54), main, live);
-            }
             InterlockedExchange(&g_botCall, 0);
             return false;
         }
-        BaerimClearMode(player);
+
+        // In range: keep AttackKey held — this is what sustains swings on Baerim.
         BaerimSetTargetVid(player, g_clickVid);
         const bool keyed = BaerimSetAttackKey(player, true);
         if (!g_lastAtkMs || now - g_lastAtkMs >= 400)
         {
             g_lastAtkMs = now;
-            NativeLog("BOT combo vid=%u key=%d dist=%.0f atkKey=%u me=%p you=%p",
-                g_clickVid, keyed ? 1 : 0, dist, BaerimReadU32(player, 0x64) & 0xFF, main, live);
+            NativeLog("BOT combo vid=%u key=%d dist=%.0f atkKey=%u mode=%u",
+                g_clickVid, keyed ? 1 : 0, dist, BaerimReadU32(player, 0x64) & 0xFF,
+                BaerimReadU32(player, 0x54));
         }
         InterlockedExchange(&g_botCall, 0);
         return true;
@@ -3958,7 +4080,8 @@ static int SafePressActor(FnPressActor fn, void* self, void* target, unsigned vi
         return 0;
     __try
     {
-        fn(self, target, vid, g_baerim ? 0 : 1);
+        // isAuto=true matches client AutoHunt (__OnPressActor(..., true)) — sustains chase/attack.
+        fn(self, target, vid, 1);
         return 1;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -4045,6 +4168,10 @@ static void StopCombat(void* player)
     g_chaseVid = 0;
     g_walkVid = 0;
     g_clickVid = 0;
+    g_faceUntil = 0;
+    g_faceVid = 0;
+    g_meleeVid = 0;
+    g_meleeEngageVid = 0;
     InterlockedExchange(&g_allowMelee, 0);
     ClearReserved(player);
     if (g_baerim)
