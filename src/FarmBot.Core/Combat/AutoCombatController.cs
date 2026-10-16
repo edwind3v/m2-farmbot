@@ -6,6 +6,8 @@ namespace FarmBot.Core.Combat;
 
 public sealed class AutoCombatController
 {
+    private const float MoveEpsilonPx2 = 30f * 30f;
+
     private CombatState _state = CombatState.Idle;
     private uint _targetVid;
     private long _targetAcquiredMs;
@@ -19,6 +21,10 @@ public sealed class AutoCombatController
     private bool _stopEmitted;
     private bool _rangedArmed;
     private uint _armedVid;
+    private float _sidestepFromX;
+    private float _sidestepFromY;
+    private float _sidestepToX;
+    private float _sidestepToY;
 
     public CombatState State => _state;
     public uint TargetVid => _targetVid;
@@ -38,6 +44,10 @@ public sealed class AutoCombatController
         _stopEmitted = false;
         _rangedArmed = false;
         _armedVid = 0;
+        _sidestepFromX = 0;
+        _sidestepFromY = 0;
+        _sidestepToX = 0;
+        _sidestepToY = 0;
     }
 
     public CombatTick Tick(WorldSnapshot? snapshot, BotConfig config, bool enabled, long nowMs)
@@ -75,6 +85,7 @@ public sealed class AutoCombatController
             CombatState.Wait => OnWait(config, target, nowMs),
             CombatState.Verify => OnVerify(snapshot, config, target, nowMs),
             CombatState.Recover => OnRecover(snapshot, config, nowMs),
+            CombatState.Sidestep => OnSidestep(snapshot, config, target, nowMs),
             _ => Enter(CombatState.Idle, nowMs, null, null, "unknown state")
         };
     }
@@ -146,10 +157,10 @@ public sealed class AutoCombatController
     {
         if (target == null)
             return Enter(CombatState.Verify, nowMs, null, null, "target missing while approaching");
-        if (TimedOut(config, nowMs) && !InRange(target, config))
+        if (TimedOut(config, nowMs) && !InCombatRange(target, config))
             return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
-        if (!UseArthion(config) && IsStuck(snapshot.Player, config, nowMs) && !InRange(target, config))
-            return Enter(CombatState.Recover, nowMs, target, null, "stuck approaching");
+        if (!InCombatRange(target, config) && IsStuck(snapshot.Player, config, nowMs))
+            return TrySidestep(snapshot, config, target, nowMs, "stuck approaching");
         if (UseArthion(config))
         {
             if (InMelee(target, config))
@@ -228,29 +239,96 @@ public sealed class AutoCombatController
             return Enter(CombatState.AcquireTarget, nowMs, null, null, "target dead or missing; selecting next");
         }
 
-        if (TimedOut(config, nowMs) && !InRange(target, config))
+        if (TimedOut(config, nowMs) && !InCombatRange(target, config))
             return Enter(CombatState.Recover, nowMs, target, null, "target timeout");
-        if (UseArthion(config) ? InMelee(target, config) : InRange(target, config))
+        if (InCombatRange(target, config))
             return Enter(CombatState.Attack, nowMs, target, null, "target still attackable");
         return Enter(CombatState.Approach, nowMs, target, null, "target still alive out of range");
     }
 
     private CombatTick OnRecover(WorldSnapshot snapshot, BotConfig config, long nowMs)
     {
-        _recoveries++;
         var target = CurrentTarget(snapshot, config);
-        if (target == null || _recoveries >= 3 || (TimedOut(config, nowMs) && (target == null || !InRange(target, config))))
+        if (target == null || _recoveries >= 3 ||
+            (TimedOut(config, nowMs) && !InCombatRange(target, config)))
+            return DropTarget(nowMs, config, "recover: drop target");
+
+        return TrySidestep(snapshot, config, target, nowMs, "recover: sidestep");
+    }
+
+    private CombatTick OnSidestep(WorldSnapshot snapshot, BotConfig config, EntityState? target, long nowMs)
+    {
+        if (target == null)
+            return Enter(CombatState.Verify, nowMs, null, null, "target missing during sidestep");
+        if (InCombatRange(target, config))
         {
-            _targetVid = 0;
-            return Enter(CombatState.AcquireTarget, nowMs, null,
-                UseArthion(config) ? null : NativeCombatAction.Stop(), "recover: drop target");
+            _recoveries = 0;
+            _armedVid = 0;
+            return Enter(CombatState.Attack, nowMs, target,
+                NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "sidestep reached melee");
         }
 
+        var movedX = snapshot.Player.X - _sidestepFromX;
+        var movedY = snapshot.Player.Y - _sidestepFromY;
+        if (movedX * movedX + movedY * movedY > MoveEpsilonPx2)
+        {
+            _recoveries = 0;
+            _armedVid = 0;
+            NoteMove(snapshot.Player, nowMs);
+            return Enter(CombatState.Approach, nowMs, target,
+                NativeCombatAction.PressActor(target.Vid, target.X, target.Y), "sidestep done, resume chase");
+        }
+
+        if (TimedOut(config, nowMs) && !InCombatRange(target, config))
+            return DropTarget(nowMs, config, "sidestep timeout, drop target");
+        if (IsStuck(snapshot.Player, config, nowMs))
+            return TrySidestep(snapshot, config, target, nowMs, "sidestep still stuck");
+        if (ShouldEmit(nowMs, Math.Max(400, config.MoveIntervalMs)))
+        {
+            _lastActionMs = nowMs;
+            return Stay(target, NativeCombatAction.MoveTo(_sidestepToX, _sidestepToY), "sidestep retry");
+        }
+
+        return Stay(target, null, "sidestep wait");
+    }
+
+    private CombatTick TrySidestep(
+        WorldSnapshot snapshot,
+        BotConfig config,
+        EntityState target,
+        long nowMs,
+        string reason)
+    {
+        _recoveries++;
+        if (_recoveries >= 3)
+            return DropTarget(nowMs, config, "unstuck failed, drop target");
+
+        if (!UnstuckPlanner.TryPickWaypoint(
+                snapshot.Player,
+                target,
+                snapshot.Entities,
+                config,
+                _recoveries - 1,
+                out var x,
+                out var y))
+            return DropTarget(nowMs, config, "no sidestep waypoint, drop target");
+
+        _sidestepFromX = snapshot.Player.X;
+        _sidestepFromY = snapshot.Player.Y;
+        _sidestepToX = x;
+        _sidestepToY = y;
+        _armedVid = 0;
         NoteMove(snapshot.Player, nowMs);
-        if (UseArthion(config))
-            return Enter(CombatState.Approach, nowMs, target, null, "recover: keep native chase");
-        return Enter(CombatState.Approach, nowMs, target, NativeCombatAction.PressActor(target.Vid, target.X, target.Y),
-            "recover: re-click actor");
+        return Enter(CombatState.Sidestep, nowMs, target, NativeCombatAction.MoveTo(x, y),
+            $"{reason} to {x:0},{y:0}");
+    }
+
+    private CombatTick DropTarget(long nowMs, BotConfig config, string reason)
+    {
+        _targetVid = 0;
+        _armedVid = 0;
+        return Enter(CombatState.AcquireTarget, nowMs, null,
+            UseArthion(config) ? null : NativeCombatAction.Stop(), reason);
     }
 
     private EntityState? CurrentTarget(WorldSnapshot snapshot, BotConfig config)
@@ -285,6 +363,9 @@ public sealed class AutoCombatController
     private static bool InMelee(EntityState target, BotConfig config) =>
         target.Distance <= Math.Min(config.AttackRange, 180f);
 
+    private static bool InCombatRange(EntityState target, BotConfig config) =>
+        UseArthion(config) ? InMelee(target, config) : InRange(target, config);
+
     private static bool UseArthion(BotConfig config) =>
         config.ClientProfile == ClientProfile.Arthion ||
         config.ClientProfile == ClientProfile.Baerim;
@@ -298,7 +379,7 @@ public sealed class AutoCombatController
             return false;
         var dx = player.X - _lastPlayerX;
         var dy = player.Y - _lastPlayerY;
-        if (dx * dx + dy * dy > 25)
+        if (dx * dx + dy * dy > MoveEpsilonPx2)
             return false;
         return nowMs - _lastMoveSeenMs >= config.StuckTimeoutMs;
     }
@@ -307,7 +388,7 @@ public sealed class AutoCombatController
     {
         var dx = player.X - _lastPlayerX;
         var dy = player.Y - _lastPlayerY;
-        if (dx * dx + dy * dy > 25)
+        if (dx * dx + dy * dy > MoveEpsilonPx2)
             NoteMove(player, nowMs);
     }
 

@@ -269,6 +269,17 @@ public static class PlayerActionLayoutRecoverer
             moveTo = (fromMove, 0, 0);
         var movePixel = fromMove != 0 ? RecoverMoveToPixel(pe, fromMove, evidence) : 0;
         var getPixel = fromMove != 0 ? RecoverGetPixel(pe, fromMove, evidence) : 0;
+        if (getPixel == 0)
+            getPixel = RecoverGetPixelStandalone(pe, evidence);
+        if (movePixel == 0)
+            movePixel = RecoverMoveToPixel(pe, 0x1258E0u, evidence);
+        if (movePixel == 0 && getPixel != 0)
+            movePixel = RecoverMoveToPixelFromGetPixel(pe, getPixel, evidence);
+        if (movePixel != 0 && LooksLikeInRangeCheck(pe, movePixel))
+        {
+            evidence.Add($"rejected MoveToPixel RVA 0x{movePixel:X} (melee-range check, not dest pixel).");
+            movePixel = 0;
+        }
         var reserved = RecoverReserveClick(pe, combo.native, evidence);
         if (reserved.rva != 0)
             reserve = (reserved.rva, singleton, 0);
@@ -931,6 +942,180 @@ public static class PlayerActionLayoutRecoverer
         }
 
         return 0;
+    }
+
+    private static uint RecoverGetPixelStandalone(ActionPe pe, List<string> evidence)
+    {
+        var named = RecoverNamedNative(pe, "GetPixelPosition", evidence);
+        if (named.wrapper == 0 && named.native == 0)
+            return 0;
+        var start = named.wrapper != 0 ? named.wrapper : named.native;
+        var off = pe.VaToFile(pe.ImageBase + start);
+        if (off < 0)
+            return 0;
+        if (LooksLikeGetPixelImpl(pe, off))
+        {
+            evidence.Add($"CInstanceBase::GetPixelPosition RVA 0x{start:X} from name.");
+            return start;
+        }
+
+        for (var i = off; i < off + 0x80 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0xFF && (pe.Byte(i + 1) == 0x50 || pe.Byte(i + 1) == 0x51) && pe.Byte(i + 2) == 0x08)
+            {
+                var call = FirstRelativeCallAt(pe, i + 3, 0x40);
+                if (call == 0)
+                    continue;
+                var destOff = pe.VaToFile(pe.ImageBase + call);
+                if (destOff >= 0 && LooksLikeGetPixelImpl(pe, destOff))
+                {
+                    evidence.Add($"CInstanceBase::GetPixelPosition RVA 0x{call:X} after GetInstancePtr vtbl+8.");
+                    return call;
+                }
+            }
+
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            var dest = pe.VaToFile(target);
+            if (dest < 0 || !LooksLikeGetPixelImpl(pe, dest))
+                continue;
+            var rva = target - pe.ImageBase;
+            evidence.Add($"CInstanceBase::GetPixelPosition RVA 0x{rva:X} from GetPixelPosition wrapper.");
+            return rva;
+        }
+
+        return named.native != 0 && named.native != start ? named.native : 0;
+    }
+
+    private static bool LooksLikeGetPixelImpl(ActionPe pe, int off) =>
+        pe.Byte(off) == 0x55 && pe.Byte(off + 1) == 0x8B && pe.Byte(off + 2) == 0xEC &&
+        pe.Byte(off + 3) == 0x81 && pe.Byte(off + 4) == 0xC1;
+
+    private static uint FirstRelativeCallAt(ActionPe pe, int off, int window)
+    {
+        var end = Math.Min(pe.Length - 5, off + window);
+        for (var i = off; i < end; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var rva = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1) - pe.ImageBase);
+            if (pe.IsRva(rva))
+                return rva;
+        }
+
+        return 0;
+    }
+
+    private static uint RecoverMoveToPixelFromGetPixel(ActionPe pe, uint getPixelRva, List<string> evidence)
+    {
+        if (getPixelRva == 0)
+            return 0;
+        uint best = 0;
+        var bestScore = -1;
+        foreach (var call in FindRelativeTransfersTo(pe, pe.ImageBase + getPixelRva))
+        {
+            var callOff = pe.VaToFile(call);
+            if (callOff < 0)
+                continue;
+            var prologue = NearestPrologue(pe, callOff, 0x200);
+            if (prologue < 0)
+                continue;
+            var rva = pe.FileToVa(prologue) - pe.ImageBase;
+            if (!pe.IsRva(rva) || rva == getPixelRva)
+                continue;
+            if (LooksLikeInRangeCheck(pe, rva))
+                continue;
+            if (!FunctionHasRetWide(pe, prologue, 4, 0x200))
+                continue;
+            if (CountGetPixelCalls(pe, prologue, getPixelRva) >= 2)
+                continue;
+            if (GetPixelUsesOtherInstance(pe, prologue, callOff))
+                continue;
+            var size = FunctionSize(pe, prologue, 0x200);
+            if (size < 0x30)
+                continue;
+            var score = size + (ReadsDestArg(pe, prologue) ? 80 : 0);
+            if (score <= bestScore)
+                continue;
+            bestScore = score;
+            best = rva;
+        }
+
+        if (best != 0)
+            evidence.Add($"CInstanceBase::MoveToDestPixelPosition RVA 0x{best:X} from GetPixelPosition xrefs.");
+        return best;
+    }
+
+    private static bool LooksLikeInRangeCheck(ActionPe pe, uint rva)
+    {
+        var off = pe.VaToFile(pe.ImageBase + rva);
+        return off >= 0 &&
+               pe.Byte(off) == 0x55 && pe.Byte(off + 1) == 0x8B && pe.Byte(off + 2) == 0xEC &&
+               pe.Byte(off + 3) == 0x51 && pe.Byte(off + 4) == 0xF3 && pe.Byte(off + 5) == 0x0F &&
+               pe.Byte(off + 6) == 0x10;
+    }
+
+    private static int CountGetPixelCalls(ActionPe pe, int fnOff, uint getPixelRva)
+    {
+        var n = 0;
+        for (var i = fnOff; i < fnOff + 0x200 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            if ((uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1) - pe.ImageBase) == getPixelRva)
+                n++;
+        }
+
+        return n;
+    }
+
+    private static bool FunctionHasRetWide(ActionPe pe, int fnOff, ushort bytes, int window)
+    {
+        for (var i = fnOff; i < fnOff + window && i + 3 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0xC2 && pe.Byte(i + 1) == (byte)bytes && pe.Byte(i + 2) == (byte)(bytes >> 8))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int FunctionSize(ActionPe pe, int fnOff, int window)
+    {
+        for (var i = fnOff; i < fnOff + window && i + 3 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0xC2 || pe.Byte(i) == 0xC3)
+                return i - fnOff;
+        }
+
+        return window;
+    }
+
+    private static bool ReadsDestArg(ActionPe pe, int fnOff)
+    {
+        for (var i = fnOff; i < fnOff + 0x80 && i + 3 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0x8B && (pe.Byte(i + 1) is 0x45 or 0x4D or 0x55 or 0x5D or 0x75 or 0x7D) &&
+                pe.Byte(i + 2) == 0x08)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool GetPixelUsesOtherInstance(ActionPe pe, int prologue, int getPixelCall)
+    {
+        for (var i = prologue; i < getPixelCall && i + 3 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x4D && pe.Byte(i + 2) == 0x08)
+                return true;
+            if (pe.Byte(i) == 0x8B && pe.Byte(i + 1) == 0x45 && pe.Byte(i + 2) == 0x08 &&
+                i + 4 < getPixelCall && pe.Byte(i + 3) == 0x8B && pe.Byte(i + 4) == 0xC8)
+                return true;
+        }
+
+        return false;
     }
 
     private static uint RecoverMoveToPixel(ActionPe pe, uint moveActorRva, List<string> evidence)

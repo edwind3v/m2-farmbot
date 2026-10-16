@@ -96,6 +96,7 @@ public class AutoCombatControllerTests
         config.AttackRange = 300;
         config.MoveIntervalMs = 100;
         config.ClientProfile = ClientProfile.Baerim;
+        config.StuckTimeoutMs = 4_000;
 
         var far = Fixtures.World(Fixtures.Mob(71, "Metin of Darkness", EntityKind.Metin, 600, 0));
         var acquired = controller.Tick(far, config, true, 1_000);
@@ -111,13 +112,104 @@ public class AutoCombatControllerTests
         Assert.Null(third.Action);
         Assert.Equal(71u, controller.TargetVid);
 
-        config.StuckTimeoutMs = 200;
         var still = controller.Tick(far, config, true, 2_200);
         Assert.Equal(CombatState.Approach, still.State);
         Assert.Equal(71u, controller.TargetVid);
         Assert.Null(still.Action);
-        Assert.DoesNotContain("recover", still.Reason, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("stop", still.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sidestep", still.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("stuck", still.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BaerimSidestepsWithMoveToWhenStuckApproaching()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.ClientProfile = ClientProfile.Baerim;
+        config.StuckTimeoutMs = 200;
+        config.TargetTimeoutMs = 20_000;
+
+        var far = Fixtures.World(Fixtures.Mob(71, "Metin of Darkness", EntityKind.Metin, 600, 0));
+        controller.Tick(far, config, true, 1_000);
+        controller.Tick(far, config, true, 1_100);
+
+        var stuck = controller.Tick(far, config, true, 1_300);
+        Assert.Equal(CombatState.Sidestep, stuck.State);
+        Assert.Equal(NativeActionKind.MoveTo, stuck.Action!.Kind);
+        Assert.Equal(71u, controller.TargetVid);
+        Assert.True(MathF.Abs(stuck.Action.X) > 1 || MathF.Abs(stuck.Action.Y) > 1);
+        Assert.Contains("stuck", stuck.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SidestepResumesChaseAfterThePlayerMoves()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.ClientProfile = ClientProfile.Baerim;
+        config.StuckTimeoutMs = 200;
+
+        var target = Fixtures.Mob(71, "Metin of Darkness", EntityKind.Metin, 600, 0);
+        var far = Fixtures.World(target);
+        controller.Tick(far, config, true, 1_000);
+        var sidestep = controller.Tick(far, config, true, 1_300);
+        Assert.Equal(NativeActionKind.MoveTo, sidestep.Action!.Kind);
+
+        var moved = Fixtures.World(Fixtures.Player(0, 280), target);
+        var resume = controller.Tick(moved, config, true, 1_400);
+        Assert.Equal(CombatState.Approach, resume.State);
+        Assert.Equal(NativeActionKind.PressActor, resume.Action!.Kind);
+        Assert.Equal(71u, resume.Target!.Vid);
+        Assert.Contains("resume", resume.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DropsTargetAfterThreeFailedSidesteps()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.ClientProfile = ClientProfile.Baerim;
+        config.StuckTimeoutMs = 200;
+        config.TargetTimeoutMs = 20_000;
+
+        var far = Fixtures.World(Fixtures.Mob(71, "Metin of Darkness", EntityKind.Metin, 600, 0));
+        controller.Tick(far, config, true, 1_000);
+        Assert.Equal(NativeActionKind.MoveTo, controller.Tick(far, config, true, 1_300).Action!.Kind);
+        Assert.Equal(CombatState.Sidestep, controller.Tick(far, config, true, 1_400).State);
+        Assert.Equal(NativeActionKind.MoveTo, controller.Tick(far, config, true, 1_600).Action!.Kind);
+        var dropped = controller.Tick(far, config, true, 1_900);
+        Assert.Equal(CombatState.AcquireTarget, dropped.State);
+        Assert.Equal(0u, controller.TargetVid);
+        Assert.Contains("drop", dropped.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MobBehindTheTargetDoesNotSidestepBeforeStuck()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        config.AttackRange = 300;
+        config.ClientProfile = ClientProfile.Baerim;
+        config.StuckTimeoutMs = 4_000;
+
+        var world = Fixtures.World(
+            Fixtures.Mob(71, "Metin of Darkness", EntityKind.Metin, 600, 0),
+            Fixtures.Mob(80, "Wild Dog", EntityKind.Monster, 780, 0));
+        var acquired = controller.Tick(world, config, true, 1_000);
+        Assert.Equal(71u, acquired.Target!.Vid);
+        Assert.Equal(NativeActionKind.PressActor, acquired.Action!.Kind);
+
+        var hold = controller.Tick(world, config, true, 1_800);
+        Assert.Equal(CombatState.Approach, hold.State);
+        Assert.Null(hold.Action);
+        Assert.DoesNotContain("sidestep", hold.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

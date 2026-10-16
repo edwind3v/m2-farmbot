@@ -11,7 +11,8 @@ public enum CombatState
     Attack,
     Wait,
     Verify,
-    Recover
+    Recover,
+    Sidestep
 }
 
 public enum NativeActionKind

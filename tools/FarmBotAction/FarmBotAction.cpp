@@ -267,6 +267,11 @@ static float g_chaseY;
 static DWORD g_lastWalkMs;
 static DWORD g_lastAtkMs;
 static DWORD g_lastChaseMs;
+static DWORD g_sidestepUntil;
+static float g_stuckX;
+static float g_stuckY;
+static DWORD g_stuckAt;
+static int g_nativeSidesteps;
 static DWORD g_lastSkillsMs;
 static int g_skillsReady;
 static void* g_mainInst;
@@ -3281,10 +3286,29 @@ static bool CallInRange(void* me, void* you)
     }
 }
 
+static bool CallMoveToPixel(float x, float y)
+{
+    if (!g_base || !kMoveToPixelRva)
+        return false;
+    void* mains[2] = { CallGetMainActor(), MainInstance() };
+    float pos[3] = { x, y, 0 };
+    bool ok = false;
+    for (int i = 0; i < 2; ++i)
+    {
+        void* me = mains[i];
+        if (!me || (i == 1 && me == mains[0]))
+            continue;
+        ok = CallInstMove(kMoveToPixelRva, me, pos) || ok;
+    }
+    return ok;
+}
+
 static bool CallMoveToDest(unsigned vid, float x, float y)
 {
     if (!g_base || (!kMoveToDestRva && !kMoveToPixelRva && !kApproachInstRva))
         return false;
+    if (!vid && (x != 0.f || y != 0.f))
+        return CallMoveToPixel(x, y);
     void* mains[2] = { CallGetMainActor(), MainInstance() };
     void* you = vid ? CallGetInstance(vid) : nullptr;
     float pos[3] = { 0, 0, 0 };
@@ -3487,6 +3511,8 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
     g_clickVid = vid;
     if (!g_inWorld || PhaseHas("Load"))
         return false;
+    if (g_sidestepUntil && GetTickCount() < g_sidestepUntil)
+        return false;
     void* live = CallGetInstance(g_clickVid);
     if (!LooksInstance(live))
     {
@@ -3517,6 +3543,63 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         InterlockedExchange(&g_allowMelee, inRange ? 1 : 0);
         g_walkVid = g_clickVid;
         const DWORD now = GetTickCount();
+        if (inRange)
+        {
+            g_stuckAt = 0;
+            g_nativeSidesteps = 0;
+        }
+        else if (LooksInstance(main))
+        {
+            const float movedX = mx - g_stuckX;
+            const float movedY = my - g_stuckY;
+            if (!g_stuckAt || movedX * movedX + movedY * movedY > 30.f * 30.f)
+            {
+                g_stuckX = mx;
+                g_stuckY = my;
+                g_stuckAt = now;
+            }
+            else if (now - g_stuckAt >= 800 && kMoveToPixelRva)
+            {
+                float fx = tx - mx;
+                float fy = ty - my;
+                float len = sqrtf(fx * fx + fy * fy);
+                if (len < 1.f)
+                {
+                    fx = 1.f;
+                    fy = 0.f;
+                    len = 1.f;
+                }
+                const float lx = -fy / len;
+                const float ly = fx / len;
+                const float step = 280.f + 80.f * (float)(g_nativeSidesteps % 2);
+                float sx = mx;
+                float sy = my;
+                const int side = g_nativeSidesteps % 3;
+                if (side == 0)
+                {
+                    sx = mx + lx * step;
+                    sy = my + ly * step;
+                }
+                else if (side == 1)
+                {
+                    sx = mx - lx * step;
+                    sy = my - ly * step;
+                }
+                else
+                {
+                    sx = mx - fx / len * 250.f;
+                    sy = my - fy / len * 250.f;
+                }
+                g_nativeSidesteps++;
+                g_stuckAt = now;
+                g_sidestepUntil = now + 2000;
+                const bool walked = CallMoveToPixel(sx, sy);
+                NativeLog("BOT native sidestep try=%d xy=%.0f,%.0f pixel=0x%X ok=%d stuckDist=%.0f",
+                    g_nativeSidesteps, sx, sy, kMoveToPixelRva, walked ? 1 : 0, dist);
+                InterlockedExchange(&g_botCall, 0);
+                return false;
+            }
+        }
         if (!inRange)
         {
             BaerimSetAttackKey(player, false);
@@ -3800,6 +3883,14 @@ static void ClearReserved(void* player)
     }
 }
 
+static void PauseChase(void* player, DWORD holdMs)
+{
+    g_sidestepUntil = GetTickCount() + holdMs;
+    ClearReserved(player);
+    if (g_baerim)
+        BaerimSetAttackKey(player, false);
+}
+
 static void StopCombat(void* player)
 {
     g_chaseVid = 0;
@@ -3821,6 +3912,8 @@ static void StopCombat(void* player)
 
 static void ChaseTick(void* player)
 {
+    if (g_sidestepUntil && GetTickCount() < g_sidestepUntil)
+        return;
     if (!g_chaseVid || !player)
         return;
     if (!g_inWorld || PhaseHas("Load"))
@@ -4304,6 +4397,8 @@ static bool StartCombat(void* player, unsigned vid, float x, float y, bool click
     g_chaseVid = vid;
     g_chaseX = x;
     g_chaseY = y;
+    g_stuckAt = 0;
+    g_nativeSidesteps = 0;
     DriveToTarget(player, vid, x, y);
     return false;
 }
@@ -6374,9 +6469,16 @@ static void Execute(const Command& cmd)
 
     if (cmd.type == "move")
     {
-        if (!CallMoveToDest(cmd.vid, cmd.x, cmd.y))
+        PauseChase(player, 2000);
+        const bool walked = cmd.vid
+            ? CallMoveToDest(cmd.vid, cmd.x, cmd.y)
+            : CallMoveToPixel(cmd.x, cmd.y);
+        NativeLog("BOT sidestep xy=%.0f,%.0f pixel=0x%X dest=0x%X ok=%d",
+            cmd.x, cmd.y, kMoveToPixelRva, kMoveToDestRva, walked ? 1 : 0);
+        if (!walked)
         {
-            g_lastReason = "MoveToDestPosition missing";
+            g_lastOk = false;
+            g_lastReason = kMoveToPixelRva ? "MoveToDestPosition failed" : "MoveToDestPosition missing";
             return;
         }
         g_lastOk = true;
@@ -7638,23 +7740,37 @@ static DWORD WINAPI InitThread(void*)
     InitAtlasMap();
     if (g_baerim)
     {
-        kPressActorRva = 0x1AB240;
-        kReserveClickRva = 0x1AB620;
-        kAttackKeyRva = 0x1ABC10;
-        kComboRva = 0x1AA5B0;
-        kReservedModeDisp = 0x54;
-        kVidReservedDisp = 0x419D4;
-        kMoveToDestRva = 0x1258E0;
+        if (!kPressActorRva)
+            kPressActorRva = 0x1AB240;
+        if (!kReserveClickRva)
+            kReserveClickRva = 0x1AB620;
+        if (!kAttackKeyRva)
+            kAttackKeyRva = 0x1ABC10;
+        if (!kComboRva)
+            kComboRva = 0x1AA5B0;
+        if (!kReservedModeDisp)
+            kReservedModeDisp = 0x54;
+        if (!kVidReservedDisp)
+            kVidReservedDisp = 0x419D4;
+        if (!kMoveToDestRva)
+            kMoveToDestRva = 0x1258E0;
+        if (!kMoveToPixelRva)
+            kMoveToPixelRva = 0x125920;
         kAttackDestRva = 0;
-        kInstAttackRva = 0x125C70;
-        kInRangeRva = 0x11E1C0;
-        kGetPixelRva = 0x126030;
-        kResMgrRva = 0x3B74070;
-        kGetResRva = 0x3351F0;
+        if (!kInstAttackRva)
+            kInstAttackRva = 0x125C70;
+        if (!kInRangeRva)
+            kInRangeRva = 0x11E1C0;
+        if (!kGetPixelRva)
+            kGetPixelRva = 0x126030;
+        if (!kResMgrRva)
+            kResMgrRva = 0x3B74070;
+        if (!kGetResRva)
+            kGetResRva = 0x3351F0;
     }
     InstallLoopHooks(client);
-    NativeLog("loaded base=%p profile=%s pressActor=0x%X moveTo=0x%X instAtk=0x%X inRange=0x%X getPixel=0x%X hooks=%d",
-        g_base, g_arthion ? "arthion" : g_baerim ? "baerim" : "normal", kPressActorRva, kMoveToDestRva, kInstAttackRva, kInRangeRva, kGetPixelRva, g_iatHooks);
+    NativeLog("loaded base=%p profile=%s pressActor=0x%X moveTo=0x%X movePixel=0x%X instAtk=0x%X inRange=0x%X getPixel=0x%X hooks=%d",
+        g_base, g_arthion ? "arthion" : g_baerim ? "baerim" : "normal", kPressActorRva, kMoveToDestRva, kMoveToPixelRva, kInstAttackRva, kInRangeRva, kGetPixelRva, g_iatHooks);
     Serve();
     return 0;
 }

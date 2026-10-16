@@ -279,5 +279,9 @@ public class PlayerActionLayoutTests
         Assert.Equal(0x36E280u, recovered.PackGetRva);
         Assert.Equal(0x317DE0u, recovered.PackMappedCtorRva);
         Assert.Equal(0x371040u, recovered.PackExistRva);
+        Assert.Equal(0x125920u, player.MoveToPixelRva);
+        Assert.Equal(0x126030u, player.GetPixelRva);
+        dump += $"\nMOVEPIXEL=0x{player.MoveToPixelRva:X} MOVETO=0x{player.MoveToDestRva:X} GETPIXEL=0x{player.GetPixelRva:X} INRANGE=0x{player.InRangeRva:X}";
+        File.WriteAllText(@"C:\Temp\baerim-player.txt", dump);
     }
 }

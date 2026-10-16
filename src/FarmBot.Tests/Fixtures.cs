@@ -59,12 +59,24 @@ internal static class Fixtures
         };
     }
 
-    public static WorldSnapshot World(params EntityState[] entities)
+    public static WorldSnapshot World(params EntityState[] entities) =>
+        World(Player(), entities);
+
+    public static WorldSnapshot World(PlayerState player, params EntityState[] entities)
     {
+        var adjusted = new EntityState[entities.Length];
+        for (var i = 0; i < entities.Length; i++)
+        {
+            var entity = entities[i];
+            var dx = entity.X - player.X;
+            var dy = entity.Y - player.Y;
+            adjusted[i] = entity with { Distance = MathF.Sqrt(dx * dx + dy * dy) };
+        }
+
         return new WorldSnapshot
         {
-            Player = Player(),
-            Entities = entities
+            Player = player,
+            Entities = adjusted
         };
     }
 }

@@ -407,6 +407,7 @@ public sealed class BotRuntime : IDisposable
         CombatState.Wait => BotPhase.Attacking,
         CombatState.Verify => BotPhase.Attacking,
         CombatState.Recover => BotPhase.Moving,
+        CombatState.Sidestep => BotPhase.Moving,
         _ => BotPhase.Idle
     };
 
