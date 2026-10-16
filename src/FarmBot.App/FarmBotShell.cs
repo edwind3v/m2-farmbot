@@ -223,7 +223,7 @@ public sealed class FarmBotShell : IDisposable
     public void SetSkillDelay(uint index, int seconds)
     {
         lock (_configGate)
-            _config.SkillDelaySec[index] = Math.Clamp(seconds, 0, 600);
+            _config.SkillDelaySec[index] = Math.Clamp(seconds, 0, 21600);
         SaveSettings();
     }
 

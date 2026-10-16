@@ -42,11 +42,6 @@
     <div class="rail-map">
         <Minimap />
     </div>
-    <div class="rail-status">
-        <span>@(Shell.IsLive ? "live" : "sim")</span>
-        <span>@Shell.CompanionStatus</span>
-        <span>@((Shell.View.Snapshot?.Entities.Count ?? 0)) ents</span>
-    </div>
 </aside>
 
 @code {

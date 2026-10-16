@@ -58,6 +58,7 @@ public sealed class BotRuntime : IDisposable
     private readonly PotionController _potions = new();
     private readonly SkillController _skills = new();
     private readonly SkillMountPlanner _skillMount = new();
+    private bool _skillStopEmitted;
     private bool _mounted;
     private IReadOnlyList<int> _affects = Array.Empty<int>();
     private IReadOnlyList<int> _castRemoved = Array.Empty<int>();
@@ -276,10 +277,21 @@ public sealed class BotRuntime : IDisposable
         if (config.RangedPickupEnabled && snapshot != null)
             SubmitRangedPickups(snapshot, config);
         TickSkills(snapshot, config, nowMs);
-        if (_skillMount.Busy && _combat.TargetVid != 0 && !_combat.AttacksPaused)
-            _combat.PauseAttacks();
-        if (!_skillMount.Busy && _combat.AttacksPaused)
-            _combat.ResumeAttacks();
+        if (_skillMount.Busy)
+        {
+            // Always pause combat while casting. When not using skills mid-fight,
+            // hard-stop chase so we do not walk while unmounting.
+            if (!config.SkillsDuringCombat)
+                EnsureSkillHardStop();
+            else if (_combat.TargetVid != 0 && !_combat.AttacksPaused)
+                _combat.PauseAttacks();
+        }
+        else
+        {
+            _skillStopEmitted = false;
+            if (_combat.AttacksPaused)
+                _combat.ResumeAttacks();
+        }
         var context = new TickContext(enabled, corner, _everReceived, _lastStateAtMs);
         var decision = _nativeCombat
             ? TickNative(snapshot, config, context, nowMs)
@@ -656,6 +668,8 @@ public sealed class BotRuntime : IDisposable
         var hasTarget = _combat.TargetVid != 0;
         if (_skillMount.Busy)
         {
+            if (!config.SkillsDuringCombat)
+                EnsureSkillHardStop();
             DriveSkillMount(null, config, nowMs);
             return;
         }
@@ -668,9 +682,23 @@ public sealed class BotRuntime : IDisposable
         var buff = config.SkillBuffIndexes != null && config.SkillBuffIndexes.Contains(due.Index);
         if (!buff && !hasTarget)
             return;
+        // Stop movement/chase before the first dismount when skills must not overlap combat.
+        if (!config.SkillsDuringCombat)
+            EnsureSkillHardStop();
         DriveSkillMount(due, config, nowMs);
         if (_skillMount.Busy)
             _skills.NoteUsed(due, nowMs);
+    }
+
+    private void EnsureSkillHardStop()
+    {
+        if (!_combat.AttacksPaused)
+            _combat.PauseAttacks();
+        if (_skillStopEmitted || _sink == null)
+            return;
+        _skillStopEmitted = true;
+        _sink.TrySubmit(NativeCombatAction.Stop());
+        _log.Info("skill stop: cleared chase before cast");
     }
 
     private void DriveSkillMount(LearnedSkill? due, BotConfig config, long nowMs)

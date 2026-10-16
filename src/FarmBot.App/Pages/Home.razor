@@ -4,6 +4,8 @@
 
 @if (Shell.ShowPotions)
 {
+    <section class="farm-section">
+    <h3 class="farm-section-title">Potions</h3>
     <div class="pots compact">
         <div class="pot-group">
             <div class="pot-label">Red</div>
@@ -94,18 +96,20 @@
             }
         </div>
     </div>
+    </section>
 }
 
 @if (Shell.ShowSkills)
 {
+    <section class="farm-section">
     <div class="skill-block">
-        <div class="pot-label">
+        <h3 class="farm-section-title">
             Skills
             <label class="skill-buff" title="Cast due skills even while attacking; resume the same target after">
                 <input type="checkbox" checked="@Shell.SkillsDuringCombat" @onchange="() => Shell.ToggleSkillsDuringCombat()" />
                 use while attacking
             </label>
-        </div>
+        </h3>
         @if (Shell.Skills.Count == 0)
         {
             <p class="pot-empty">@(InGame ? "no skills learned" : "waiting for game")</p>
@@ -130,20 +134,14 @@
                             buff
                         </label>
                         <span class="skill-name" title="@skill.Name">@skill.Name</span>
-                        <input type="number" class="skill-delay" min="0" max="600" step="1" value="@Shell.SkillDelay(skill.Index)" title="Delay seconds" @onchange="e => OnSkillDelay(skill.Index, e)" />
+                        <input type="number" class="skill-delay" min="0" max="21600" step="1" value="@Shell.SkillDelay(skill.Index)" title="Delay seconds" @onchange="e => OnSkillDelay(skill.Index, e)" />
                     </div>
                 }
             </div>
         }
     </div>
+    </section>
 }
-
-<div class="quick">
-    <button class="btn btn-ok" disabled="@(Shell.View.Enabled)" @onclick="Shell.StartBot">Start bot</button>
-    <button class="btn btn-danger" disabled="@(!Shell.View.Enabled)" @onclick="Shell.StopBot">Stop</button>
-</div>
-
-<p class="status-line">@Shell.StatusLine</p>
 
 @code {
     private PlayerState? Player => Shell.View.Snapshot?.Player;

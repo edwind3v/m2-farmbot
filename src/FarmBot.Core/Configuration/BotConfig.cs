@@ -161,7 +161,7 @@ public sealed class BotConfig
         SkillBuffIndexes ??= new List<uint>();
         SkillDelaySec ??= new Dictionary<uint, int>();
         foreach (var key in SkillDelaySec.Keys.ToList())
-            SkillDelaySec[key] = Math.Clamp(SkillDelaySec[key], 0, 600);
+            SkillDelaySec[key] = Math.Clamp(SkillDelaySec[key], 0, 21600);
         FarmRadius = Math.Max(0, FarmRadius);
         MaxFarmDistance = Math.Max(0, MaxFarmDistance);
         MapZoom = Math.Clamp(MapZoom <= 0 ? 100 : MapZoom, 20, 100);

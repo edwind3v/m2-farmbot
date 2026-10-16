@@ -779,7 +779,7 @@ tr.tgt td { color: var(--accent-2); }
 }
 
 .skill-delay {
-    width: 48px;
+    width: 64px;
     background: var(--ink);
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -788,4 +788,31 @@ tr.tgt td { color: var(--accent-2); }
     text-align: center;
     font-family: var(--mono);
     font-size: 11px;
+}
+
+/* Hide number spinners so values use the full field width. */
+input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.farm-section {
+    margin-bottom: 14px;
+}
+
+.farm-section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.02em;
 }
