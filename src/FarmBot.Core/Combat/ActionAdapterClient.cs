@@ -278,9 +278,10 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         var character = response.Character ?? "";
         var reason = response.Reason ?? "";
         uint? race = response.Race is >= 0 and <= 8 ? (uint)response.Race : null;
+        var affects = ParseAffects(response.Affects);
         if (response.MaxHp <= 0 || response.Level is < 1 or > 250)
         {
-            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame, race);
+            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame, race, response.Mounted, affects);
             return true;
         }
 
@@ -297,7 +298,9 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
             character,
             reason,
             response.StartGame,
-            race);
+            race,
+            response.Mounted,
+            affects);
         return true;
     }
 
@@ -417,6 +420,20 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }, updateStatus: false).Ok;
     }
 
+    public bool TryToggleMount(bool wantMounted = false)
+    {
+        Ensure();
+        if (!_client.Connected)
+            return false;
+        // Slot: 1 = dismount, 2 = remount (native picks /unmount vs /user_horse_ride).
+        return _client.Submit(new ActionRequest
+        {
+            Type = ActionProtocol.ToggleMount,
+            Slot = wantMounted ? 2 : 1,
+            Force = true
+        }, updateStatus: false).Ok;
+    }
+
     public bool TryDumpCaptchaBackgrounds()
     {
         Ensure();
@@ -506,6 +523,20 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }
 
         return false;
+    }
+
+    private static IReadOnlyList<int> ParseAffects(System.Text.Json.JsonElement affects)
+    {
+        if (affects.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return Array.Empty<int>();
+        var list = new List<int>();
+        foreach (var item in affects.EnumerateArray())
+        {
+            if (item.ValueKind == System.Text.Json.JsonValueKind.Number && item.TryGetInt32(out var id))
+                list.Add(id);
+        }
+
+        return list;
     }
 
     private static IReadOnlyList<LearnedSkill> ParseSkills(System.Text.Json.JsonElement skills)

@@ -77,6 +77,8 @@ public sealed record PlayerActionLayout(
     public uint IsStandingSkillRva { get; init; }
     public uint IsNeedTargetRva { get; init; }
     public uint IsAttackSkillRva { get; init; }
+    public uint IsMountingHorseRva { get; init; }
+    public uint SendChatPacketRva { get; init; }
 }
 
 public sealed record LoginNativeLayout(
@@ -352,7 +354,13 @@ public static class PlayerActionLayoutRecoverer
         var standingFn = CallOnLocalEcx(pe, isStanding.wrapper, evidence, "IsStandingSkill");
         var needTargetFn = CallOnLocalEcx(pe, isNeedTarget.wrapper, evidence, "IsNeedTarget");
         var attackSkillFn = CallOnLocalEcx(pe, isAttackSkill.wrapper, evidence, "IsAttackSkill");
-        evidence.Add($"skills getIndex=0x{getSkillIndex.native:X} getLevel=0x{getSkillLevel.native:X} click=0x{clickSkill.native:X} cool=0x{getSkillCool.native:X} isCool=0x{isSkillCool.native:X} sendUse=0x{sendUseSkill.native:X} skillMgr=0x{getSkillName.singleton:X} getData=0x{getSkillName.native:X} standing=0x{standingFn:X}.");
+        var isMounting = RecoverItemMethod(pe, "IsMountingHorse", singleton, evidence);
+        if (isMounting.native == 0)
+            isMounting = RecoverItemMethod(pe, "IsMounting", singleton, evidence);
+        if (isMounting.native == 0)
+            isMounting = RecoverItemMethod(pe, "IsRiding", singleton, evidence);
+        var sendChat = RecoverLoginExport(pe, "SendChatPacket", evidence);
+        evidence.Add($"skills getIndex=0x{getSkillIndex.native:X} getLevel=0x{getSkillLevel.native:X} click=0x{clickSkill.native:X} cool=0x{getSkillCool.native:X} isCool=0x{isSkillCool.native:X} sendUse=0x{sendUseSkill.native:X} skillMgr=0x{getSkillName.singleton:X} getData=0x{getSkillName.native:X} standing=0x{standingFn:X} mount=0x{isMounting.native:X} chat=0x{sendChat.native:X}.");
 
         return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKeyRva, combo.native, pickClose.native, targetDisp, virt.thisAdj != 0 ? virt.thisAdj : attackVirt.thisAdj, setTargetSlot, prologue, hud.points, hud.name != 0 ? hud.name : 0x14, hud.xor, evidence)
         {
@@ -407,7 +415,9 @@ public static class PlayerActionLayoutRecoverer
             GetSkillDataRva = getSkillName.native,
             IsStandingSkillRva = standingFn,
             IsNeedTargetRva = needTargetFn,
-            IsAttackSkillRva = attackSkillFn
+            IsAttackSkillRva = attackSkillFn,
+            IsMountingHorseRva = isMounting.native,
+            SendChatPacketRva = sendChat.native
         };
     }
 

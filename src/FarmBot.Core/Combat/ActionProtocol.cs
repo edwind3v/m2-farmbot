@@ -56,6 +56,8 @@ public sealed class ActionResponse
     public System.Text.Json.JsonElement Entities { get; set; }
     public int GreenRemain { get; set; }
     public int PurpleRemain { get; set; }
+    public bool Mounted { get; set; }
+    public System.Text.Json.JsonElement Affects { get; set; }
 }
 
 public static class ActionProtocol
@@ -85,6 +87,7 @@ public static class ActionProtocol
     public const string GetSkills = "get_skills";
     public const string GetEntities = "get_entities";
     public const string UseSkill = "use_skill";
+    public const string ToggleMount = "toggle_mount";
     public const string DumpCaptchaBg = "dump_captcha_bg";
     public const int Version = 1;
 

@@ -274,6 +274,9 @@ public class PlayerActionLayoutTests
         Assert.Equal(0x4Cu, recovered.GetItemCountVtableSlot);
         Assert.Equal(0x1B8A50u, player.ClickSkillSlotRva);
         Assert.Equal(0x1AA5B0u, player.ComboAttackRva);
+        Assert.Equal(0x250230u, player.SendChatPacketRva);
+        Assert.NotEqual(0x41D700u, player.SendChatPacketRva);
+        Assert.NotEqual(0x41D7E0u, player.IsMountingHorseRva);
         Assert.True(login.CanLogin, dump);
         Assert.Equal(0x3B73F2Cu, recovered.PackMgrRva);
         Assert.Equal(0x36E280u, recovered.PackGetRva);

@@ -92,6 +92,7 @@ public sealed class BotConfig
     public List<uint> SkillEnabledIndexes { get; set; } = new();
     public List<uint> SkillBuffIndexes { get; set; } = new();
     public Dictionary<uint, int> SkillDelaySec { get; set; } = new();
+    public bool SkillsDuringCombat { get; set; }
 
     public static BotConfig CreateDefault()
     {

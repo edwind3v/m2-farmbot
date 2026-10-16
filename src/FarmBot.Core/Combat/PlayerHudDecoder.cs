@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace FarmBot.Core.Combat;
 
 public readonly record struct PlayerHudPoints(
@@ -13,7 +15,9 @@ public readonly record struct PlayerHudPoints(
     string Character = "",
     string Reason = "",
     bool StartGame = false,
-    uint? Race = null);
+    uint? Race = null,
+    bool Mounted = false,
+    IReadOnlyList<int>? Affects = null);
 
 public static class PlayerHudDecoder
 {

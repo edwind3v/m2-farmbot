@@ -227,6 +227,22 @@ public sealed class FarmBotShell : IDisposable
         SaveSettings();
     }
 
+    public bool SkillsDuringCombat
+    {
+        get
+        {
+            lock (_configGate)
+                return _config.SkillsDuringCombat;
+        }
+    }
+
+    public void ToggleSkillsDuringCombat()
+    {
+        lock (_configGate)
+            _config.SkillsDuringCombat = !_config.SkillsDuringCombat;
+        SaveSettings();
+    }
+
     public bool PotionEnabled(uint vnum)
     {
         lock (_configGate)

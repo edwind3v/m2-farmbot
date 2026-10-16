@@ -20,6 +20,8 @@ public sealed class AutoCombatController
     private int _recoveries;
     private bool _stopEmitted;
     private bool _rangedArmed;
+    private bool _attacksPaused;
+    private bool _pauseStopEmitted;
     private uint _armedVid;
     private float _sidestepFromX;
     private float _sidestepFromY;
@@ -28,6 +30,7 @@ public sealed class AutoCombatController
 
     public CombatState State => _state;
     public uint TargetVid => _targetVid;
+    public bool AttacksPaused => _attacksPaused;
 
     public void Reset()
     {
@@ -43,6 +46,8 @@ public sealed class AutoCombatController
         _recoveries = 0;
         _stopEmitted = false;
         _rangedArmed = false;
+        _attacksPaused = false;
+        _pauseStopEmitted = false;
         _armedVid = 0;
         _sidestepFromX = 0;
         _sidestepFromY = 0;
@@ -62,6 +67,8 @@ public sealed class AutoCombatController
         }
 
         _stopEmitted = false;
+        if (_attacksPaused)
+            return OnPaused(snapshot, config, nowMs);
         if (snapshot == null)
             return Enter(CombatState.Idle, nowMs, null, null, "waiting for live entities");
 
@@ -88,6 +95,47 @@ public sealed class AutoCombatController
             CombatState.Sidestep => OnSidestep(snapshot, config, target, nowMs),
             _ => Enter(CombatState.Idle, nowMs, null, null, "unknown state")
         };
+    }
+
+    public void PauseAttacks()
+    {
+        if (_attacksPaused)
+            return;
+        _attacksPaused = true;
+        _pauseStopEmitted = false;
+        _armedVid = 0;
+    }
+
+    public void ResumeAttacks()
+    {
+        if (!_attacksPaused)
+            return;
+        _attacksPaused = false;
+        _pauseStopEmitted = false;
+        _armedVid = 0;
+    }
+
+    private CombatTick OnPaused(WorldSnapshot? snapshot, BotConfig config, long nowMs)
+    {
+        EntityState? target = null;
+        if (snapshot != null)
+        {
+            target = CurrentTarget(snapshot, config);
+            if (target == null)
+            {
+                _targetVid = 0;
+                _state = CombatState.AcquireTarget;
+            }
+        }
+
+        NativeCombatAction? stop = null;
+        if (!_pauseStopEmitted)
+        {
+            _pauseStopEmitted = true;
+            stop = NativeCombatAction.Stop();
+        }
+
+        return Stay(target, stop, "skill pause");
     }
 
     private CombatTick TickRanged(WorldSnapshot snapshot, BotConfig config, long nowMs)

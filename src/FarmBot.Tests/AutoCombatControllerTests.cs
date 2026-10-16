@@ -449,6 +449,58 @@ public class AutoCombatControllerTests
     }
 
     [Fact]
+    public void PauseStopsAttacksAndResumeKeepsTheSameVid()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        var near = Fixtures.World(Fixtures.Mob(11, "Wild Dog", EntityKind.Monster, 80, 0));
+
+        controller.Tick(near, config, true, 1_000);
+        var attack = controller.Tick(near, config, true, 1_200);
+        Assert.Equal(CombatState.Attack, attack.State);
+        Assert.Equal(11u, controller.TargetVid);
+
+        controller.PauseAttacks();
+        var stop = controller.Tick(near, config, true, 1_300);
+        Assert.Equal(NativeActionKind.Stop, stop.Action!.Kind);
+        Assert.Equal(11u, controller.TargetVid);
+        Assert.True(controller.AttacksPaused);
+
+        var hold = controller.Tick(near, config, true, 1_400);
+        Assert.Null(hold.Action);
+        Assert.Equal(11u, controller.TargetVid);
+
+        controller.ResumeAttacks();
+        var resume = controller.Tick(near, config, true, 1_500);
+        Assert.Equal(11u, controller.TargetVid);
+        Assert.False(controller.AttacksPaused);
+        Assert.Equal(NativeActionKind.PressActor, resume.Action!.Kind);
+    }
+
+    [Fact]
+    public void PauseDropsADeadTargetSoResumeAcquiresAgain()
+    {
+        var controller = new AutoCombatController();
+        var config = Fixtures.Config();
+        config.Skills.Clear();
+        var live = Fixtures.World(Fixtures.Mob(11, "Wild Dog", EntityKind.Monster, 80, 0));
+        controller.Tick(live, config, true, 1_000);
+        controller.Tick(live, config, true, 1_200);
+        Assert.Equal(11u, controller.TargetVid);
+
+        controller.PauseAttacks();
+        var dead = Fixtures.World(Fixtures.Mob(11, "Wild Dog", EntityKind.Monster, 80, 0, hp: 0));
+        controller.Tick(dead, config, true, 1_300);
+        Assert.Equal(0u, controller.TargetVid);
+
+        controller.ResumeAttacks();
+        var next = Fixtures.World(Fixtures.Mob(22, "Wild Dog", EntityKind.Monster, 80, 0));
+        var acquired = controller.Tick(next, config, true, 1_400);
+        Assert.Equal(22u, acquired.Target!.Vid);
+    }
+
+    [Fact]
     public void RecordingSinkKeepsSubmittedGameplayActions()
     {
         var sink = new RecordingActionSink();

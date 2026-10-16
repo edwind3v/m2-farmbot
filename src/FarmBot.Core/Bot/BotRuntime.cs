@@ -57,6 +57,9 @@ public sealed class BotRuntime : IDisposable
     private float _lootRadius;
     private readonly PotionController _potions = new();
     private readonly SkillController _skills = new();
+    private readonly SkillMountPlanner _skillMount = new();
+    private bool _mounted;
+    private IReadOnlyList<int> _affects = Array.Empty<int>();
     private IReadOnlyList<PotionStack> _potionStacks = Array.Empty<PotionStack>();
     private IReadOnlyList<LearnedSkill> _learnedSkills = Array.Empty<LearnedSkill>();
     private int _greenRemain;
@@ -271,6 +274,11 @@ public sealed class BotRuntime : IDisposable
         SyncLootLoop(config, enabled);
         if (config.RangedPickupEnabled && snapshot != null)
             SubmitRangedPickups(snapshot, config);
+        TickSkills(snapshot, config, nowMs);
+        if (_skillMount.Busy && _combat.TargetVid != 0 && !_combat.AttacksPaused)
+            _combat.PauseAttacks();
+        if (!_skillMount.Busy && _combat.AttacksPaused)
+            _combat.ResumeAttacks();
         var context = new TickContext(enabled, corner, _everReceived, _lastStateAtMs);
         var decision = _nativeCombat
             ? TickNative(snapshot, config, context, nowMs)
@@ -317,7 +325,6 @@ public sealed class BotRuntime : IDisposable
                 _reason = decision.Reason;
             }
         }
-        TickSkills(snapshot, config, nowMs);
     }
 
     private BrainDecision TickNative(WorldSnapshot? snapshot, BotConfig config, TickContext context, long nowMs)
@@ -581,11 +588,12 @@ public sealed class BotRuntime : IDisposable
                 _skillsAtMs = 0;
                 PersistKit();
             }
+            _affects = Array.Empty<int>();
+            if (_skillMount.Busy)
+                _skillMount.Reset();
             return;
         }
 
-        if (_combat.TargetVid != 0)
-            return;
         IReadOnlyList<LearnedSkill> cached;
         lock (_gate)
             cached = _learnedSkills;
@@ -632,24 +640,73 @@ public sealed class BotRuntime : IDisposable
 
         bool active;
         IReadOnlyList<LearnedSkill> skills;
-        uint targetVid;
         lock (_gate)
         {
             active = _enabled;
             skills = _learnedSkills;
-            targetVid = _target?.Vid ?? 0;
         }
         if (!active || !_skillsSeenLive)
+        {
+            if (_skillMount.Busy)
+                _skillMount.Reset();
             return;
-        var next = _skills.Next(skills, config, targetVid != 0, nowMs);
-        if (next == null)
+        }
+
+        var hasTarget = _combat.TargetVid != 0;
+        if (_skillMount.Busy)
+        {
+            DriveSkillMount(null, config, nowMs);
             return;
-        var buff = config.SkillBuffIndexes != null && config.SkillBuffIndexes.Contains(next.Index);
-        var vid = buff ? 0u : targetVid;
-        if (!buff && vid == 0)
+        }
+
+        if (hasTarget && !config.SkillsDuringCombat)
             return;
-        if (_sink.TryUseSkill(next.Slot, 0))
-            _log.Info($"use skill slot={next.Slot} index={next.Index} buff={buff}");
+        var due = _skills.Peek(skills, config, hasTarget, nowMs);
+        if (due == null)
+            return;
+        var buff = config.SkillBuffIndexes != null && config.SkillBuffIndexes.Contains(due.Index);
+        if (!buff && !hasTarget)
+            return;
+        DriveSkillMount(due, config, nowMs);
+        if (_skillMount.Busy)
+            _skills.NoteUsed(due, nowMs);
+    }
+
+    private void DriveSkillMount(LearnedSkill? due, BotConfig config, long nowMs)
+    {
+        if (_sink == null)
+            return;
+        var skillIndex = due?.Index ?? _skillMount.Skill?.Index ?? 0;
+        var hasAffect = skillIndex != 0 && _affects.Contains((int)skillIndex);
+        var isBuff = skillIndex != 0
+            && config.SkillBuffIndexes != null
+            && config.SkillBuffIndexes.Contains(skillIndex);
+        var action = _skillMount.Tick(due, _mounted, hasAffect, isBuff, nowMs);
+
+        switch (action.Command)
+        {
+            case SkillMountCommand.Dismount:
+                if (_sink.TryToggleMount(wantMounted: false))
+                    _log.Info("dismount for skill");
+                else
+                    _log.Warn("dismount failed");
+                break;
+            case SkillMountCommand.Remount:
+                if (_sink.TryToggleMount(wantMounted: true))
+                    _log.Info($"remount after skill (mounted={_mounted} phase={action.Phase})");
+                else
+                    _log.Warn("remount failed");
+                break;
+            case SkillMountCommand.UseSkill:
+                if (action.Skill == null)
+                    break;
+                var buff = config.SkillBuffIndexes != null && config.SkillBuffIndexes.Contains(action.Skill.Index);
+                if (_sink.TryUseSkill(action.Skill.Slot, 0))
+                    _log.Info($"use skill slot={action.Skill.Slot} index={action.Skill.Index} buff={buff} mounted={_mounted} affect={hasAffect} phase={action.Phase}");
+                else
+                    _log.Warn($"use skill failed slot={action.Skill.Slot} index={action.Skill.Index}");
+                break;
+        }
     }
 
     private void LoadKit()
@@ -763,6 +820,9 @@ public sealed class BotRuntime : IDisposable
         }
 
         _inWorld = hud.InWorld;
+        _mounted = hud.Mounted;
+        if (hud.Affects != null)
+            _affects = hud.Affects;
         NoteGamePhase(hud, nowMs);
         if (!_inWorld || hud.MaxHp <= 0)
             return snapshot;

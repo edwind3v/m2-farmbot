@@ -61,6 +61,18 @@ public class SkillControllerTests
     }
 
     [Fact]
+    public void PeekDoesNotStampDelay()
+    {
+        var skill = Skill(3, 1);
+        var config = Enabled(3, 5);
+        var ctl = new SkillController();
+        Assert.Equal(1, ctl.Peek(new[] { skill }, config, true, 1_000)?.Slot);
+        Assert.Equal(1, ctl.Peek(new[] { skill }, config, true, 1_000)?.Slot);
+        Assert.Equal(1, ctl.Next(new[] { skill }, config, true, 1_000)?.Slot);
+        Assert.Null(ctl.Peek(new[] { skill }, config, true, 4_000));
+    }
+
+    [Fact]
     public void BuffCheckboxAllowsSelfCast()
     {
         var skill = Skill(94, 2);

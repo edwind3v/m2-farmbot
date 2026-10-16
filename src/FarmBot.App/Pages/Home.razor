@@ -99,7 +99,13 @@
 @if (Shell.ShowSkills)
 {
     <div class="skill-block">
-        <div class="pot-label">Skills</div>
+        <div class="pot-label">
+            Skills
+            <label class="skill-buff" title="Cast due skills even while attacking; resume the same target after">
+                <input type="checkbox" checked="@Shell.SkillsDuringCombat" @onchange="() => Shell.ToggleSkillsDuringCombat()" />
+                use while attacking
+            </label>
+        </div>
         @if (Shell.Skills.Count == 0)
         {
             <p class="pot-empty">@(InGame ? "no skills learned" : "waiting for game")</p>

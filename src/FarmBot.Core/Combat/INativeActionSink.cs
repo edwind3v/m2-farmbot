@@ -29,6 +29,9 @@ public interface INativeActionSink
 
     bool TryUseSkill(int slot, uint targetVid) => false;
 
+    /// <param name="wantMounted">false = dismount, true = remount.</param>
+    bool TryToggleMount(bool wantMounted = false) => false;
+
     bool TryReadEntities(out IReadOnlyList<EntityState> entities)
     {
         entities = Array.Empty<EntityState>();

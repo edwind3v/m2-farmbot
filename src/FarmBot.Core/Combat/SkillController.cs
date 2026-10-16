@@ -8,7 +8,26 @@ public sealed class SkillController
 
     private readonly Dictionary<uint, long> _lastUseMs = new();
 
+    public LearnedSkill? Peek(
+        IReadOnlyList<LearnedSkill> skills,
+        BotConfig config,
+        bool hasTarget,
+        long nowMs) =>
+        Pick(skills, config, hasTarget, nowMs);
+
     public LearnedSkill? Next(
+        IReadOnlyList<LearnedSkill> skills,
+        BotConfig config,
+        bool hasTarget,
+        long nowMs)
+    {
+        var pick = Pick(skills, config, hasTarget, nowMs);
+        return pick == null ? null : Use(pick, nowMs);
+    }
+
+    public void NoteUsed(LearnedSkill skill, long nowMs) => Use(skill, nowMs);
+
+    private LearnedSkill? Pick(
         IReadOnlyList<LearnedSkill> skills,
         BotConfig config,
         bool hasTarget,
@@ -43,7 +62,7 @@ public sealed class SkillController
             oldest = last;
         }
 
-        return pick == null ? null : Use(pick, nowMs);
+        return pick;
     }
 
     public void NoteAffectRemain(IReadOnlyList<LearnedSkill> skills, long nowMs)

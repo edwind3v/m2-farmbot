@@ -83,6 +83,8 @@ static unsigned kGetSkillDataRva = 0;
 static unsigned kIsStandingRva = 0;
 static unsigned kIsNeedTargetRva = 0;
 static unsigned kIsAttackSkillRva = 0;
+static unsigned kIsMountingRva = 0;
+static unsigned kSendChatRva = 0;
 static unsigned kSendClickRva = 0xCE930;
 static unsigned kItemSingletonRva = 0x482CAC;
 static unsigned kGetCloseItemRva = 0xBB480;
@@ -256,6 +258,8 @@ static std::string g_lastReason;
 static std::string g_potsJson = "[]";
 static std::string g_skillsJson = "[]";
 static std::string g_actorsJson = "[]";
+static std::string g_affectsJson = "[]";
+static int g_mounted;
 static int g_greenRemain;
 static int g_purpleRemain;
 static unsigned g_lastVid;
@@ -523,6 +527,7 @@ static int CallGetStatus(void* player, int type)
 }
 
 static void* CallGetMainActor();
+static int CallIsMounted();
 
 static int ReadInstanceRace(void* inst)
 {
@@ -540,6 +545,7 @@ static void RefreshHud(void* player)
     {
         g_hudOk = false;
         g_hudRace = -1;
+        g_mounted = 0;
         return;
     }
     g_hudLevel = CallGetStatus(player, kPointLevel);
@@ -551,6 +557,7 @@ static void RefreshHud(void* player)
     g_hudMaxMp = CallGetStatus(player, kPointMaxSp);
     g_hudOk = g_hudLevel >= 1 && g_hudLevel <= 250 && g_hudMaxHp > 0 && g_hudHp >= 0 && g_hudHp <= g_hudMaxHp;
     g_hudRace = ReadInstanceRace(CallGetMainActor());
+    g_mounted = CallIsMounted();
 }
 
 static bool CallSetTarget(void* player, unsigned vid, int force)
@@ -5792,6 +5799,8 @@ typedef void (__thiscall* FnClickSkill)(void* self, unsigned slot);
 typedef int (__thiscall* FnSendUseSkill)(void* self, unsigned index, unsigned vid);
 typedef int (__thiscall* FnGetSkillData)(void* self, unsigned index, void** out);
 typedef int (__thiscall* FnSkillPred)(void* data);
+typedef int (__thiscall* FnIsMounting)(void* self);
+typedef void (__thiscall* FnSendChat)(void* self, const char* text, unsigned char type);
 
 static void* SkillMgr()
 {
@@ -6255,6 +6264,284 @@ static bool SkillJunk(unsigned idx, const char* name, int type)
         strstr(low, "fishing") || strstr(low, "farming") || strstr(low, "leadership");
 }
 
+static int ActorTypeOf(void* inst)
+{
+    if (!UserPtr(inst) || !kGraphicDisp || !kActorTypeDisp)
+        return -1;
+    unsigned type = 0;
+    __try
+    {
+        char* graphic = (char*)inst + kGraphicDisp;
+        type = *(unsigned*)(graphic + kActorTypeDisp);
+        if (type > 10)
+            type = *(unsigned char*)(graphic + kActorTypeDisp);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return -1;
+    }
+    return (int)type;
+}
+
+static int CallIsMounted()
+{
+    // Baerim: player.IsMountingHorse → GetMainActor → *(BYTE*)(main+0x30).
+    // Recovered "native" 0x41D7E0 is a Python helper and must not be thiscall'd.
+    if (g_baerim)
+    {
+        void* main = CallGetMainActor();
+        if (UserPtr(main))
+        {
+            __try
+            {
+                return *((BYTE*)main + 0x30) ? 1 : 0;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+        }
+        return 0;
+    }
+    void* player = Player();
+    if (player && kIsMountingRva && g_base && (kIsMountingRva < 0x410000 || kIsMountingRva > 0x420000))
+    {
+        FnIsMounting fn = (FnIsMounting)(g_base + kIsMountingRva);
+        if (!IsBadCodePtr((FARPROC)fn))
+        {
+            void* selves[2];
+            FillPlayerSelves(player, selves);
+            for (int i = 0; i < 2; ++i)
+            {
+                if (!selves[i] || (i == 1 && selves[1] == selves[0]))
+                    continue;
+                __try
+                {
+                    return fn(selves[i]) ? 1 : 0;
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER)
+                {
+                }
+            }
+        }
+    }
+    return ActorTypeOf(CallGetMainActor()) == 8 ? 1 : 0;
+}
+
+// Mirrors BINARY_NEW_AddAffect / RemoveAffect via uiAffectShower only.
+// Never use gc.get_objects() — that crashed the client on get_hud.
+static int g_affectHookTried;
+static int g_affectHookOk;
+
+static void ClearAffectMirror()
+{
+    g_affectsJson = "[]";
+    DeleteFileA("C:\\Temp\\farmbot-affects.json");
+}
+
+static void LoadAffectMirrorFile()
+{
+    FILE* f = nullptr;
+    if (fopen_s(&f, "C:\\Temp\\farmbot-affects.json", "rb") != 0 || !f)
+        return;
+    char buf[2048];
+    const size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    if (n == 0)
+        return;
+    buf[n] = 0;
+    if (buf[0] == '[')
+        g_affectsJson = buf;
+}
+
+static void EnsureAffectMirror()
+{
+    if (!g_affectHookOk)
+    {
+        // Retry install at most every few seconds; never scan all Python objects.
+        static DWORD lastTryMs;
+        const DWORD now = GetTickCount();
+        if (!g_affectHookTried || now - lastTryMs > 5000)
+        {
+            lastTryMs = now;
+            g_affectHookTried = 1;
+            // Never open/write files inside Add/RemoveAffect — that runs on the game
+            // thread for every buff tick and freezes the client under load.
+            static const char* kInstall =
+                "import constInfo\n"
+                "def _flush():\n"
+                " d=getattr(constInfo,'_farmbot_affects',None)\n"
+                " if d is None: d={}\n"
+                " try:\n"
+                "  f=open(r'C:\\Temp\\farmbot-affects.json','wb')\n"
+                "  f.write('[%s]'%(','.join(str(int(k)) for k in d.keys())))\n"
+                "  f.close()\n"
+                " except: pass\n"
+                "def _hook_cls(cls):\n"
+                " if not cls or getattr(cls,'_farmbot_aff_hook',0): return 0\n"
+                " add=getattr(cls,'BINARY_NEW_AddAffect',None)\n"
+                " rem=getattr(cls,'BINARY_NEW_RemoveAffect',None)\n"
+                " if not callable(add): return 0\n"
+                " if getattr(constInfo,'_farmbot_affects',None) is None: constInfo._farmbot_affects={}\n"
+                " def _add(self,type,*a,**k):\n"
+                "  try: constInfo._farmbot_affects[int(type)]=1\n"
+                "  except: pass\n"
+                "  return add(self,type,*a,**k)\n"
+                " def _rem(self,type,*a,**k):\n"
+                "  try: constInfo._farmbot_affects.pop(int(type),None)\n"
+                "  except: pass\n"
+                "  return rem(self,type,*a,**k) if callable(rem) else None\n"
+                " try:\n"
+                "  cls.BINARY_NEW_AddAffect=_add\n"
+                "  if callable(rem): cls.BINARY_NEW_RemoveAffect=_rem\n"
+                "  cls._farmbot_aff_hook=1\n"
+                "  return 1\n"
+                " except: return 0\n"
+                "n=0\n"
+                "try:\n"
+                " import uiAffectShower as uas\n"
+                " for name in dir(uas):\n"
+                "  try:\n"
+                "   cls=getattr(uas,name)\n"
+                "   if isinstance(cls,type): n+=_hook_cls(cls)\n"
+                "  except: pass\n"
+                "except: pass\n"
+                "try:\n"
+                " import __main__\n"
+                " for name in ('GameWindow','Interface','game'):\n"
+                "  try:\n"
+                "   cls=getattr(__main__,name,None)\n"
+                "   if isinstance(cls,type): n+=_hook_cls(cls)\n"
+                "  except: pass\n"
+                "except: pass\n"
+                "if getattr(constInfo,'_farmbot_affects',None) is None: constInfo._farmbot_affects={}\n"
+                "try:\n"
+                " import uiAffectShower as uas\n"
+                " for name in dir(uas):\n"
+                "  try:\n"
+                "   cls=getattr(uas,name)\n"
+                "   if not isinstance(cls,type): continue\n"
+                "   for inst in getattr(cls,'_instances',[]) or []:\n"
+                "    for attr in ('affectImageDict','affectDict','affectList','dictAffect'):\n"
+                "     d=getattr(inst,attr,None)\n"
+                "     if isinstance(d,dict):\n"
+                "      for k in d.keys():\n"
+                "       try: constInfo._farmbot_affects[int(k)]=1\n"
+                "       except: pass\n"
+                "  except: pass\n"
+                "except: pass\n"
+                "constInfo._farmbot_affect_hook=1 if n else 0\n"
+                "open(r'C:\\Temp\\farmbot-affect-hook.txt','wb').write(b'1' if n else b'0')\n"
+                "_flush()\n";
+            SafePyRun(kInstall);
+            FILE* hf = nullptr;
+            if (fopen_s(&hf, "C:\\Temp\\farmbot-affect-hook.txt", "rb") == 0 && hf)
+            {
+                char c = 0;
+                fread(&c, 1, 1, hf);
+                fclose(hf);
+                if (c == '1')
+                {
+                    g_affectHookOk = 1;
+                    NativeLog("affect mirror hooked via uiAffectShower");
+                }
+            }
+        }
+    }
+
+    // Snapshot dict → file on get_hud only (throttled). Never from affect hooks.
+    {
+        static DWORD lastFlushMs;
+        const DWORD nowFlush = GetTickCount();
+        if (nowFlush - lastFlushMs >= 250)
+        {
+            lastFlushMs = nowFlush;
+            SafePyRun(
+                "import constInfo\n"
+                "d=getattr(constInfo,'_farmbot_affects',None)\n"
+                "if d is None: d={}\n"
+                "try:\n"
+                " f=open(r'C:\\Temp\\farmbot-affects.json','wb')\n"
+                " f.write('[%s]'%(','.join(str(int(k)) for k in d.keys())))\n"
+                " f.close()\n"
+                "except: pass\n");
+        }
+    }
+    LoadAffectMirrorFile();
+}
+
+static unsigned EffectiveSendChatRva()
+{
+    // Baerim native SendChatPacket is thiscall ret 12: (text, type, scratch).
+    // Layout often recovers the Python helper 0x41D700 — reject that range.
+    if (g_baerim && (kSendChatRva == 0 || (kSendChatRva >= 0x410000 && kSendChatRva < 0x420000)))
+        return 0x250230u;
+    return kSendChatRva;
+}
+
+static bool CallSendChatNative(const char* text)
+{
+    if (!text || !text[0] || !g_base)
+        return false;
+    void* net = NetStream();
+    if (!net)
+        return false;
+    const unsigned chatRva = EffectiveSendChatRva();
+    if (!chatRva)
+        return false;
+    if (g_baerim)
+    {
+        typedef void (__thiscall* FnSendChat3)(void* self, const char* msg, unsigned type, char* scratch);
+        FnSendChat3 fn = (FnSendChat3)(g_base + chatRva);
+        if (IsBadCodePtr((FARPROC)fn))
+            return false;
+        char scratch[32];
+        memset(scratch, 0, sizeof(scratch));
+        __try
+        {
+            fn(net, text, 0, scratch);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+    FnSendChat fn = (FnSendChat)(g_base + chatRva);
+    if (IsBadCodePtr((FARPROC)fn))
+        return false;
+    __try
+    {
+        fn(net, text, 0);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool CallSendChat(const char* text)
+{
+    if (!text || !text[0])
+        return false;
+    // Native first — Python Peek can report success without the ride applying mid-skill.
+    if (CallSendChatNative(text))
+        return true;
+    char code[192];
+    _snprintf_s(code, _TRUNCATE, "import net\nnet.SendChatPacket('%s', 0)\n", text);
+    if (SafePyRunAfterPeek(code) != 0)
+        return true;
+    _snprintf_s(code, _TRUNCATE, "import net\nnet.SendChatPacket('%s')\n", text);
+    return SafePyRunAfterPeek(code) != 0;
+}
+
+// Remount: native /ride only. Python SendChat + GIL from the PeekMessage drain
+// path can freeze the client after a few mount cycles.
+static bool CallRideRemount()
+{
+    return CallSendChatNative("/ride");
+}
+
 static bool CallClickSkill(unsigned slot)
 {
     void* player = Player();
@@ -6263,6 +6550,22 @@ static bool CallClickSkill(unsigned slot)
     FnClickSkill fn = (FnClickSkill)(g_base + kClickSkillRva);
     if (IsBadCodePtr((FARPROC)fn))
         return false;
+    // Baerim ClickSkillSlot wrapper: mov ecx,[player]; push slot; call — NOT player+4.
+    // Trying +4 first SEH-safe no-ops and logs click=1 with no cast.
+    if (g_baerim)
+    {
+        __try
+        {
+            fn(player, slot);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        char code[96];
+        _snprintf_s(code, _TRUNCATE, "import player\nplayer.ClickSkillSlot(%u)\n", slot);
+        return SafePyRunAfterPeek(code) != 0;
+    }
     void* selves[2];
     FillPlayerSelves(player, selves);
     for (int i = 0; i < 2; ++i)
@@ -6278,7 +6581,9 @@ static bool CallClickSkill(unsigned slot)
         {
         }
     }
-    return false;
+    char code[96];
+    _snprintf_s(code, _TRUNCATE, "import player\nplayer.ClickSkillSlot(%u)\n", slot);
+    return SafePyRunAfterPeek(code) != 0;
 }
 
 static bool CallSendUseSkill(unsigned index, unsigned vid)
@@ -6528,6 +6833,54 @@ static void Execute(const Command& cmd)
         return;
     }
 
+    if (cmd.type == "toggle_mount")
+    {
+        RefreshSession();
+        if (!g_inWorld)
+        {
+            g_lastReason = "not in world";
+            return;
+        }
+        // Baerim mount: /ride only. Slot 1 = dismount, 2 = remount.
+        // Directed: skip if already in the desired state so retries never toggle the wrong way.
+        g_mounted = CallIsMounted();
+        const int mode = cmd.slot;
+        const int wantMounted = (mode == 2) ? 1 : 0;
+        if (g_mounted == wantMounted)
+        {
+            g_lastOk = true;
+            g_lastReason = "already desired mount state";
+            NativeLog("toggle_mount skip mode=%d already mounted=%d", mode, g_mounted);
+            return;
+        }
+        // Both directions: native /ride only (no Python/GIL on the game-thread drain).
+        int ok = 0;
+        const char* via = "none";
+        if (mode == 2)
+        {
+            if (CallRideRemount())
+            {
+                ok = 1;
+                via = "ride-remount";
+            }
+        }
+        else if (CallSendChatNative("/ride"))
+        {
+            ok = 1;
+            via = "ride";
+        }
+        NativeLog("toggle_mount ok=%d mode=%d via=%s mounted=%d chat=0x%X",
+            ok, mode, via, g_mounted, EffectiveSendChatRva());
+        if (ok)
+        {
+            g_lastOk = true;
+            g_lastReason = "SendChatPacket mount";
+        }
+        else
+            g_lastReason = "mount toggle missing";
+        return;
+    }
+
     void* player = Player();
     if (!player)
     {
@@ -6565,8 +6918,14 @@ static void Execute(const Command& cmd)
         RefreshSession();
         RefreshHud(player);
         g_inWorld = ComputeInWorld();
-        if (g_inWorld && g_sessionPhase.empty())
-            g_sessionPhase = "Game";
+        if (g_inWorld)
+        {
+            EnsureAffectMirror();
+            if (g_sessionPhase.empty())
+                g_sessionPhase = "Game";
+        }
+        else
+            ClearAffectMirror();
         g_lastOk = g_hudOk;
         g_lastReason = g_hudOk ? "hud" : (g_getStatusSlot < 0 ? "GetStatus vtable missing" : "GetStatus empty");
         return;
@@ -7312,6 +7671,8 @@ static void ClearLoginRvas()
     kIsStandingRva = 0;
     kIsNeedTargetRva = 0;
     kIsAttackSkillRva = 0;
+    kIsMountingRva = 0;
+    kSendChatRva = 0;
     kGetStatusRva = 0;
     kGetStatusSlot = 0;
     kPointsDisp = 0;
@@ -7544,6 +7905,10 @@ static void LoadConfig()
             kIsNeedTargetRva = ParseHex(line + 13);
         else if (strncmp(line, "isAttackSkill=", 14) == 0)
             kIsAttackSkillRva = ParseHex(line + 14);
+        else if (strncmp(line, "isMounting=", 11) == 0)
+            kIsMountingRva = ParseHex(line + 11);
+        else if (strncmp(line, "sendChat=", 9) == 0)
+            kSendChatRva = ParseHex(line + 9);
         else if (strncmp(line, "mainPtr=", 8) == 0)
             kMainPtrDisp = ParseHex(line + 8);
         else if (strncmp(line, "mapDisp=", 8) == 0)
@@ -7781,7 +8146,8 @@ static void Serve()
             const bool waitReply = cmd.type == "get_phase" || cmd.type == "get_session" ||
                 cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game" ||
                 cmd.type == "skip_intro" || cmd.type == "get_atlas" || cmd.type == "get_hud" ||
-                cmd.type == "get_entities" || cmd.type == "get_skills" || cmd.type == "use_item" || cmd.type == "use_skill";
+                cmd.type == "get_entities" || cmd.type == "get_skills" || cmd.type == "use_item" ||
+                cmd.type == "use_skill" || cmd.type == "toggle_mount";
             if (waitReply)
             {
                 const DWORD waitMs = (cmd.type == "enter_game") ? 15000 : 2000;
@@ -7852,8 +8218,11 @@ static void Serve()
         reply += (cmd.type == "get_skills" && !g_skillsJson.empty()) ? g_skillsJson : "[]";
         reply += ",\"entities\":";
         reply += (cmd.type == "get_entities" && !g_actorsJson.empty()) ? g_actorsJson : "[]";
+        reply += ",\"affects\":";
+        reply += (cmd.type == "get_hud" && !g_affectsJson.empty()) ? g_affectsJson : "[]";
         char extra[96];
-        _snprintf_s(extra, _TRUNCATE, ",\"greenRemain\":%d,\"purpleRemain\":%d}", g_greenRemain, g_purpleRemain);
+        _snprintf_s(extra, _TRUNCATE, ",\"greenRemain\":%d,\"purpleRemain\":%d,\"mounted\":%s}",
+            g_greenRemain, g_purpleRemain, g_mounted ? "true" : "false");
         reply += extra;
         if (!WriteFrame(reply))
             break;
@@ -7896,6 +8265,17 @@ static DWORD WINAPI InitThread(void*)
             kResMgrRva = 0x3B74070;
         if (!kGetResRva)
             kGetResRva = 0x3351F0;
+        // Reject Python-helper RVAs recovered as SendChatPacket / IsMountingHorse.
+        if (!kSendChatRva || (kSendChatRva >= 0x410000 && kSendChatRva < 0x420000))
+            kSendChatRva = 0x250230;
+        if (kIsMountingRva >= 0x410000 && kIsMountingRva < 0x420000)
+            kIsMountingRva = 0;
+        if (!kNetStreamRva)
+            kNetStreamRva = 0x3B74EC8;
+        if (!kClickSkillRva)
+            kClickSkillRva = 0x1B8A50;
+        NativeLog("baerim chat=0x%X mountHelper=0x%X clickSkill=0x%X net=0x%X",
+            kSendChatRva, kIsMountingRva, kClickSkillRva, kNetStreamRva);
     }
     InstallLoopHooks(client);
     NativeLog("loaded base=%p profile=%s pressActor=0x%X moveTo=0x%X movePixel=0x%X instAtk=0x%X inRange=0x%X getPixel=0x%X hooks=%d",

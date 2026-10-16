@@ -224,6 +224,8 @@ public sealed class ActionModuleHost
             AppendHex(text, "isStanding", player.IsStandingSkillRva);
             AppendHex(text, "isNeedTarget", player.IsNeedTargetRva);
             AppendHex(text, "isAttackSkill", player.IsAttackSkillRva);
+            AppendHex(text, "isMounting", player.IsMountingHorseRva);
+            AppendHex(text, "sendChat", player.SendChatPacketRva);
             AppendHex(text, "combo", player.ComboAttackRva);
             AppendHex(text, "setAuto", player.SetAutoRva);
             AppendHex(text, "reserve", player.ReserveClickRva);
@@ -326,6 +328,8 @@ public sealed class ActionModuleHost
             AppendHex(text, "isStanding", player.IsStandingSkillRva);
             AppendHex(text, "isNeedTarget", player.IsNeedTargetRva);
             AppendHex(text, "isAttackSkill", player.IsAttackSkillRva);
+            AppendHex(text, "isMounting", player.IsMountingHorseRva);
+            AppendHex(text, "sendChat", player.SendChatPacketRva);
             AppendHex(text, "combo", player.ComboAttackRva);
             AppendHex(text, "setAuto", player.SetAutoRva);
             AppendHex(text, "reserve", player.ReserveClickRva);

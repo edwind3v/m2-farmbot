@@ -71,6 +71,31 @@ public static class BaerimActionLayoutRecoverer
             evidence.Add("Baerim IsSkillCoolTime python helper discarded.");
         }
 
+        // SendChatPacket / IsMountingHorse recovery often lands on Python helpers (0x41D7xx).
+        // Known-good Baerim natives from the real wrappers:
+        //   net.SendChatPacket → CPythonNetworkStream::SendChatPacket @ 0x250230 (ret 12)
+        //   IsMountingHorse → main actor horse flag at +0x30 (no player thiscall)
+        var chatRva = player.SendChatPacketRva;
+        if (chatRva == 0 || (chatRva >= 0x410000 && chatRva < 0x420000))
+        {
+            chatRva = 0x250230u;
+            evidence.Add("Baerim SendChatPacket forced to 0x250230 (rejected python helper).");
+        }
+
+        var mountRva = player.IsMountingHorseRva;
+        if (mountRva == 0 || (mountRva >= 0x410000 && mountRva < 0x420000))
+        {
+            mountRva = 0;
+            evidence.Add("Baerim IsMountingHorse python helper discarded; runtime uses main+0x30.");
+        }
+
+        player = player with
+        {
+            IsSkillCoolTimeRva = coolRva,
+            SendChatPacketRva = chatRva,
+            IsMountingHorseRva = mountRva
+        };
+
         var pack = RecoverPack(pe, evidence);
         return new BaerimNativeLayout(
             player,
