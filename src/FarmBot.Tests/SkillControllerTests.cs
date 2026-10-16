@@ -97,6 +97,42 @@ public class SkillControllerTests
         Assert.Equal(2, ctl.Next(new[] { first, second }, config, true, 2_100)?.Slot);
     }
 
+    [Fact]
+    public void PeekDueBuffsReturnsAllSameDelayBuffs()
+    {
+        var berserk = Skill(3, 1);
+        var aura = Skill(4, 2);
+        var attack = Skill(5, 3);
+        var config = Fixtures.Config();
+        config.SkillEnabledIndexes = new List<uint> { 3, 4, 5 };
+        config.SkillBuffIndexes = new List<uint> { 3, 4 };
+        config.SkillDelaySec = new Dictionary<uint, int> { [3] = 30, [4] = 30, [5] = 30 };
+        var ctl = new SkillController();
+        var due = ctl.PeekDueBuffs(new[] { berserk, aura, attack }, config, 1_000);
+        Assert.Equal(2, due.Count);
+        Assert.Contains(due, s => s.Index == 3);
+        Assert.Contains(due, s => s.Index == 4);
+        Assert.DoesNotContain(due, s => s.Index == 5);
+    }
+
+    [Fact]
+    public void PeekDueBuffsPullsSameDelaySiblingEvenIfNotYetDue()
+    {
+        var berserk = Skill(3, 1);
+        var aura = Skill(4, 2);
+        var config = Fixtures.Config();
+        config.SkillEnabledIndexes = new List<uint> { 3, 4 };
+        config.SkillBuffIndexes = new List<uint> { 3, 4 };
+        config.SkillDelaySec = new Dictionary<uint, int> { [3] = 10, [4] = 10 };
+        var ctl = new SkillController();
+        ctl.NoteUsed(berserk, 1_000);
+        ctl.NoteUsed(aura, 1_500); // drifted 500ms — only berserk due at 11_000
+        var due = ctl.PeekDueBuffs(new[] { berserk, aura }, config, 11_000);
+        Assert.Equal(2, due.Count);
+        Assert.Contains(due, s => s.Index == 3);
+        Assert.Contains(due, s => s.Index == 4);
+    }
+
     private static BotConfig Enabled(uint index, int delay)
     {
         var config = Fixtures.Config();

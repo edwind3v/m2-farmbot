@@ -8248,6 +8248,31 @@ static void Execute(const Command& cmd)
         return;
     }
 
+    if (cmd.type == "is_skill_cool")
+    {
+        RefreshSession();
+        if (!g_inWorld)
+        {
+            g_lastReason = "not in world";
+            return;
+        }
+        const unsigned slot = cmd.slot >= 0 ? (unsigned)cmd.slot : 0;
+        if (!kIsSkillCoolRva || !g_base)
+        {
+            g_lastOk = false;
+            g_lastVid = 0;
+            g_lastReason = "IsSkillCool missing";
+            NativeLog("is_skill_cool slot=%u fail rva=0x%X", slot, kIsSkillCoolRva);
+            return;
+        }
+        const int cooling = NativeIsSkillCool(slot);
+        g_lastOk = true;
+        g_lastVid = (unsigned)(cooling ? 1 : 0);
+        g_lastReason = cooling ? "cooling" : "ready";
+        NativeLog("is_skill_cool slot=%u cool=%d", slot, cooling);
+        return;
+    }
+
     if (cmd.type == "toggle_mount")
     {
         RefreshSession();
@@ -9610,7 +9635,8 @@ static void Serve()
                 cmd.type == "login" || cmd.type == "select_character" || cmd.type == "enter_game" ||
                 cmd.type == "skip_intro" || cmd.type == "get_atlas" || cmd.type == "get_hud" ||
                 cmd.type == "get_entities" || cmd.type == "get_skills" || cmd.type == "use_item" ||
-                cmd.type == "use_skill" || cmd.type == "is_skill_active" || cmd.type == "toggle_mount";
+                cmd.type == "use_skill" || cmd.type == "is_skill_active" || cmd.type == "is_skill_cool" ||
+                cmd.type == "toggle_mount";
             if (waitReply)
             {
                 const DWORD waitMs =

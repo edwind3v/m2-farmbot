@@ -109,6 +109,10 @@
                 <input type="checkbox" checked="@Shell.SkillsDuringCombat" @onchange="() => Shell.ToggleSkillsDuringCombat()" />
                 use while attacking
             </label>
+            <label class="skill-buff" title="Remount ~400ms after the buff cast to cancel the animation">
+                <input type="checkbox" checked="@Shell.SkillsSkipAnimHorse" @onchange="() => Shell.ToggleSkillsSkipAnimHorse()" />
+                Skip animations using horse
+            </label>
         </h3>
         @if (Shell.Skills.Count == 0)
         {

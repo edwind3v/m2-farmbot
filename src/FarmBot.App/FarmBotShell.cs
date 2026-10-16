@@ -243,6 +243,22 @@ public sealed class FarmBotShell : IDisposable
         SaveSettings();
     }
 
+    public bool SkillsSkipAnimHorse
+    {
+        get
+        {
+            lock (_configGate)
+                return _config.SkillsSkipAnimHorse;
+        }
+    }
+
+    public void ToggleSkillsSkipAnimHorse()
+    {
+        lock (_configGate)
+            _config.SkillsSkipAnimHorse = !_config.SkillsSkipAnimHorse;
+        SaveSettings();
+    }
+
     public bool PotionEnabled(uint vnum)
     {
         lock (_configGate)

@@ -94,6 +94,7 @@ public static class ActionProtocol
     public const string GetEntities = "get_entities";
     public const string UseSkill = "use_skill";
     public const string IsSkillActive = "is_skill_active";
+    public const string IsSkillCool = "is_skill_cool";
     public const string ToggleMount = "toggle_mount";
     public const string DumpCaptchaBg = "dump_captcha_bg";
     public const int Version = 1;

@@ -468,6 +468,24 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         return true;
     }
 
+    public bool TryIsSkillCool(int slot, out bool cooling)
+    {
+        cooling = false;
+        Ensure();
+        if (!_client.Connected || slot < 0)
+            return false;
+        var response = _client.Submit(new ActionRequest
+        {
+            Type = ActionProtocol.IsSkillCool,
+            Slot = slot,
+            Force = true
+        }, updateStatus: false);
+        if (!response.Ok)
+            return false;
+        cooling = response.TargetVid != 0;
+        return true;
+    }
+
     public bool TryToggleMount(bool wantMounted = false)
     {
         Ensure();

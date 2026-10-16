@@ -36,6 +36,13 @@ public interface INativeActionSink
         return false;
     }
 
+    /// <summary>True while the slot is on skill cooltime.</summary>
+    bool TryIsSkillCool(int slot, out bool cooling)
+    {
+        cooling = false;
+        return false;
+    }
+
     /// <param name="wantMounted">false = dismount, true = remount.</param>
     bool TryToggleMount(bool wantMounted = false) => false;
 
