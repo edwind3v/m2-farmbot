@@ -287,6 +287,8 @@ static void* g_mainInst;
 static char g_mainName[64];
 static volatile long g_allowMelee;
 static int g_captchaShown;
+static int g_captchaHooked;
+static DWORD g_captchaInstallAtMs;
 static volatile long g_captchaBusy;
 static volatile long g_captchaDumpBusy;
 static volatile long g_captchaDumpStep;
@@ -350,6 +352,7 @@ static int g_selectSent;
 static int g_layoutRecovered;
 static int g_arthion;
 static int g_baerim;
+static DWORD g_baerimWorldAtMs;
 static int NativeFarm() { return g_arthion || g_baerim; }
 static unsigned g_atlasSeq;
 static volatile long g_atlasCrash;
@@ -3547,9 +3550,9 @@ static bool BaerimSetAttackKey(void* player, bool press)
     {
         return false;
     }
-    if (!g_base)
+    if (!g_base || !kAttackKeyRva)
         return true;
-    FnAttackKey fn = (FnAttackKey)(g_base + 0x1ABC10);
+    FnAttackKey fn = (FnAttackKey)(g_base + kAttackKeyRva);
     if (IsBadCodePtr((FARPROC)fn))
         return true;
     __try
@@ -3668,7 +3671,14 @@ static bool DriveToTarget(void* player, unsigned vid, float x, float y)
         const float dx = mx - tx;
         const float dy = my - ty;
         const float dist = sqrtf(dx * dx + dy * dy);
-        const bool inRange = LooksInstance(main) && CallInRange(main, live);
+        bool inRange = false;
+        if (LooksInstance(main))
+        {
+            if (kInRangeRva)
+                inRange = CallInRange(main, live);
+            else
+                inRange = dist <= 280.f;
+        }
         InterlockedExchange(&g_allowMelee, inRange ? 1 : 0);
         g_walkVid = g_clickVid;
         const DWORD now = GetTickCount();
@@ -4334,34 +4344,53 @@ static void DumpCaptchaBegin()
 
 static void CaptchaTick()
 {
+    // Event-driven captcha: install hooks once, solve inside SetChallenge/Open.
+    // Never poll with gc.get_objects — that aborted python27 after a few minutes.
     if (!g_baerim)
         return;
     RefreshSession();
-    if (!g_inWorld)
-        return;
-    if (PhaseHas("Load") || PhaseHas("Login") || PhaseHas("Off") ||
+    if (!g_inWorld || WindowClassIs("LoadingWindow") ||
+        PhaseHas("Load") || PhaseHas("Login") || PhaseHas("Off") ||
         PhaseHas("Logo") || PhaseHas("Intro") || PhaseHas("Select"))
+    {
+        g_baerimWorldAtMs = 0;
+        g_captchaHooked = 0;
+        g_captchaInstallAtMs = 0;
+        return;
+    }
+    const DWORD now = GetTickCount();
+    if (!g_baerimWorldAtMs)
+        g_baerimWorldAtMs = now;
+    if (now - g_baerimWorldAtMs < 5000)
+        return;
+    if (g_captchaHooked)
+    {
+        // Lightweight status file written by the Python hook (no Py run here).
+        FILE* sf = nullptr;
+        int shown = 0;
+        if (fopen_s(&sf, "C:\\Temp\\farmbot-captcha.state", "rb") == 0 && sf)
+        {
+            char c = 0;
+            fread(&c, 1, 1, sf);
+            fclose(sf);
+            shown = (c == '1') ? 1 : 0;
+        }
+        if (shown && !g_captchaShown)
+            NativeLog("captcha window open (hook)");
+        if (!shown && g_captchaShown)
+            NativeLog("captcha window closed");
+        g_captchaShown = shown;
+        return;
+    }
+    // Retry install at most every 30s until uiCaptcha is importable.
+    if (g_captchaInstallAtMs && now - g_captchaInstallAtMs < 30000)
         return;
     if (InterlockedCompareExchange(&g_captchaBusy, 1, 0) != 0)
         return;
-    static DWORD lastMs;
-    static int armedLog;
-    const DWORD now = GetTickCount();
-    if (lastMs && now - lastMs < 1000)
-    {
-        InterlockedExchange(&g_captchaBusy, 0);
-        return;
-    }
-    lastMs = now;
-    if (!armedLog)
-    {
-        armedLog = 1;
-        NativeLog("captcha solver armed phase=%s load=%d",
-            g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str(), g_loadFinished);
-    }
-    static const char kPy[] = R"PY(
+    g_captchaInstallAtMs = now;
+    static const char kPyInstall[] = R"PY(
 try:
- import constInfo, traceback, gc
+ import constInfo, traceback
  try: import uiCaptcha
  except: uiCaptcha=None
  MAP={1:8,2:5,3:5,4:2,5:5,6:1,7:0,8:2,9:6,10:0,11:2,12:1,13:7,14:5,15:2,16:1,17:7,18:0,19:2,20:0,21:4,22:7,23:6,24:4,25:5,26:1,27:0,28:1,29:1,30:0,31:2,32:3,33:5,34:7,35:8,36:0,37:2,38:4,39:5,40:6,41:7,42:0,43:1,44:3,45:5,46:6,47:8}
@@ -4372,6 +4401,10 @@ try:
  def _state(v):
   try:
    f=open(r'C:\Temp\farmbot-captcha.state','wb'); f.write('1' if v else '0'); f.close()
+  except: pass
+ def _hooked(v):
+  try:
+   f=open(r'C:\Temp\farmbot-captcha.hooked','wb'); f.write('1' if v else '0'); f.close()
   except: pass
  def _txt(v):
   if v is None: return ''
@@ -4395,68 +4428,13 @@ try:
     if x and x.IsShow(): return 1
    except: pass
   return 0
- def _hook():
-  if not uiCaptcha: return
-  cls=getattr(uiCaptcha,'CaptchaWindow',None)
-  if not cls or getattr(cls,'_farmbot_hook',0): return
-  origSet=getattr(cls,'SetChallenge',None)
-  origOpen=getattr(cls,'Open',None)
-  origClose=getattr(cls,'Close',None)
-  def _set(self,*a,**k):
-   constInfo._farmbot_captcha_wnd=self
-   return origSet(self,*a,**k) if origSet else None
-  def _open(self,*a,**k):
-   constInfo._farmbot_captcha_wnd=self
-   return origOpen(self,*a,**k) if origOpen else None
-  def _close(self,*a,**k):
-   try:
-    if getattr(constInfo,'_farmbot_captcha_wnd',None) is self:
-     constInfo._farmbot_captcha_wnd=None
-   except: pass
-   return origClose(self,*a,**k) if origClose else None
-  try:
-   if origSet: cls.SetChallenge=_set
-   if origOpen: cls.Open=_open
-   if origClose: cls.Close=_close
-   cls._farmbot_hook=1
-   _log('hook SetChallenge')
-  except Exception:
-   _log('hook fail')
- _hook()
- how='none'
- wnd=getattr(constInfo,'_farmbot_captcha_wnd',None)
- if wnd:
-  how='hook'
- if not wnd:
-  iface=None
-  try: iface=constInfo.GetInterfaceInstance()
-  except: iface=None
-  if iface:
-   for n in ('wndCaptcha','wndCatpcha','captchaWnd','captchaWatcher'):
-    wnd=getattr(iface,n,None)
-    if wnd:
-     how='attr '+n
-     break
- if (not wnd) or not _shown(wnd):
-  cls=getattr(uiCaptcha,'CaptchaWindow',None) if uiCaptcha else None
-  if cls:
-   for o in gc.get_objects():
-    try:
-     if isinstance(o, cls) and _shown(o):
-      wnd=o
-      how='scan'
-      constInfo._farmbot_captcha_wnd=o
-      break
-    except: pass
- shown=_shown(wnd)
- _state(shown)
- probe=(shown, how, id(wnd) if wnd else 0)
- if getattr(constInfo,'_farmbot_cap_probe',None)!=probe:
-  constInfo._farmbot_cap_probe=probe
-  _log('probe shown=%d how=%s wnd=%s'%(shown,how,type(wnd).__name__ if wnd else None))
- if not shown:
-  constInfo._farmbot_captcha_done=None
- elif wnd:
+ def _solve(wnd, how):
+  if not wnd: return
+  shown=_shown(wnd)
+  _state(shown)
+  if not shown:
+   constInfo._farmbot_captcha_done=None
+   return
   cid=int(getattr(wnd,'challengeId',0) or 0)
   cfg=getattr(uiCaptcha,'CAPTCHA_CONFIG',None) if uiCaptcha else None
   row=_cfg_row(cfg, cid)
@@ -4481,26 +4459,96 @@ try:
    wnd.OnAreaClicked(int(ans))
    constInfo._farmbot_captcha_done=cid
    _log('ok cid=%d ans=%d q=%s how=%s'%(cid,int(ans),q.replace('\n',' '),how))
+ def _install():
+  if not uiCaptcha:
+   _hooked(0)
+   _log('install wait uiCaptcha')
+   return 0
+  cls=getattr(uiCaptcha,'CaptchaWindow',None)
+  if not cls:
+   _hooked(0)
+   _log('install wait CaptchaWindow')
+   return 0
+  if getattr(cls,'_farmbot_hook',0):
+   _hooked(1)
+   return 1
+  origSet=getattr(cls,'SetChallenge',None)
+  origOpen=getattr(cls,'Open',None)
+  origClose=getattr(cls,'Close',None)
+  def _set(self,*a,**k):
+   constInfo._farmbot_captcha_wnd=self
+   r=origSet(self,*a,**k) if origSet else None
+   try: _solve(self,'set')
+   except: _log('solve set fail')
+   return r
+  def _open(self,*a,**k):
+   constInfo._farmbot_captcha_wnd=self
+   r=origOpen(self,*a,**k) if origOpen else None
+   try: _solve(self,'open')
+   except: _log('solve open fail')
+   return r
+  def _close(self,*a,**k):
+   try:
+    if getattr(constInfo,'_farmbot_captcha_wnd',None) is self:
+     constInfo._farmbot_captcha_wnd=None
+   except: pass
+   _state(0)
+   return origClose(self,*a,**k) if origClose else None
+  try:
+   if origSet: cls.SetChallenge=_set
+   if origOpen: cls.Open=_open
+   if origClose: cls.Close=_close
+   cls._farmbot_hook=1
+   _hooked(1)
+   _log('hook installed event-driven')
+  except Exception:
+   _hooked(0)
+   _log('hook fail')
+   return 0
+  # One-shot: if captcha already open, solve via interface attrs (no gc scan).
+  wnd=getattr(constInfo,'_farmbot_captcha_wnd',None)
+  how='hook'
+  if not wnd:
+   iface=None
+   try: iface=constInfo.GetInterfaceInstance()
+   except: iface=None
+   if iface:
+    for n in ('wndCaptcha','wndCatpcha','captchaWnd','captchaWatcher'):
+     wnd=getattr(iface,n,None)
+     if wnd:
+      how='attr '+n
+      constInfo._farmbot_captcha_wnd=wnd
+      break
+  if wnd:
+   _solve(wnd, how)
+  else:
+   _state(0)
+  return 1
+ _install()
 except Exception:
  try:
   f=open(r'C:\Temp\farmbot-captcha.log','ab'); f.write(traceback.format_exc()+'\r\n'); f.close()
  except: pass
+ try:
+  f=open(r'C:\Temp\farmbot-captcha.hooked','wb'); f.write('0'); f.close()
+ except: pass
 )PY";
-    SafePyRunAfterPeek(kPy);
-    FILE* sf = nullptr;
-    int shown = 0;
-    if (fopen_s(&sf, "C:\\Temp\\farmbot-captcha.state", "rb") == 0 && sf)
+    SafePyRunAfterPeek(kPyInstall);
+    FILE* hf = nullptr;
+    int hooked = 0;
+    if (fopen_s(&hf, "C:\\Temp\\farmbot-captcha.hooked", "rb") == 0 && hf)
     {
         char c = 0;
-        fread(&c, 1, 1, sf);
-        fclose(sf);
-        shown = c == '1' ? 1 : 0;
+        fread(&c, 1, 1, hf);
+        fclose(hf);
+        hooked = (c == '1') ? 1 : 0;
     }
-    if (shown && !g_captchaShown)
-        NativeLog("captcha window open, solving while farming");
-    if (!shown && g_captchaShown)
-        NativeLog("captcha window closed");
-    g_captchaShown = shown;
+    if (hooked)
+    {
+        g_captchaHooked = 1;
+        NativeLog("captcha event hook armed phase=%s",
+            g_sessionPhase.empty() ? "(empty)" : g_sessionPhase.c_str());
+    }
     InterlockedExchange(&g_captchaBusy, 0);
 }
 
@@ -6397,9 +6445,9 @@ static void RefreshAffectsReadonly()
 static unsigned EffectiveSendChatRva()
 {
     // Baerim native SendChatPacket is thiscall ret 12: (text, type, scratch).
-    // Layout often recovers the Python helper 0x41D700 — reject that range.
-    if (g_baerim && (kSendChatRva == 0 || (kSendChatRva >= 0x410000 && kSendChatRva < 0x420000)))
-        return 0x250230u;
+    // Reject Python helpers recovered in 0x41xxxx–0x42xxxx; layout recover unwraps the real RVA.
+    if (g_baerim && kSendChatRva >= 0x410000 && kSendChatRva < 0x430000)
+        return 0;
     return kSendChatRva;
 }
 
@@ -6889,6 +6937,30 @@ static void Execute(const Command& cmd)
     if (cmd.type == "get_hud")
     {
         RefreshSession();
+        // Baerim often leaves the phase string empty at login; infer from the Python window.
+        if (g_baerim && g_sessionPhase.empty())
+        {
+            if (WindowClassIs("LoginWindow"))
+                g_sessionPhase = "Login";
+            else if (WindowClassIs("SelectCharacterWindow"))
+                g_sessionPhase = "Select";
+            else if (WindowClassIs("LoadingWindow"))
+                g_sessionPhase = "Load";
+            else if (WindowClassIs("GameWindow"))
+                g_sessionPhase = "Game";
+        }
+        g_inWorld = ComputeInWorld();
+        // Skip GetStatus on login/select/load UI — never while farming in GameWindow.
+        // (A blanket !inWorld skip broke combat after client patches / phase flicker.)
+        if (g_baerim && (WindowClassIs("LoginWindow") || WindowClassIs("SelectCharacterWindow") ||
+            WindowClassIs("LoadingWindow") || PhaseHas("Load") || PhaseHas("Logo") || PhaseHas("Intro")))
+        {
+            g_hudOk = false;
+            ClearAffectMirror();
+            g_lastOk = true;
+            g_lastReason = !g_sessionPhase.empty() ? g_sessionPhase : "login ui";
+            return;
+        }
         RefreshHud(player);
         g_inWorld = ComputeInWorld();
         if (g_inWorld)
@@ -6913,6 +6985,7 @@ static void Execute(const Command& cmd)
             g_chaseVid = 0;
             g_walkVid = 0;
             InterlockedExchange(&g_allowMelee, 0);
+            g_actorsJson = "[]";
             g_lastOk = true;
             g_lastReason = "not in world";
             return;
@@ -7939,8 +8012,6 @@ static void LoadConfig()
         kGetNameSlot = 0x14;
     if (g_baerim && !kSelfVidDisp)
         kSelfVidDisp = 0x334;
-    if (g_baerim && !kMousePressRva)
-        kMousePressRva = 0x1ADA20;
     if (!NativeFarm())
     {
         kSingletonRva = 0x482398;
@@ -8214,31 +8285,6 @@ static void Serve()
     }
 }
 
-static BOOL CALLBACK MatchOwnVisibleWindow(HWND hwnd, LPARAM ctx)
-{
-    DWORD* found = (DWORD*)ctx;
-    DWORD pid = 0;
-    GetWindowThreadProcessId(hwnd, &pid);
-    if (pid != found[0] || !IsWindowVisible(hwnd))
-        return TRUE;
-    found[1] = 1;
-    return FALSE;
-}
-
-static void WaitForOwnVisibleWindow(DWORD timeoutMs)
-{
-    const DWORD self = GetCurrentProcessId();
-    const DWORD start = GetTickCount();
-    while (GetTickCount() - start < timeoutMs)
-    {
-        DWORD found[2] = { self, 0 };
-        EnumWindows(MatchOwnVisibleWindow, (LPARAM)found);
-        if (found[1])
-            return;
-        Sleep(100);
-    }
-}
-
 static DWORD WINAPI InitThread(void*)
 {
     LoadConfig();
@@ -8248,51 +8294,25 @@ static DWORD WINAPI InitThread(void*)
     InitAtlasMap();
     if (g_baerim)
     {
-        if (!kPressActorRva)
-            kPressActorRva = 0x1AB240;
-        if (!kReserveClickRva)
-            kReserveClickRva = 0x1AB620;
-        if (!kAttackKeyRva)
-            kAttackKeyRva = 0x1ABC10;
-        if (!kComboRva)
-            kComboRva = 0x1AA5B0;
-        if (!kReservedModeDisp)
-            kReservedModeDisp = 0x54;
-        if (!kVidReservedDisp)
-            kVidReservedDisp = 0x419D4;
-        if (!kMoveToDestRva)
-            kMoveToDestRva = 0x1258E0;
-        if (!kMoveToPixelRva)
-            kMoveToPixelRva = 0x125920;
+        // Layout recover+cache is the only address source. Reject Python helpers; no patch RVA inventing.
         kAttackDestRva = 0;
-        if (!kInstAttackRva)
-            kInstAttackRva = 0x125C70;
-        if (!kInRangeRva)
-            kInRangeRva = 0x11E1C0;
-        if (!kGetPixelRva)
-            kGetPixelRva = 0x126030;
-        if (!kResMgrRva)
-            kResMgrRva = 0x3B74070;
-        if (!kGetResRva)
-            kGetResRva = 0x3351F0;
-        // Reject Python-helper RVAs recovered as SendChatPacket / IsMountingHorse.
-        if (!kSendChatRva || (kSendChatRva >= 0x410000 && kSendChatRva < 0x420000))
-            kSendChatRva = 0x250230;
-        if (kIsMountingRva >= 0x410000 && kIsMountingRva < 0x420000)
+        if (kSendChatRva >= 0x410000 && kSendChatRva < 0x430000)
+            kSendChatRva = 0;
+        if (kIsMountingRva >= 0x410000 && kIsMountingRva < 0x430000)
             kIsMountingRva = 0;
-        if (kIsAffectRva >= 0x410000 && kIsAffectRva < 0x420000)
+        if (kIsAffectRva >= 0x410000 && kIsAffectRva < 0x430000)
             kIsAffectRva = 0;
-        if (!kNetStreamRva)
-            kNetStreamRva = 0x3B74EC8;
-        if (!kClickSkillRva)
-            kClickSkillRva = 0x1B8A50;
-        NativeLog("baerim chat=0x%X mountHelper=0x%X isAffect=0x%X clickSkill=0x%X net=0x%X",
-            kSendChatRva, kIsMountingRva, kIsAffectRva, kClickSkillRva, kNetStreamRva);
-        // Suspended inject runs InitThread before DX11/Python are ready. Hooking
-        // PeekMessage that early was crashing the client ~25s into boot.
-        NativeLog("baerim waiting for client window before hooks");
-        WaitForOwnVisibleWindow(12000);
-        Sleep(300);
+        if (kGetAffectRva >= 0x410000 && kGetAffectRva < 0x430000)
+            kGetAffectRva = 0;
+        if (kGetValueRva >= 0x410000 && kGetValueRva < 0x430000)
+            kGetValueRva = 0;
+        // GetCloseItem must not alias GetPixelPosition (recover sometimes collapses them).
+        if (kGetCloseItemRva && kGetCloseItemRva == kGetPixelRva)
+            kGetCloseItemRva = 0;
+        if (!kMoveToDestRva && kMoveToPixelRva)
+            kMoveToDestRva = kMoveToPixelRva;
+        NativeLog("baerim chat=0x%X mountHelper=0x%X isAffect=0x%X clickSkill=0x%X net=0x%X press=0x%X attackKey=0x%X inRange=0x%X movePix=0x%X getAff=0x%X",
+            kSendChatRva, kIsMountingRva, kIsAffectRva, kClickSkillRva, kNetStreamRva, kPressActorRva, kAttackKeyRva, kInRangeRva, kMoveToPixelRva, kGetAffectRva);
     }
     InstallLoopHooks(client);
     NativeLog("loaded base=%p profile=%s pressActor=0x%X moveTo=0x%X movePixel=0x%X instAtk=0x%X inRange=0x%X getPixel=0x%X hooks=%d",

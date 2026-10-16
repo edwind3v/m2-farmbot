@@ -271,6 +271,8 @@ public sealed class ActionModuleHost
         }
     }
 
+    private const int BaerimLayoutRecovererVersion = 3;
+
     private string WriteBaerimLayoutFile(string? exePath)
     {
         if (Profile != ClientProfile.Baerim)
@@ -280,8 +282,10 @@ public sealed class ActionModuleHost
         try
         {
             var cachePath = BaerimLayoutCachePath(exePath);
-            if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 64)
+            if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 64 &&
+                BaerimLayoutCacheHasCriticalKeys(cachePath))
                 return cachePath;
+            try { File.Delete(cachePath); } catch { /* ignore stale cache */ }
 
             var recovered = BaerimActionLayoutRecoverer.Recover(exePath);
             var player = recovered.Player;
@@ -396,9 +400,51 @@ public sealed class ActionModuleHost
     private static string BaerimLayoutCachePath(string exePath)
     {
         var info = new FileInfo(exePath);
-        var key = info.FullName + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks.ToString();
+        var key = info.FullName + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks.ToString() +
+                  "|v" + BaerimLayoutRecovererVersion;
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..16];
         return Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_baerim_" + hash + ".cfg");
+    }
+
+    private static bool BaerimLayoutCacheHasCriticalKeys(string cachePath)
+    {
+        try
+        {
+            var text = File.ReadAllText(cachePath);
+            return HasHexKey(text, "pressActor") &&
+                   HasHexKey(text, "attackKey") &&
+                   (HasHexKey(text, "sendChat") || HasHexKey(text, "net"));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool HasHexKey(string text, string key)
+    {
+        var prefix = key + "=";
+        var start = 0;
+        while (start < text.Length)
+        {
+            var at = text.IndexOf(prefix, start, StringComparison.Ordinal);
+            if (at < 0)
+                return false;
+            if (at == 0 || text[at - 1] is '\n' or '\r')
+            {
+                var valueStart = at + prefix.Length;
+                var valueEnd = valueStart;
+                while (valueEnd < text.Length && text[valueEnd] is not ('\n' or '\r'))
+                    valueEnd++;
+                var value = text.AsSpan(valueStart, valueEnd - valueStart).Trim();
+                if (value.Length > 0 && !value.Equals("0", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            start = at + prefix.Length;
+        }
+
+        return false;
     }
 
     private static void AppendHex(StringBuilder text, string key, uint value)

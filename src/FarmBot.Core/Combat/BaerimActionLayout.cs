@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using FarmBot.Core.Entities;
 
@@ -88,22 +89,47 @@ public static class BaerimActionLayoutRecoverer
             evidence.Add("Baerim IsSkillActive python helper discarded.");
         }
 
-        // SendChatPacket / IsMountingHorse recovery often lands on Python helpers (0x41D7xx).
-        // Known-good Baerim natives from the real wrappers:
-        //   net.SendChatPacket → CPythonNetworkStream::SendChatPacket @ 0x250230 (ret 12)
-        //   IsMountingHorse → main actor horse flag at +0x30 (no player thiscall)
-        var chatRva = player.SendChatPacketRva;
-        if (chatRva == 0 || (chatRva >= 0x410000 && chatRva < 0x420000))
+        // SendChatPacket / IsMountingHorse recovery often lands on Python helpers (0x41xxxx–0x42xxxx).
+        // Unwrap SendChat native thiscall via net-stream singleton (same pattern as IsSkillCool).
+        // IsMountingHorse → discard; runtime uses main actor horse flag at +0x30.
+        var chatRva = RecoverSendChatNative(pe, login.NetStreamRva, player.SendChatPacketRva, evidence);
+        if (chatRva == 0 || IsPythonHelperRva(chatRva))
         {
-            chatRva = 0x250230u;
-            evidence.Add("Baerim SendChatPacket forced to 0x250230 (rejected python helper).");
+            chatRva = 0;
+            evidence.Add("Baerim SendChatPacket python helper discarded.");
         }
 
         var mountRva = player.IsMountingHorseRva;
-        if (mountRva == 0 || (mountRva >= 0x410000 && mountRva < 0x420000))
+        if (mountRva == 0 || IsPythonHelperRva(mountRva))
         {
             mountRva = 0;
             evidence.Add("Baerim IsMountingHorse python helper discarded; runtime uses main+0x30.");
+        }
+
+        // MoveToDest often recovers as a Python helper; pixel mover is enough for sidesteps.
+        if (player.MoveToDestRva == 0 && player.MoveToPixelRva != 0)
+        {
+            player = player with { MoveToDestRva = player.MoveToPixelRva };
+            evidence.Add($"Baerim MoveToDest aliased to MoveToPixel 0x{player.MoveToPixelRva:X}.");
+        }
+
+        var getAffect = player.GetAffectRva;
+        var getValue = player.GetValueRva;
+        if (IsPythonHelperRva(getAffect))
+        {
+            getAffect = 0;
+            evidence.Add("Baerim GetAffect python helper discarded.");
+        }
+        if (IsPythonHelperRva(getValue))
+        {
+            getValue = 0;
+            evidence.Add("Baerim GetValue python helper discarded.");
+        }
+        var getClose = player.GetCloseItemRva;
+        if (getClose != 0 && getClose == player.GetPixelRva)
+        {
+            getClose = 0;
+            evidence.Add("Baerim GetCloseItem discarded (aliased GetPixelPosition).");
         }
 
         player = player with
@@ -111,7 +137,10 @@ public static class BaerimActionLayoutRecoverer
             IsSkillCoolTimeRva = coolRva,
             IsSkillActiveRva = activeRva,
             SendChatPacketRva = chatRva,
-            IsMountingHorseRva = mountRva
+            IsMountingHorseRva = mountRva,
+            GetAffectRva = getAffect,
+            GetValueRva = getValue,
+            GetCloseItemRva = getClose
         };
 
         var pack = RecoverPack(pe, evidence);
@@ -127,6 +156,141 @@ public static class BaerimActionLayoutRecoverer
             pack.ctor,
             pack.exist,
             evidence);
+    }
+
+    private static bool IsPythonHelperRva(uint rva) => rva is >= 0x410000 and < 0x430000;
+
+    private static uint RecoverSendChatNative(BaerimPe pe, uint netStreamRva, uint fallbackRva, List<string> evidence)
+    {
+        var netVa = netStreamRva == 0 ? 0u : pe.ImageBase + netStreamRva;
+        foreach (var va in pe.FindAsciiZ("SendChatPacket"))
+        {
+            foreach (var site in pe.FindImmediateXrefs(va))
+            {
+                var off = pe.VaToFile(site);
+                if (off < 0 || !TryMethodTable(pe, off, out var fn))
+                    continue;
+                var wrapperRva = fn - pe.ImageBase;
+                var singleton = FirstGlobalLoad(pe, wrapperRva);
+                var preferVa = netVa != 0 ? netVa : singleton;
+                if (preferVa == 0)
+                    continue;
+                var direct = FirstNativeCallAfterSingleton(pe, wrapperRva, preferVa);
+                if (direct == 0 || IsPythonHelperRva(direct))
+                    continue;
+                var singletonRva = singleton == 0 ? 0 : singleton - pe.ImageBase;
+                evidence.Add($"Baerim SendChatPacket thiscall 0x{direct:X} (wrapper 0x{wrapperRva:X} load 0x{singletonRva:X}).");
+                return direct;
+            }
+        }
+
+        foreach (var marker in new[]
+                 {
+                     "CPythonNetworkStream::SendChatPacket",
+                     "SendChatPacket Error",
+                     "Send Chat Packet Error"
+                 })
+        {
+            var fromString = RecoverFunctionFromUniqueString(pe, marker, evidence);
+            if (fromString != 0 && !IsPythonHelperRva(fromString))
+            {
+                evidence.Add($"Baerim SendChatPacket from '{marker}' 0x{fromString:X}.");
+                return fromString;
+            }
+        }
+
+        if (fallbackRva != 0 && !IsPythonHelperRva(fallbackRva))
+            return fallbackRva;
+        return 0;
+    }
+
+    private static uint RecoverFunctionFromUniqueString(BaerimPe pe, string text, List<string> evidence)
+    {
+        var hits = pe.FindAsciiZ(text).ToList();
+        if (hits.Count == 0)
+            return 0;
+        if (hits.Count > 1)
+        {
+            evidence.Add($"Baerim '{text}' not unique ({hits.Count} hits).");
+            return 0;
+        }
+
+        foreach (var site in pe.FindImmediateXrefs(hits[0]))
+        {
+            var off = pe.VaToFile(site);
+            if (off < 0)
+                continue;
+            var start = FunctionStartFile(pe, off);
+            if (start < 0)
+                continue;
+            var rva = pe.FileToVa(start) - pe.ImageBase;
+            if (pe.IsCode(pe.ImageBase + rva) && !IsPythonHelperRva(rva))
+                return rva;
+        }
+
+        return 0;
+    }
+
+    private static uint FirstNativeCallAfterSingleton(BaerimPe pe, uint wrapperRva, uint singletonVa)
+    {
+        var off = pe.VaToFile(pe.ImageBase + wrapperRva);
+        if (off < 0 || singletonVa == 0)
+            return 0;
+        var start = -1;
+        for (var i = off; i < off + 0x140 && i + 6 < pe.Length; i++)
+        {
+            if (pe.Byte(i) == 0xA1 && pe.ReadU32(i + 1) == singletonVa)
+            {
+                start = i + 5;
+                break;
+            }
+
+            if (pe.Byte(i) == 0x8B &&
+                (pe.Byte(i + 1) is 0x0D or 0x15 or 0x35 or 0x3D) &&
+                pe.ReadU32(i + 2) == singletonVa)
+            {
+                start = i + 6;
+                break;
+            }
+        }
+
+        // Do not scan from wrapper entry — that picks unrelated E8 targets when net is never loaded.
+        if (start < 0)
+            return 0;
+
+        for (var i = start; i < off + 0x160 && i + 5 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0xE8)
+                continue;
+            var target = (uint)(pe.FileToVa(i + 5) + pe.ReadI32(i + 1));
+            if (!pe.IsCode(target))
+                continue;
+            var destOff = pe.VaToFile(target);
+            if (destOff < 0 || (pe.Byte(destOff) == 0xFF && pe.Byte(destOff + 1) == 0x25))
+                continue;
+            var rva = target - pe.ImageBase;
+            if (IsPythonHelperRva(rva) || !LooksLikeNativeThiscall(pe, destOff))
+                continue;
+            return rva;
+        }
+
+        return 0;
+    }
+
+    private static bool LooksLikeNativeThiscall(BaerimPe pe, int destOff)
+    {
+        if (destOff < 0 || destOff + 3 >= pe.Length)
+            return false;
+        // Typical MSVC thiscall prologues.
+        if (pe.Byte(destOff) == 0x55 && pe.Byte(destOff + 1) == 0x8B && pe.Byte(destOff + 2) == 0xEC)
+            return true;
+        if (pe.Byte(destOff) == 0x53 && pe.Byte(destOff + 1) == 0x56) // push ebx; push esi
+            return true;
+        if (pe.Byte(destOff) == 0x56 && pe.Byte(destOff + 1) == 0x57) // push esi; push edi
+            return true;
+        if (pe.Byte(destOff) == 0x8B && pe.Byte(destOff + 1) == 0xFF) // mov edi, edi hotpatch
+            return true;
+        return false;
     }
 
     private static (uint native, uint singleton, uint wrapper) RecoverPlayerMethod(

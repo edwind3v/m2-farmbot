@@ -860,6 +860,9 @@ public sealed class BotRuntime : IDisposable
         };
         if (config.ClientProfile != ClientProfile.Baerim)
             return snapshot;
+        // Never scan native entities on the login/select screens.
+        if (!_inWorld)
+            return snapshot;
         if (nowMs - _entitiesAtMs < 800 && _lastNativeActors.Count > 0)
         {
             return snapshot with

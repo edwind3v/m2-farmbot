@@ -265,26 +265,29 @@ public class PlayerActionLayoutTests
                    string.Join("\n", entity.Evidence);
         Directory.CreateDirectory(@"C:\Temp");
         File.WriteAllText(@"C:\Temp\baerim-player.txt", dump);
-        Assert.Equal(0x3B74090u, player.PlayerSingletonRva);
-        Assert.Equal(0x3B74094u, entity.SingletonRva);
+        // Absolute code/data RVAs shift every Baerim patch — assert structure + combat essentials only.
+        Assert.True(player.PlayerSingletonRva > 0x1000, dump);
+        Assert.True(entity.SingletonRva > 0x1000, dump);
         Assert.Equal(0x84u, entity.MapDisplacement);
         Assert.Equal(0x64u, player.SetTargetVtableSlot);
         Assert.Equal(0x10u, player.GetStatusVtableSlot);
         Assert.Equal(0x44u, recovered.GetItemIndexVtableSlot);
         Assert.Equal(0x4Cu, recovered.GetItemCountVtableSlot);
-        Assert.Equal(0x1B8A50u, player.ClickSkillSlotRva);
-        Assert.Equal(0x1AA5B0u, player.ComboAttackRva);
-        Assert.Equal(0x250230u, player.SendChatPacketRva);
-        Assert.NotEqual(0x41D700u, player.SendChatPacketRva);
-        Assert.NotEqual(0x41D7E0u, player.IsMountingHorseRva);
+        Assert.True(player.ClickSkillSlotRva > 0, dump);
+        Assert.True(player.ComboAttackRva > 0, dump);
+        Assert.True(player.OnPressActorRva > 0, dump);
+        Assert.True(player.SetAttackKeyStateRva > 0, dump);
+        Assert.False(player.SendChatPacketRva is >= 0x410000 and < 0x430000,
+            $"SendChat landed on python helper 0x{player.SendChatPacketRva:X}\n{dump}");
+        Assert.DoesNotContain(recovered.Evidence, e => e.Contains("forced to 0x251FA0", StringComparison.Ordinal));
+        Assert.True(player.SendChatPacketRva > 0, "SendChat native unwrap failed\n" + dump);
+        Assert.True(player.IsMountingHorseRva == 0 || player.IsMountingHorseRva is < 0x410000 or >= 0x430000, dump);
         Assert.True(login.CanLogin, dump);
-        Assert.Equal(0x3B73F2Cu, recovered.PackMgrRva);
-        Assert.Equal(0x36E280u, recovered.PackGetRva);
-        Assert.Equal(0x317DE0u, recovered.PackMappedCtorRva);
-        Assert.Equal(0x371040u, recovered.PackExistRva);
-        Assert.Equal(0x125920u, player.MoveToPixelRva);
-        Assert.Equal(0x126030u, player.GetPixelRva);
-        dump += $"\nMOVEPIXEL=0x{player.MoveToPixelRva:X} MOVETO=0x{player.MoveToDestRva:X} GETPIXEL=0x{player.GetPixelRva:X} INRANGE=0x{player.InRangeRva:X}";
+        Assert.True(login.NetStreamRva > 0x1000, dump);
+        Assert.True(recovered.PackMgrRva > 0, dump);
+        Assert.True(player.MoveToPixelRva > 0, dump);
+        Assert.True(player.GetPixelRva > 0, dump);
+        dump += $"\nMOVEPIXEL=0x{player.MoveToPixelRva:X} MOVETO=0x{player.MoveToDestRva:X} GETPIXEL=0x{player.GetPixelRva:X} INRANGE=0x{player.InRangeRva:X} SENDCHAT=0x{player.SendChatPacketRva:X} ATTACKKEY=0x{player.SetAttackKeyStateRva:X} PRESS=0x{player.OnPressActorRva:X}";
         File.WriteAllText(@"C:\Temp\baerim-player.txt", dump);
     }
 }
