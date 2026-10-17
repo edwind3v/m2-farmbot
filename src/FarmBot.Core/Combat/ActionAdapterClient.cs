@@ -529,6 +529,18 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }, updateStatus: false).Ok;
     }
 
+    public bool TryDumpMaps()
+    {
+        Ensure();
+        if (!_client.Connected)
+            return false;
+        return _client.Submit(new ActionRequest
+        {
+            Type = ActionProtocol.DumpMaps,
+            Force = true
+        }, updateStatus: false).Ok;
+    }
+
     public bool TryReadEntities(out IReadOnlyList<EntityState> entities)
     {
         entities = Array.Empty<EntityState>();

@@ -337,6 +337,14 @@ static volatile long g_captchaDumpBusy;
 static volatile long g_captchaDumpStep;
 static DWORD g_captchaDumpLastMs;
 static int g_captchaDumpGot;
+static volatile long g_mapsDumpBusy;
+static volatile long g_mapsDumpQueued;
+static DWORD g_mapsDumpLastMs;
+static int g_mapsDumpGot;
+static int g_mapsDumpMiss;
+static size_t g_mapsDumpIndex;
+struct MapDumpItem { char virt[260]; char dest[260]; };
+static std::vector<MapDumpItem> g_mapsQueue;
 static char g_dumpVirt[260];
 static char g_dumpDest[260];
 static int g_dumpCaptured;
@@ -5651,10 +5659,21 @@ static void ChaseTick(void* player)
 }
 
 static bool ExtractPackBlob(const char* virt, const char* dest);
+static bool PackExtractBlob(const char* virt, const char* dest);
+static bool ExtractPackText(const char* virt, char* text, int cap);
+static bool ExtractPackPlainText(const char* virt, const char* dest);
+static bool ExtractPackDds(const char* virt, const char* dest);
+static bool PackGet(const char* virt, unsigned char* mapped, int mappedBytes);
+static int NearbySize(const unsigned char* mapped, int mappedBytes, const unsigned char* data);
+static int TextSpan(const unsigned char* p, int maxN);
+static bool ExtractAtlasBeside(const char* subVirt, const char* image, const char* dest);
+static bool ParseSubImagePath(const char* text, char* image, int cap);
+static int DdsByteSize(const unsigned char* p);
 static int PackExists(const char* virt);
 static void* PackMgrPtr();
 static int PngFileBytes(const unsigned char* p);
 static bool WriteBytes(const char* path, const void* data, int bytes);
+static bool FileBigEnough(const char* path, int minBytes);
 static bool DataAddr(const void* p);
 static int LooksLikeTga(const unsigned char* p);
 
@@ -5918,6 +5937,477 @@ static void DumpCaptchaBegin()
     g_captchaDumpStep = 1;
     g_lastOk = true;
     g_lastReason = "dump armed";
+}
+
+static void MapsEnsureDir(const char* dir)
+{
+    if (!dir || !dir[0])
+        return;
+    char buf[MAX_PATH];
+    strncpy_s(buf, dir, _TRUNCATE);
+    for (char* p = buf; *p; ++p)
+    {
+        if (*p == '/' || *p == '\\')
+        {
+            const char c = *p;
+            *p = 0;
+            if (buf[0])
+                CreateDirectoryA(buf, nullptr);
+            *p = c;
+        }
+    }
+    CreateDirectoryA(buf, nullptr);
+}
+
+static void MapsEnsureParent(const char* file)
+{
+    if (!file || !file[0])
+        return;
+    char buf[MAX_PATH];
+    strncpy_s(buf, file, _TRUNCATE);
+    char* slash = strrchr(buf, '\\');
+    if (!slash)
+        slash = strrchr(buf, '/');
+    if (!slash)
+        return;
+    *slash = 0;
+    MapsEnsureDir(buf);
+}
+
+static void MapsSanitize(const char* in, char* out, int cap)
+{
+    if (!out || cap < 2)
+        return;
+    out[0] = 0;
+    if (!in)
+        return;
+    const char* slash = strrchr(in, '/');
+    if (!slash)
+        slash = strrchr(in, '\\');
+    const char* src = slash ? slash + 1 : in;
+    int n = 0;
+    for (; src[n] && n < cap - 1; ++n)
+    {
+        const char c = src[n];
+        out[n] = (char)((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+            ? c : '_');
+    }
+    out[n] = 0;
+}
+
+static void MapsQueue(const char* virt, const char* dest, int front)
+{
+    if (!virt || !virt[0] || !dest || !dest[0])
+        return;
+    MapDumpItem item;
+    _snprintf_s(item.virt, _TRUNCATE, "%s", virt);
+    _snprintf_s(item.dest, _TRUNCATE, "%s", dest);
+    if (front)
+        g_mapsQueue.insert(g_mapsQueue.begin(), item);
+    else
+        g_mapsQueue.push_back(item);
+}
+
+static int MapsIsTextDest(const char* dest)
+{
+    if (!dest)
+        return 0;
+    const char* ext = strrchr(dest, '.');
+    if (!ext)
+        return 0;
+    return _stricmp(ext, ".txt") == 0 || _stricmp(ext, ".sub") == 0;
+}
+
+static int MapsReadableText(const unsigned char* p, int n)
+{
+    if (!p || n < 12)
+        return 0;
+    int print = 0;
+    __try
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            const unsigned char c = p[i];
+            if (c == 0)
+                break;
+            if (c == '\t' || c == '\n' || c == '\r' || (c >= 32 && c != 127))
+                ++print;
+            else
+                return 0;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+    return print >= 12 ? 1 : 0;
+}
+
+static int MapsLooksLikeAtlasInfo(const unsigned char* p, int n)
+{
+    if (!MapsReadableText(p, n))
+        return 0;
+    char buf[260];
+    const int take = n < 259 ? n : 259;
+    memcpy(buf, p, (size_t)take);
+    buf[take] = 0;
+    for (int i = 0; buf[i]; ++i)
+        buf[i] = (char)tolower((unsigned char)buf[i]);
+    return strstr(buf, "map_") != nullptr ||
+        strstr(buf, "metin2") != nullptr ||
+        strstr(buf, "atlas") != nullptr;
+}
+
+static int MapsFileLooksText(const char* path, int wantAtlas)
+{
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "rb") != 0 || !f)
+        return 0;
+    unsigned char buf[512];
+    const size_t n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    if (n < 12)
+        return 0;
+    if (wantAtlas)
+        return MapsLooksLikeAtlasInfo(buf, (int)n);
+    return MapsReadableText(buf, (int)n);
+}
+
+static int MapsDumpAtlasInfoPython(const char* virt)
+{
+    if (!virt || !virt[0])
+        return 0;
+    char py[1400];
+    _snprintf_s(py, _TRUNCATE,
+        "try:\n"
+        " import app\n"
+        " p='%s'\n"
+        " n=app.OpenTextFile(p)\n"
+        " f=open(r'C:\\Temp\\farmbot-maps\\atlasinfo.txt','wb')\n"
+        " w=0\n"
+        " if n:\n"
+        "  c=-1\n"
+        "  try: c=int(app.GetTextFileLineCount(n))\n"
+        "  except: c=-1\n"
+        "  i=0\n"
+        "  if c>=0:\n"
+        "   while i<c:\n"
+        "    s=''\n"
+        "    try: s=app.GetTextFileLine(n,i)\n"
+        "    except:\n"
+        "     try: s=app.GetTextFileLine(n)\n"
+        "     except: s=''\n"
+        "    if s:\n"
+        "     f.write(str(s))\n"
+        "     if not str(s).endswith('\\n'): f.write('\\r\\n')\n"
+        "     w=w+1\n"
+        "    i=i+1\n"
+        "  else:\n"
+        "   while i<8000:\n"
+        "    s=''\n"
+        "    try: s=app.GetTextFileLine(n,i)\n"
+        "    except: break\n"
+        "    if s is None or s=='': break\n"
+        "    f.write(str(s))\n"
+        "    if not str(s).endswith('\\n'): f.write('\\r\\n')\n"
+        "    w=w+1\n"
+        "    i=i+1\n"
+        "  try: app.CloseTextFile(n)\n"
+        "  except: pass\n"
+        " f.close()\n"
+        " open(r'C:\\Temp\\farmbot-native.log','ab').write('dump maps py %s lines='+str(w)+'\\r\\n')\n"
+        "except Exception,e:\n"
+        " try: open(r'C:\\Temp\\farmbot-native.log','ab').write('dump maps py fail '+str(e)+'\\r\\n')\n"
+        " except: pass\n",
+        virt, virt);
+    NativeLog("dump maps OpenTextFile %s", virt);
+    SafePyRun(py);
+    return MapsFileLooksText("C:\\Temp\\farmbot-maps\\atlasinfo.txt", 1);
+}
+
+static int MapsDumpOne(const char* virt, const char* dest)
+{
+    if (!virt || !virt[0] || !dest || !dest[0])
+        return 0;
+    const int wantAtlas = strstr(dest, "atlasinfo") != nullptr;
+    const int textDest = MapsIsTextDest(dest);
+    if (textDest && MapsFileLooksText(dest, wantAtlas))
+        return 1;
+    if (textDest)
+        DeleteFileA(dest);
+    else if (FileBigEnough(dest, 16))
+        return 1;
+    const int exist = PackExists(virt);
+    if (exist != 1)
+        return 0;
+    MapsEnsureParent(dest);
+    int ok = 0;
+    __try
+    {
+        if (textDest)
+            ok = ExtractPackPlainText(virt, dest) && MapsFileLooksText(dest, wantAtlas);
+        else if (dest && strstr(dest, ".dds"))
+            ok = ExtractPackDds(virt, dest);
+        else
+            ok = PackExtractBlob(virt, dest) && FileBigEnough(dest, 12);
+        if (!ok && textDest)
+        {
+            char text[48 * 1024];
+            text[0] = 0;
+            if (ExtractPackText(virt, text, (int)sizeof(text)) && MapsReadableText((const unsigned char*)text, (int)strlen(text)))
+                ok = WriteBytes(dest, text, (int)strlen(text)) && MapsFileLooksText(dest, wantAtlas);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        NativeLog("dump maps extract guard %s", virt);
+        ok = 0;
+    }
+    if (!ok)
+    {
+        if (textDest)
+            DeleteFileA(dest);
+        return 0;
+    }
+    return 1;
+}
+
+struct AtlasDumpRow
+{
+    char dir[96];
+    int w;
+    int h;
+};
+
+static int MapsParseAtlas(const char* text, AtlasDumpRow* rows, int cap)
+{
+    if (!text || !rows || cap <= 0)
+        return 0;
+    int n = 0;
+    const char* p = text;
+    while (*p && n < cap)
+    {
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+            ++p;
+        if (*p == '#' || (*p == '/' && p[1] == '/'))
+        {
+            while (*p && *p != '\n')
+                ++p;
+            continue;
+        }
+        if (!*p)
+            break;
+        char line[512];
+        int li = 0;
+        while (*p && *p != '\r' && *p != '\n' && li < 511)
+            line[li++] = *p++;
+        line[li] = 0;
+        char* toks[16];
+        int nt = 0;
+        char* t = line;
+        while (*t && nt < 16)
+        {
+            while (*t == ' ' || *t == '\t')
+                ++t;
+            if (!*t)
+                break;
+            toks[nt++] = t;
+            while (*t && *t != ' ' && *t != '\t')
+                ++t;
+            if (*t)
+                *t++ = 0;
+        }
+        if (nt < 5)
+            continue;
+        int nums[4];
+        int ok = 1;
+        for (int k = 0; k < 4; ++k)
+        {
+            char* end = nullptr;
+            nums[k] = (int)strtol(toks[nt - 4 + k], &end, 10);
+            if (!end || end == toks[nt - 4 + k])
+                ok = 0;
+        }
+        if (!ok || nums[2] < 1 || nums[2] > 32 || nums[3] < 1 || nums[3] > 32)
+            continue;
+        strncpy_s(rows[n].dir, toks[0], _TRUNCATE);
+        for (char* d = rows[n].dir; *d; ++d)
+            if (*d == '\\')
+                *d = '/';
+        rows[n].w = nums[2];
+        rows[n].h = nums[3];
+        ++n;
+    }
+    return n;
+}
+
+static void MapsQueueMap(const char* mapDir, int cellsX, int cellsY, int front)
+{
+    (void)cellsX;
+    (void)cellsY;
+    char leaf[96];
+    MapsSanitize(mapDir, leaf, 96);
+    if (!leaf[0])
+        return;
+    char destRoot[MAX_PATH];
+    _snprintf_s(destRoot, _TRUNCATE, "C:\\Temp\\farmbot-maps\\%s", leaf);
+    char virt[260];
+    char dest[MAX_PATH];
+    _snprintf_s(virt, _TRUNCATE, "d:/ymir work/ui/atlas/%s/atlas.sub", mapDir);
+    _snprintf_s(dest, _TRUNCATE, "%s\\atlas.sub", destRoot);
+    MapsQueue(virt, dest, front);
+    _snprintf_s(virt, _TRUNCATE, "d:/ymir work/ui/%s_atlas.dds", mapDir);
+    _snprintf_s(dest, _TRUNCATE, "%s\\%s_atlas.dds", destRoot, leaf);
+    MapsQueue(virt, dest, front);
+}
+
+static void MapsWriteCurrent(const char* mapName)
+{
+    MapsEnsureDir("C:\\Temp\\farmbot-maps");
+    if (!mapName || !mapName[0])
+        return;
+    WriteBytes("C:\\Temp\\farmbot-maps\\current.txt", mapName, (int)strlen(mapName));
+}
+
+static void MapsBuildQueue()
+{
+    g_mapsQueue.clear();
+    g_mapsDumpIndex = 0;
+    MapsEnsureDir("C:\\Temp\\farmbot-maps");
+    char current[96];
+    current[0] = 0;
+    FILE* cf = nullptr;
+    if (fopen_s(&cf, "C:\\Temp\\farmbot-maps\\current.txt", "rb") == 0 && cf)
+    {
+        const size_t n = fread(current, 1, 95, cf);
+        fclose(cf);
+        current[n] = 0;
+        for (char* p = current; *p; ++p)
+            if (*p == '\r' || *p == '\n')
+                *p = 0;
+    }
+    const char* infoVirts[] = {
+        "root/atlasinfo.txt",
+        "AtlasInfo.txt",
+        "atlasinfo.txt",
+        "locale/common/AtlasInfo.txt",
+        "locale/tr/atlasinfo.txt",
+        "locale/en/atlasinfo.txt",
+        "locale/ae/atlasinfo.txt",
+        "locale/de/AtlasInfo.txt"
+    };
+    const char* dest = "C:\\Temp\\farmbot-maps\\atlasinfo.txt";
+    if (!MapsFileLooksText(dest, 1))
+        DeleteFileA(dest);
+    char infoText[48 * 1024];
+    infoText[0] = 0;
+    for (int i = 0; i < 8 && !infoText[0]; ++i)
+    {
+        NativeLog("dump maps atlasinfo try %s exist=%d", infoVirts[i], PackExists(infoVirts[i]));
+        if (MapsDumpOne(infoVirts[i], dest) && MapsFileLooksText(dest, 1))
+        {
+            FILE* f = nullptr;
+            if (fopen_s(&f, dest, "rb") == 0 && f)
+            {
+                const size_t got = fread(infoText, 1, sizeof(infoText) - 1, f);
+                fclose(f);
+                infoText[got] = 0;
+            }
+        }
+        else if (PackExists(infoVirts[i]) == 1 && MapsDumpAtlasInfoPython(infoVirts[i]))
+        {
+            FILE* f = nullptr;
+            if (fopen_s(&f, dest, "rb") == 0 && f)
+            {
+                const size_t got = fread(infoText, 1, sizeof(infoText) - 1, f);
+                fclose(f);
+                infoText[got] = 0;
+            }
+        }
+    }
+    AtlasDumpRow rows[256];
+    const int rowN = MapsParseAtlas(infoText, rows, 256);
+    NativeLog("dump maps atlasinfo rows=%d current=%s", rowN, current[0] ? current : "(none)");
+    if (current[0])
+        MapsQueueMap(current, 8, 8, 1);
+    for (int i = 0; i < rowN; ++i)
+    {
+        if (current[0] && _stricmp(rows[i].dir, current) == 0)
+        {
+            MapsQueueMap(rows[i].dir, rows[i].w, rows[i].h, 1);
+            continue;
+        }
+        MapsQueueMap(rows[i].dir, rows[i].w, rows[i].h, 0);
+    }
+    if (g_mapsQueue.empty() && current[0])
+        MapsQueueMap(current, 8, 8, 0);
+    InterlockedExchange(&g_mapsDumpQueued, 1);
+    NativeLog("dump maps queued %u files", (unsigned)g_mapsQueue.size());
+}
+
+static void DumpMapsBegin()
+{
+    if (InterlockedCompareExchange(&g_mapsDumpBusy, 1, 0) != 0)
+    {
+        g_lastOk = true;
+        g_lastReason = "dump maps already running";
+        NativeLog("dump maps already running");
+        return;
+    }
+    g_mapsQueue.clear();
+    g_mapsDumpIndex = 0;
+    g_mapsDumpGot = 0;
+    g_mapsDumpMiss = 0;
+    g_mapsDumpLastMs = GetTickCount();
+    InterlockedExchange(&g_mapsDumpQueued, 0);
+    MapsEnsureDir("C:\\Temp\\farmbot-maps");
+    NativeLog("dump maps armed packMgr=0x%X exist=0x%X packGet=0x%X inWorld=%d",
+        kPackMgrRva, kPackExistRva, kPackGetRva, g_inWorld);
+    g_lastOk = true;
+    g_lastReason = "dump maps armed";
+}
+
+static void DumpMapsStep()
+{
+    if (!g_mapsDumpBusy)
+        return;
+    if (!g_inWorld || !g_openedGameWindow)
+        return;
+    const DWORD now = GetTickCount();
+    if (!g_baerimWorldAtMs)
+        g_baerimWorldAtMs = now;
+    if (now - g_baerimWorldAtMs < 8000)
+        return;
+    if (g_mapsDumpLastMs && now - g_mapsDumpLastMs < 200)
+        return;
+    g_mapsDumpLastMs = now;
+    if (!g_mapsDumpQueued)
+    {
+        MapsBuildQueue();
+        return;
+    }
+    if (g_mapsDumpIndex >= g_mapsQueue.size())
+    {
+        NativeLog("dump maps done got=%d miss=%d to C:\\Temp\\farmbot-maps", g_mapsDumpGot, g_mapsDumpMiss);
+        g_mapsQueue.clear();
+        g_mapsDumpIndex = 0;
+        InterlockedExchange(&g_mapsDumpQueued, 0);
+        InterlockedExchange(&g_mapsDumpBusy, 0);
+        return;
+    }
+    const MapDumpItem item = g_mapsQueue[g_mapsDumpIndex++];
+    NativeLog("dump maps %u/%u %s", (unsigned)g_mapsDumpIndex, (unsigned)g_mapsQueue.size(), item.virt);
+    int got = 0;
+    __try { got = MapsDumpOne(item.virt, item.dest); }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        NativeLog("dump maps step guard %s", item.virt);
+        got = 0;
+    }
+    if (got)
+        ++g_mapsDumpGot;
+    else
+        ++g_mapsDumpMiss;
 }
 
 static void CaptchaTick()
@@ -6684,6 +7174,154 @@ static bool ExtractPackText(const char* virt, char* text, int cap)
         return true;
     }
     return false;
+}
+
+static int MapsTextRun(const unsigned char* p, int maxN)
+{
+    if (!DataAddr(p) || maxN < 12)
+        return 0;
+    int n = 0;
+    __try
+    {
+        for (; n < maxN; ++n)
+        {
+            const unsigned char c = p[n];
+            if (c == 0)
+                break;
+            if (!(c == '\t' || c == '\n' || c == '\r' || (c >= 32 && c != 127)))
+                break;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+    return n >= 12 ? n : 0;
+}
+
+static bool ExtractPackPlainText(const char* virt, const char* dest)
+{
+    if (!virt || !virt[0] || !dest)
+        return false;
+    unsigned char mapped[400];
+    if (!PackGet(virt, mapped, 400))
+        return false;
+    const unsigned char* dataOut = *(const unsigned char**)(mapped + ((400 - 4) & ~3));
+    const unsigned char* best = nullptr;
+    int bestN = 0;
+    int bestScore = 0;
+    for (int i = 0; i + 4 <= 400; i += 4)
+    {
+        const unsigned char* p = *(const unsigned char**)(mapped + i);
+        if (!DataAddr(p))
+            continue;
+        const int nNear = NearbySize(mapped, 400, p);
+        const int cap = nNear >= 12 && nNear <= 256 * 1024 ? nNear : 64 * 1024;
+        const int n = MapsTextRun(p, cap);
+        if (n < 12)
+            continue;
+        int score = 1;
+        if (p == dataOut)
+            score += 3;
+        if (MapsLooksLikeAtlasInfo(p, n < 260 ? n : 260))
+            score += 4;
+        if (score > bestScore || (score == bestScore && n > bestN))
+        {
+            best = p;
+            bestN = n;
+            bestScore = score;
+        }
+    }
+    if (!best || bestN < 12)
+        return false;
+    NativeLog("dump maps text %s bytes=%d score=%d head=%c%c%c%c",
+        virt, bestN, bestScore, best[0], best[1], best[2], best[3]);
+    return WriteBytes(dest, best, bestN);
+}
+
+static int MapsSafeWrite(const char* dest, const unsigned char* p, int n)
+{
+    if (!dest || !DataAddr(p) || n < 128 || n > 4 * 1024 * 1024)
+        return 0;
+    BYTE* tmp = (BYTE*)VirtualAlloc(nullptr, (SIZE_T)n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!tmp)
+        return 0;
+    int ok = 0;
+    __try
+    {
+        memcpy(tmp, p, (size_t)n);
+        ok = 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok = 0;
+    }
+    if (ok)
+        ok = WriteBytes(dest, tmp, n) ? 1 : 0;
+    VirtualFree(tmp, 0, MEM_RELEASE);
+    return ok;
+}
+
+static bool ExtractPackDds(const char* virt, const char* dest)
+{
+    if (!virt || !virt[0] || !dest)
+        return false;
+    BYTE* mapped = (BYTE*)VirtualAlloc(nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!mapped)
+        return false;
+    int ok = 0;
+    __try
+    {
+        if (!PackGet(virt, mapped, 1024))
+        {
+            VirtualFree(mapped, 0, MEM_RELEASE);
+            return false;
+        }
+        const unsigned char* dataOut = *(const unsigned char**)(mapped + ((1024 - 4) & ~3));
+        const unsigned char* best = nullptr;
+        int bestN = 0;
+        if (DataAddr(dataOut))
+        {
+            int n = 0;
+            __try { n = dataOut[0] == 'D' && dataOut[1] == 'D' && dataOut[2] == 'S' ? DdsByteSize(dataOut) : 0; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { n = 0; }
+            if (n >= 128)
+            {
+                best = dataOut;
+                bestN = n;
+            }
+        }
+        if (!best)
+        {
+            for (int i = 0; i + 4 <= 1024; i += 4)
+            {
+                const unsigned char* p = *(const unsigned char**)(mapped + i);
+                if (!DataAddr(p))
+                    continue;
+                int n = 0;
+                __try { n = p[0] == 'D' && p[1] == 'D' && p[2] == 'S' ? DdsByteSize(p) : 0; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { n = 0; }
+                if (n >= 128)
+                {
+                    best = p;
+                    bestN = n;
+                    break;
+                }
+            }
+        }
+        if (best)
+        {
+            NativeLog("dump maps dds %s bytes=%d", virt, bestN);
+            ok = MapsSafeWrite(dest, best, bestN);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        NativeLog("dump maps dds guard %s", virt);
+        ok = 0;
+    }
+    VirtualFree(mapped, 0, MEM_RELEASE);
+    return ok != 0;
 }
 
 static void AtlasDestPath(const char* dest, const char* image, char* atlasFile, int cap)
@@ -8284,6 +8922,18 @@ static void Execute(const Command& cmd)
         return;
     }
 
+    if (cmd.type == "dump_maps")
+    {
+        if (!g_baerim)
+        {
+            g_lastOk = false;
+            g_lastReason = "dump maps is baerim-only";
+            return;
+        }
+        DumpMapsBegin();
+        return;
+    }
+
     if (cmd.type == "loot_loop")
     {
         g_lootFast = (cmd.vid & 1) ? 1 : 0;
@@ -8871,6 +9521,7 @@ static void AfterPeek()
 {
     CaptchaTick();
     DumpCaptchaStep();
+    DumpMapsStep();
 }
 
 static BOOL WINAPI HookPeekA(LPMSG msg, HWND hwnd, UINT min, UINT max, UINT remove)

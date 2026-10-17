@@ -1,0 +1,225 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Resource Files\imgui">
+      <UniqueIdentifier>{9bbca728-b686-402b-b619-3b9695b4f4c5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resource">
+      <UniqueIdentifier>{8a81168b-244c-4cc9-b62f-f97679ae81e1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Memory">
+      <UniqueIdentifier>{8d2856db-03b3-45cb-9971-d6182d9fa441}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="GameSDK">
+      <UniqueIdentifier>{7d870b76-424c-4570-a805-d5cb1b56d741}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web">
+      <UniqueIdentifier>{7abca483-9007-4e80-9c42-eef52bbf5799}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\Discord">
+      <UniqueIdentifier>{44f284ce-e3f2-46eb-b2b8-5f9a2cb104b3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\DiscordWeb">
+      <UniqueIdentifier>{fb861c4e-924d-4fc6-b29b-ab6e61052b2a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\WebHost">
+      <UniqueIdentifier>{e5ad0af7-69c4-49a0-9612-3ee38ef1ab1d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\HostChanger">
+      <UniqueIdentifier>{6f5f9840-c5c5-4306-b805-ebd81325eccc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CodeCracker">
+      <UniqueIdentifier>{b3005257-57df-4b86-86da-3e77ed43e227}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CodeCracker\AntiCheat">
+      <UniqueIdentifier>{f0789266-9d93-4eb4-a9cd-aab03ed0828e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CodeCracker\AntiDebug">
+      <UniqueIdentifier>{e07a2566-509a-449e-a92c-8165f9da1502}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CodeCracker\Security.h">
+      <UniqueIdentifier>{0daee591-2706-43a3-b2bd-57b5f6729535}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Python">
+      <UniqueIdentifier>{2e7769ae-7ef2-4e1a-b08d-e018b1961845}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resource\Sound">
+      <UniqueIdentifier>{d625cf36-f7a1-4150-8088-9fcc07f2afbd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Web\Login">
+      <UniqueIdentifier>{7040d645-df3c-42cc-8dd6-6af095dfe42f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="GameSDK\Python">
+      <UniqueIdentifier>{d88bd594-b00c-4deb-a93d-31ae483267e2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CodeCracker\KernelCallBack">
+      <UniqueIdentifier>{80dd274f-8270-4aa2-bdfa-f53fdf11b646}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="GameSDK\Buff">
+      <UniqueIdentifier>{10a1aa0f-2d06-489d-a491-21817238e434}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="c4us">
+      <UniqueIdentifier>{e3d83312-ea6f-4d1a-a442-7dcfa367c3ea}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Memory\ShreadMemory">
+      <UniqueIdentifier>{335c3378-e3b1-4966-957a-43f4b30075d6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="imgui\imgui.cpp">
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="imgui\imgui_demo.cpp">
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="imgui\imgui_draw.cpp">
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="imgui\imgui_widgets.cpp">
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="imgui\imgui_impl_dx9.cpp">
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="imgui\imgui_impl_win32.cpp">
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="main.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="detours.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui\imconfig.h">
+      <Filter>Resource Files\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui\imgui.h">
+      <Filter>Resource Files\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui\imgui_internal.h">
+      <Filter>Resource Files\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui\imstb_rectpack.h">
+      <Filter>Resource Files\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui\imstb_textedit.h">
+      <Filter>Resource Files\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui\imstb_truetype.h">
+      <Filter>Resource Files\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui\imgui_impl_dx9.h">
+      <Filter>Resource Files\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="imgui\imgui_impl_win32.h">
+      <Filter>Resource Files\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="Hook.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Gui.h">
+      <Filter>Resource</Filter>
+    </ClInclude>
+    <ClInclude Include="Keyboard.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Mem.h">
+      <Filter>Memory</Filter>
+    </ClInclude>
+    <ClInclude Include="Memory.h">
+      <Filter>Memory</Filter>
+    </ClInclude>
+    <ClInclude Include="Define.h">
+      <Filter>Memory</Filter>
+    </ClInclude>
+    <ClInclude Include="engine.h">
+      <Filter>GameSDK</Filter>
+    </ClInclude>
+    <ClInclude Include="sdk.h">
+      <Filter>GameSDK</Filter>
+    </ClInclude>
+    <ClInclude Include="use.h">
+      <Filter>GameSDK</Filter>
+    </ClInclude>
+    <ClInclude Include="Matrix.h">
+      <Filter>GameSDK</Filter>
+    </ClInclude>
+    <ClInclude Include="Web.h">
+      <Filter>Web</Filter>
+    </ClInclude>
+    <ClInclude Include="XOr.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Cammon.h">
+      <Filter>Memory</Filter>
+    </ClInclude>
+    <ClInclude Include="Python.h">
+      <Filter>Python</Filter>
+    </ClInclude>
+    <ClInclude Include="RGB.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AntiCheat.h">
+      <Filter>CodeCracker\AntiCheat</Filter>
+    </ClInclude>
+    <ClInclude Include="Multiple.h">
+      <Filter>CodeCracker\AntiCheat</Filter>
+    </ClInclude>
+    <ClInclude Include="Degsın.h">
+      <Filter>Resource</Filter>
+    </ClInclude>
+    <ClInclude Include="AntiDebug.h">
+      <Filter>CodeCracker\AntiDebug</Filter>
+    </ClInclude>
+    <ClInclude Include="AutoUpdate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SoundEng.h">
+      <Filter>Resource\Sound</Filter>
+    </ClInclude>
+    <ClInclude Include="Login.h">
+      <Filter>Web\Login</Filter>
+    </ClInclude>
+    <ClInclude Include="Radar.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PythonExtension.h">
+      <Filter>GameSDK\Python</Filter>
+    </ClInclude>
+    <ClInclude Include="CheatBlocker.h">
+      <Filter>CodeCracker\KernelCallBack</Filter>
+    </ClInclude>
+    <ClInclude Include="Cfg.h">
+      <Filter>GameSDK</Filter>
+    </ClInclude>
+    <ClInclude Include="BuffSysteam.h">
+      <Filter>GameSDK\Buff</Filter>
+    </ClInclude>
+    <ClInclude Include="CRender.h">
+      <Filter>c4us</Filter>
+    </ClInclude>
+    <ClInclude Include="CDevice.h">
+      <Filter>c4us</Filter>
+    </ClInclude>
+    <ClInclude Include="Shread.h">
+      <Filter>Memory\ShreadMemory</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

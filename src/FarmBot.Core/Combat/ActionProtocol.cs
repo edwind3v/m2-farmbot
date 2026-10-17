@@ -99,6 +99,7 @@ public static class ActionProtocol
     public const string ToggleMount = "toggle_mount";
     public const string SetFarmCircle = "set_farm_circle";
     public const string DumpCaptchaBg = "dump_captcha_bg";
+    public const string DumpMaps = "dump_maps";
     public const int Version = 1;
 
     public static byte[] Encode(object value) => FrameEncode(JsonSerializer.SerializeToUtf8Bytes(value, JsonDefaults.Instance));

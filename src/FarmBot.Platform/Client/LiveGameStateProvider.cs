@@ -588,8 +588,10 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         mapName = "";
         worldW = 0;
         worldH = 0;
-        const uint backgroundRva = 0x48238C;
-        const uint miniMapRva = 0x482BA8;
+        var baerim = SlotStore.IsBaerimPath(process.ImagePath);
+        var backgroundRva = baerim ? 0x3C1763Cu : 0x48238Cu;
+        var miniMapRva = baerim ? 0x3C184A8u : 0x482BA8u;
+        var worldOff = baerim ? 0x418u : 0x328u;
         if (process.TryReadU32(process.ImageBase + backgroundRva, out var background) && IsUserPointer(background))
         {
             if (process.TryReadU32(background + 0x1448, out var map) && IsUserPointer(map))
@@ -606,15 +608,61 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
                     }
                 }
             }
+
+            if (!LooksLikeMapDirectory(mapName))
+                TryScanMapName(process, background, out mapName);
         }
 
+        if (!LooksLikeMapDirectory(mapName) && AtlasPixels.TryReadDumpedCurrentMap(out var dumped))
+            mapName = dumped;
+
         if (process.TryReadU32(process.ImageBase + miniMapRva, out var mini) && IsUserPointer(mini) &&
-            process.TryReadF32(mini + 0x328, out var mw) && process.TryReadF32(mini + 0x32C, out var mh) &&
+            process.TryReadF32(mini + worldOff, out var mw) && process.TryReadF32(mini + worldOff + 4, out var mh) &&
             mw is >= 10000f and <= 500000f && mh is >= 10000f and <= 500000f)
         {
             worldW = mw;
             worldH = mh;
         }
+
+        if ((worldW < 1000 || worldH < 1000) && LooksLikeMapDirectory(mapName))
+            AtlasPixels.TryWorldFromAtlasInfo(AtlasPixels.CacheRoot, mapName, out worldW, out worldH);
+    }
+
+    private static bool LooksLikeMapDirectory(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Length is < 3 or > 48)
+            return false;
+        if (!name.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '/'))
+            return false;
+        return name.Contains("map_", StringComparison.OrdinalIgnoreCase) ||
+               name.Contains("_map", StringComparison.OrdinalIgnoreCase) ||
+               name.StartsWith("metin2_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryScanMapName(ProcessMemory process, uint background, out string mapName)
+    {
+        mapName = "";
+        if (!process.TryRead(background, 0x1800, out var blob) || blob.Length < 8)
+            return false;
+        for (var i = 0; i + 4 <= blob.Length; i += 4)
+        {
+            var ptr = BitConverter.ToUInt32(blob, i);
+            if (!IsUserPointer(ptr))
+                continue;
+            if (TryReadStdString(process, ptr, out var text) && LooksLikeMapDirectory(text))
+            {
+                mapName = text;
+                return true;
+            }
+
+            if (TryReadStdString(process, ptr + 8, out text) && LooksLikeMapDirectory(text))
+            {
+                mapName = text;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private PlayerState? WithFacing(PlayerState? player, Entity? main) =>

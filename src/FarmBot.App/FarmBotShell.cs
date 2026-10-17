@@ -431,6 +431,27 @@ public sealed class FarmBotShell : IDisposable
         Notify();
     }
 
+    public void DumpMaps()
+    {
+        if (_actionSink == null || !_actionSink.Available)
+        {
+            _log.Warn("dump maps: companion is not connected");
+            Notify();
+            return;
+        }
+
+        if (!_actionSink.TryDumpMaps())
+            _log.Warn("dump maps failed: " + _actionSink.Status);
+        else
+        {
+            _atlas = null;
+            _atlasMap = "";
+            _log.Info("dump maps armed; starts after you are in-world. Files go to C:\\Temp\\farmbot-maps");
+        }
+
+        Notify();
+    }
+
     public void SetPotionHpPercent(double value)
     {
         lock (_configGate)
@@ -715,7 +736,15 @@ public sealed class FarmBotShell : IDisposable
     {
         var player = View.Snapshot?.Player;
         var map = player?.MapName ?? "";
-        if (!_live || string.IsNullOrWhiteSpace(map))
+        if (!_live)
+        {
+            AtlasUrl = "";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(map) && AtlasPixels.TryReadDumpedCurrentMap(out var dumped))
+            map = dumped;
+        if (string.IsNullOrWhiteSpace(map))
         {
             AtlasUrl = "";
             return;

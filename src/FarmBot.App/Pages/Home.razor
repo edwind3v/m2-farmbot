@@ -31,6 +31,7 @@
                 @if (Shell.Config.ClientProfile == ClientProfile.Baerim)
                 {
                     <button type="button" class="btn" title="Dump captcha backgrounds to C:\Temp\captcha-bgs" @onclick="Shell.DumpCaptchaBackgrounds">Dump BG</button>
+                    <button type="button" class="btn" title="Dump atlasinfo and map DDS files to C:\Temp\farmbot-maps" @onclick="Shell.DumpMaps">Dump Maps</button>
                 }
             </div>
             <label class="pot-pct">HP <input type="number" min="0" max="100" value="@Shell.Config.PotionHpPercent.ToString("0")" @onchange="OnHpPct" /> %</label>

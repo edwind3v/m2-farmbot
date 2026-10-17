@@ -75,6 +75,15 @@ internal static class Win32
     internal const uint ListModulesAll = 0x03;
     internal const uint SnapModule = 0x00000008;
     internal const uint SnapModule32 = 0x00000010;
+    internal const uint MemCommit = 0x1000;
+    internal const uint MemPrivate = 0x20000;
+    internal const uint MemMapped = 0x40000;
+    internal const uint PageGuard = 0x100;
+    internal const uint PageReadWrite = 0x04;
+    internal const uint PageWriteCopy = 0x08;
+    internal const uint PageExecuteReadWrite = 0x40;
+    internal const uint PageExecuteWriteCopy = 0x80;
+    internal const uint PageWritable = PageReadWrite | PageWriteCopy | PageExecuteReadWrite | PageExecuteWriteCopy;
     internal const int MaxModuleName32 = 255;
     internal const int MaxPath = 260;
 
@@ -83,6 +92,13 @@ internal static class Win32
 
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern UIntPtr VirtualQueryEx(
+        IntPtr hProcess,
+        UIntPtr lpAddress,
+        out MEMORY_BASIC_INFORMATION lpBuffer,
+        UIntPtr dwLength);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern bool ReadProcessMemory(
@@ -132,6 +148,18 @@ internal static class Win32
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern bool Module32NextW(IntPtr hSnapshot, ref MODULEENTRY32W lpme);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MEMORY_BASIC_INFORMATION
+    {
+        public UIntPtr BaseAddress;
+        public UIntPtr AllocationBase;
+        public uint AllocationProtect;
+        public UIntPtr RegionSize;
+        public uint State;
+        public uint Protect;
+        public uint Type;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct MODULEINFO
