@@ -79,6 +79,8 @@ public sealed class BotConfig
     public float MapZoom { get; set; } = 100;
     /// <summary>Draw the farm radius as a ground circle in the game client.</summary>
     public bool DrawFarmCircle { get; set; }
+    /// <summary>In-game farm circle stroke, hex <c>#RRGGBB</c>.</summary>
+    public string FarmCircleColor { get; set; } = "#FF0000";
     public List<uint> IncludeVnums { get; set; } = new();
     public List<uint> ExcludeVnums { get; set; } = new();
     public List<string> NameBlacklist { get; set; } = new();
@@ -168,6 +170,7 @@ public sealed class BotConfig
         FarmRadius = Math.Max(0, FarmRadius);
         MaxFarmDistance = Math.Max(0, MaxFarmDistance);
         MapZoom = Math.Clamp(MapZoom <= 0 ? 100 : MapZoom, 20, 100);
+        FarmCircleColor = NormalizeHexColor(FarmCircleColor);
         IncludeVnums ??= new List<uint>();
         ExcludeVnums ??= new List<uint>();
         LootRange = Math.Max(0, LootRange);
@@ -198,6 +201,25 @@ public sealed class BotConfig
         if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             name = name[prefix.Length..];
         return string.IsNullOrWhiteSpace(name) ? "M2FarmBot" : name;
+    }
+
+    public static string NormalizeHexColor(string? value) =>
+        TryParseRgb(value, out var rgb) ? $"#{rgb:X6}" : "#FF0000";
+
+    public static bool TryParseRgb(string? value, out uint rgb)
+    {
+        rgb = 0xFF0000;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        var hex = value.Trim();
+        if (hex.StartsWith('#'))
+            hex = hex[1..];
+        if (hex.Length == 3)
+            hex = $"{hex[0]}{hex[0]}{hex[1]}{hex[1]}{hex[2]}{hex[2]}";
+        if (hex.Length != 6 || !uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out rgb))
+            return false;
+        rgb &= 0xFFFFFFu;
+        return true;
     }
 }
 

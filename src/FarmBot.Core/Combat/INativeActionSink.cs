@@ -47,7 +47,7 @@ public interface INativeActionSink
     bool TryToggleMount(bool wantMounted = false) => false;
 
     /// <summary>Show/hide the in-game farm radius ground circle.</summary>
-    bool TrySetFarmCircle(bool enabled, bool locked, float radius, float centerX, float centerY) => false;
+    bool TrySetFarmCircle(bool enabled, bool locked, float radius, float centerX, float centerY, uint color = 0xFF0000) => false;
 
     bool TryReadEntities(out IReadOnlyList<EntityState> entities)
     {

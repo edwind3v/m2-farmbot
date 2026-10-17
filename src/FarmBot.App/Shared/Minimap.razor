@@ -10,7 +10,7 @@
         }
         <svg class="minimap" viewBox="0 0 @N(MapW) @N(MapH)" aria-label="Farm map">
             <rect x="0.5" y="0.5" width="@N(MapW - 1)" height="@N(MapH - 1)" rx="8" fill="@(string.IsNullOrEmpty(Shell.AtlasUrl) ? "#0e1016" : "transparent")" stroke="rgba(232,228,218,0.12)" />
-            <ellipse cx="@N(Cx)" cy="@N(Cy)" rx="@N(FarmRx)" ry="@N(FarmRy)" fill="none" stroke="rgba(196,120,58,0.55)" stroke-width="1.2" />
+            <ellipse cx="@N(Cx)" cy="@N(Cy)" rx="@N(FarmRx)" ry="@N(FarmRy)" fill="none" stroke="@Shell.FarmCircleColor" stroke-opacity="0.7" stroke-width="1.2" />
             @if (Shell.Config.RangedAttackEnabled)
             {
                 <ellipse cx="@N(Cx)" cy="@N(Cy)" rx="@N(RangedRx)" ry="@N(RangedRy)" fill="none" stroke="rgba(74,126,196,0.7)" stroke-width="1.2" stroke-dasharray="4 3" />
@@ -44,10 +44,13 @@
             <span>Zoom <b>@Shell.Config.MapZoom.ToString("0")</b></span>
             <input type="range" min="20" max="100" step="1" value="@Shell.Config.MapZoom.ToString(CultureInfo.InvariantCulture)" @oninput="OnZoom" />
         </label>
-        <label class="draw-farm-circle" title="Show the farm radius on the ground in-game; locks to start position when you hit Start">
-            <input type="checkbox" checked="@Shell.DrawFarmCircle" @onchange="() => Shell.ToggleDrawFarmCircle()" />
-            Draw farm circle
-        </label>
+        <div class="draw-farm-circle-row">
+            <label class="draw-farm-circle" title="Show the farm radius on the ground in-game; locks to start position when you hit Start">
+                <input type="checkbox" checked="@Shell.DrawFarmCircle" @onchange="() => Shell.ToggleDrawFarmCircle()" />
+                Draw farm circle
+            </label>
+            <ColorPicker Value="@Shell.FarmCircleColor" ValueChanged="OnCircleColor" />
+        </div>
     </div>
 </div>
 
@@ -89,6 +92,8 @@
         if (float.TryParse(Convert.ToString(e.Value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
             Shell.SetMapZoom(value);
     }
+
+    private void OnCircleColor(string hex) => Shell.SetFarmCircleColor(hex);
 
     private IReadOnlyList<Mark> BuildMarks()
     {

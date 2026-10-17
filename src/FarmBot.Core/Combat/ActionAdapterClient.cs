@@ -500,7 +500,7 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }, updateStatus: false).Ok;
     }
 
-    public bool TrySetFarmCircle(bool enabled, bool locked, float radius, float centerX, float centerY)
+    public bool TrySetFarmCircle(bool enabled, bool locked, float radius, float centerX, float centerY, uint color = 0xFF0000)
     {
         Ensure();
         if (!_client.Connected)
@@ -512,7 +512,8 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
             Avoid = locked,
             Slot = (int)Math.Clamp(radius, 0, 50_000),
             X = centerX,
-            Y = centerY
+            Y = centerY,
+            Color = color
         }, updateStatus: false).Ok;
     }
 

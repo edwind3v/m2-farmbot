@@ -24,6 +24,7 @@ public sealed class ActionRequest
     public int AuthPort { get; set; }
     public int Slot { get; set; }
     public int ChannelIndex { get; set; } = -1;
+    public uint Color { get; set; }
 }
 
 public sealed class ActionResponse

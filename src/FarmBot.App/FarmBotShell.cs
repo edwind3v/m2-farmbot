@@ -33,6 +33,7 @@ public sealed class FarmBotShell : IDisposable
     private float _atlasX;
     private float _atlasY;
     private bool _potsArmed;
+    private bool _farmCircleInWorld;
     private readonly object _farmClockGate = new();
     private long _farmedMs;
     private long _farmSegmentStartMs;
@@ -178,6 +179,24 @@ public sealed class FarmBotShell : IDisposable
         Notify();
     }
 
+    public string FarmCircleColor
+    {
+        get
+        {
+            lock (_configGate)
+                return BotConfig.NormalizeHexColor(_config.FarmCircleColor);
+        }
+    }
+
+    public void SetFarmCircleColor(string hex)
+    {
+        lock (_configGate)
+            _config.FarmCircleColor = BotConfig.NormalizeHexColor(hex);
+        if (DrawFarmCircle)
+            ScheduleFarmCirclePush();
+        Notify();
+    }
+
     private CancellationTokenSource? _farmCirclePushCts;
 
     private void ScheduleFarmCirclePush()
@@ -202,6 +221,37 @@ public sealed class FarmBotShell : IDisposable
         }
     }
 
+    private void MaybePushFarmCircleForWorld()
+    {
+        var inWorld = FarmCircleWorldReady();
+        if (!inWorld)
+        {
+            _farmCircleInWorld = false;
+            return;
+        }
+
+        if (_farmCircleInWorld)
+            return;
+        _farmCircleInWorld = true;
+        if (DrawFarmCircle)
+            PushFarmCircle();
+    }
+
+    private bool FarmCircleWorldReady()
+    {
+        var snap = View.Snapshot;
+        if (snap == null)
+            return false;
+        if (snap.Entities.Count > 0)
+            return true;
+        var player = snap.Player;
+        if (player.MaxHp > 0 && player.Level >= 1 && (Math.Abs(player.X) > 1 || Math.Abs(player.Y) > 1))
+            return true;
+        if (!string.IsNullOrWhiteSpace(player.Name) && player.MaxHp > 0)
+            return true;
+        return QuickPlayOrchestrator.IsGame(View.GamePhase);
+    }
+
     private void PushFarmCircle()
     {
         if (_actionSink == null || !_actionSink.Available)
@@ -210,18 +260,20 @@ public sealed class FarmBotShell : IDisposable
         float radius;
         float cx;
         float cy;
+        uint color;
         lock (_configGate)
         {
             draw = _config.DrawFarmCircle;
             radius = _config.FarmRadius;
             cx = _config.FarmCenterX;
             cy = _config.FarmCenterY;
+            BotConfig.TryParseRgb(_config.FarmCircleColor, out color);
         }
 
         var view = _runtime?.Capture();
         var botOn = view is { Enabled: true, RangedOnly: false };
         var locked = draw && botOn && radius > 0;
-        if (!_actionSink.TrySetFarmCircle(draw, locked, radius, cx, cy))
+        if (!_actionSink.TrySetFarmCircle(draw, locked, radius, cx, cy, color))
             _log.Warn("set farm circle failed: " + _actionSink.Status);
     }
 
@@ -442,6 +494,7 @@ public sealed class FarmBotShell : IDisposable
             TrackKills();
             ArmFoundPots();
             RefreshAtlas();
+            MaybePushFarmCircleForWorld();
             Notify();
         }
         catch (Exception ex)

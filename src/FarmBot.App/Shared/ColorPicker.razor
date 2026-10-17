@@ -1,0 +1,272 @@
+@inject IJSRuntime JS
+
+<div class="color-picker">
+    <button type="button" class="color-swatch-btn" @ref="_swatch" title="Circle color" @onclick="Toggle" @onclick:stopPropagation="true">
+        <span style="background:@Hex"></span>
+    </button>
+    @if (_open)
+    {
+        <div class="color-picker-back" @onclick="Close"></div>
+        <div class="color-picker-pop" style="@PopStyle" @onclick:stopPropagation="true">
+            <div class="cp-head">
+                <span class="cp-current" style="background:@Hex" title="Current color"></span>
+                <button type="button" class="cp-mode @(_rgbMode ? null : "on")" @onclick="() => _rgbMode = false">
+                    Hex <b>@Hex</b>
+                </button>
+                <button type="button" class="cp-mode @(_rgbMode ? "on" : null)" @onclick="() => _rgbMode = true">
+                    RGB <b>@_r, @_g, @_b</b>
+                </button>
+                <button type="button" class="cp-close" title="Close" @onclick="Close">
+                    <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3L3 9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <div class="cp-sv" style="--hue:@HueCss" @onpointerdown="OnSvDown" @onpointermove="OnSvMove" @onpointerup="OnPointerUp">
+                <i class="cp-sv-thumb" style="left:@SvLeft; top:@SvTop; background:@Hex"></i>
+            </div>
+            <div class="cp-hue" @onpointerdown="OnHueDown" @onpointermove="OnHueMove" @onpointerup="OnPointerUp">
+                <i class="cp-hue-thumb" style="left:@HueLeft; background:@HueCss"></i>
+            </div>
+            <div class="cp-presets">
+                @foreach (var preset in Presets)
+                {
+                    <button type="button" class="cp-preset @(string.Equals(preset, Hex, StringComparison.OrdinalIgnoreCase) ? "on" : null)" style="background:@preset" title="@preset" @onclick="() => PickPreset(preset)"></button>
+                }
+            </div>
+            <div class="cp-hex-row">
+                <span class="cp-hex-chip" style="background:@Hex"></span>
+                @if (_rgbMode)
+                {
+                    <input class="cp-hex-field" value="@($"{_r}, {_g}, {_b}")" maxlength="15" spellcheck="false" @oninput="OnRgbTyped" @onclick:stopPropagation="true" />
+                }
+                else
+                {
+                    <input class="cp-hex-field" value="@Hex" maxlength="7" spellcheck="false" @oninput="OnHexTyped" @onclick:stopPropagation="true" />
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly string[] Presets =
+    {
+        "#FF3B30", "#FF8A2B", "#C4783A", "#FFD60A", "#30D158",
+        "#64D2FF", "#0A84FF", "#BF5AF2", "#FFFFFF", "#1C1C1E"
+    };
+
+    [Parameter] public string Value { get; set; } = "#FF0000";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private ElementReference _swatch;
+    private bool _open;
+    private bool _placed;
+    private bool _rgbMode;
+    private bool _svDrag;
+    private bool _hueDrag;
+    private double _h = 0;
+    private double _s = 1;
+    private double _v = 1;
+    private int _r = 255;
+    private int _g;
+    private int _b;
+    private string _popStyle = "";
+
+    private string Hex => $"#{_r:X2}{_g:X2}{_b:X2}";
+    private string HueCss => HsvToCss(_h, 1, 1);
+    private string SvLeft => $"{_s * 100:0.##}%";
+    private string SvTop => $"{(1 - _v) * 100:0.##}%";
+    private string HueLeft => $"{_h / 360 * 100:0.##}%";
+    private string PopStyle => _placed ? _popStyle : "visibility:hidden";
+
+    protected override void OnParametersSet()
+    {
+        if (_svDrag || _hueDrag)
+            return;
+        var next = BotConfig.NormalizeHexColor(Value);
+        if (string.Equals(next, Hex, StringComparison.OrdinalIgnoreCase))
+            return;
+        if (BotConfig.TryParseRgb(next, out var rgb))
+            ApplyRgb((int)((rgb >> 16) & 255), (int)((rgb >> 8) & 255), (int)(rgb & 255), false);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_open || _placed)
+            return;
+        try
+        {
+            var rect = await JS.InvokeAsync<RectDto>("farmRect", _swatch);
+            const double popW = 268;
+            const double popH = 292;
+            var left = rect.X + rect.W + 10;
+            if (left + popW > rect.Vw - 8)
+                left = Math.Max(8, rect.X - popW - 10);
+            var top = rect.Y - 8;
+            if (top + popH > rect.Vh - 8)
+                top = Math.Max(8, rect.Vh - popH - 8);
+            _popStyle = $"left:{left.ToString(System.Globalization.CultureInfo.InvariantCulture)}px;top:{top.ToString(System.Globalization.CultureInfo.InvariantCulture)}px";
+            _placed = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            _popStyle = "left:260px;top:120px";
+            _placed = true;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void Toggle()
+    {
+        _open = !_open;
+        _placed = false;
+        if (_open && BotConfig.TryParseRgb(Value, out var rgb))
+            ApplyRgb((int)((rgb >> 16) & 255), (int)((rgb >> 8) & 255), (int)(rgb & 255), false);
+    }
+
+    private void Close()
+    {
+        _open = false;
+        _svDrag = false;
+        _hueDrag = false;
+    }
+
+    private void PickPreset(string hex)
+    {
+        if (!BotConfig.TryParseRgb(hex, out var rgb))
+            return;
+        ApplyRgb((int)((rgb >> 16) & 255), (int)((rgb >> 8) & 255), (int)(rgb & 255), true);
+    }
+
+    private void OnSvDown(PointerEventArgs e)
+    {
+        _svDrag = true;
+        SampleSv(e);
+    }
+
+    private void OnSvMove(PointerEventArgs e)
+    {
+        if (_svDrag || (e.Buttons & 1) != 0)
+            SampleSv(e);
+    }
+
+    private void OnHueDown(PointerEventArgs e)
+    {
+        _hueDrag = true;
+        SampleHue(e);
+    }
+
+    private void OnHueMove(PointerEventArgs e)
+    {
+        if (_hueDrag || (e.Buttons & 1) != 0)
+            SampleHue(e);
+    }
+
+    private void OnPointerUp(PointerEventArgs e)
+    {
+        _svDrag = false;
+        _hueDrag = false;
+    }
+
+    private void SampleSv(PointerEventArgs e)
+    {
+        const double w = 244;
+        const double h = 132;
+        _s = Math.Clamp(e.OffsetX / w, 0, 1);
+        _v = 1 - Math.Clamp(e.OffsetY / h, 0, 1);
+        HsvToRgb(_h, _s, _v, out _r, out _g, out _b);
+        _ = Emit();
+    }
+
+    private void SampleHue(PointerEventArgs e)
+    {
+        const double w = 244;
+        _h = Math.Clamp(e.OffsetX / w, 0, 1) * 360;
+        HsvToRgb(_h, _s, _v, out _r, out _g, out _b);
+        _ = Emit();
+    }
+
+    private void OnHexTyped(ChangeEventArgs e)
+    {
+        var text = Convert.ToString(e.Value) ?? "";
+        if (BotConfig.TryParseRgb(text, out var rgb))
+            ApplyRgb((int)((rgb >> 16) & 255), (int)((rgb >> 8) & 255), (int)(rgb & 255), true);
+    }
+
+    private void OnRgbTyped(ChangeEventArgs e)
+    {
+        var parts = (Convert.ToString(e.Value) ?? "").Split(',', StringSplitOptions.TrimEntries);
+        if (parts.Length != 3)
+            return;
+        if (!int.TryParse(parts[0], out var r) || !int.TryParse(parts[1], out var g) || !int.TryParse(parts[2], out var b))
+            return;
+        ApplyRgb(Math.Clamp(r, 0, 255), Math.Clamp(g, 0, 255), Math.Clamp(b, 0, 255), true);
+    }
+
+    private void ApplyRgb(int r, int g, int b, bool emit)
+    {
+        _r = r;
+        _g = g;
+        _b = b;
+        RgbToHsv(r, g, b, out _h, out _s, out _v);
+        if (emit)
+            _ = Emit();
+    }
+
+    private Task Emit() => ValueChanged.InvokeAsync(Hex);
+
+    private static void RgbToHsv(int r, int g, int b, out double h, out double s, out double v)
+    {
+        var rd = r / 255.0;
+        var gd = g / 255.0;
+        var bd = b / 255.0;
+        var max = Math.Max(rd, Math.Max(gd, bd));
+        var min = Math.Min(rd, Math.Min(gd, bd));
+        v = max;
+        var d = max - min;
+        s = max <= 0 ? 0 : d / max;
+        if (d < 1e-9)
+            h = 0;
+        else if (Math.Abs(max - rd) < 1e-9)
+            h = 60 * (((gd - bd) / d) % 6);
+        else if (Math.Abs(max - gd) < 1e-9)
+            h = 60 * ((bd - rd) / d + 2);
+        else
+            h = 60 * ((rd - gd) / d + 4);
+        if (h < 0)
+            h += 360;
+    }
+
+    private static void HsvToRgb(double h, double s, double v, out int r, out int g, out int b)
+    {
+        var c = v * s;
+        var x = c * (1 - Math.Abs(h / 60 % 2 - 1));
+        var m = v - c;
+        double rd, gd, bd;
+        if (h < 60) { rd = c; gd = x; bd = 0; }
+        else if (h < 120) { rd = x; gd = c; bd = 0; }
+        else if (h < 180) { rd = 0; gd = c; bd = x; }
+        else if (h < 240) { rd = 0; gd = x; bd = c; }
+        else if (h < 300) { rd = x; gd = 0; bd = c; }
+        else { rd = c; gd = 0; bd = x; }
+        r = (int)Math.Round((rd + m) * 255);
+        g = (int)Math.Round((gd + m) * 255);
+        b = (int)Math.Round((bd + m) * 255);
+    }
+
+    private static string HsvToCss(double h, double s, double v)
+    {
+        HsvToRgb(h, s, v, out var r, out var g, out var b);
+        return $"#{r:X2}{g:X2}{b:X2}";
+    }
+
+    private sealed class RectDto
+    {
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double W { get; set; }
+        public double H { get; set; }
+        public double Vw { get; set; }
+        public double Vh { get; set; }
+    }
+}

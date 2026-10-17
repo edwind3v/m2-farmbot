@@ -30,6 +30,12 @@
                 this.ref.invokeMethodAsync('DragFromJs');
             }
         };
+        window.farmRect = function (el) {
+            if (!el || !el.getBoundingClientRect)
+                return { x: 0, y: 0, w: 0, h: 0, vw: 0, vh: 0 };
+            var r = el.getBoundingClientRect();
+            return { x: r.left, y: r.top, w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight };
+        };
     </script>
     <script src="_framework/blazor.webview.js"></script>
 </body>

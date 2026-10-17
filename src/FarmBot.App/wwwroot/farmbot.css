@@ -294,6 +294,13 @@
     gap: 6px;
 }
 
+.draw-farm-circle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
 .draw-farm-circle {
     display: flex;
     align-items: center;
@@ -304,10 +311,222 @@
     text-transform: uppercase;
     cursor: pointer;
     user-select: none;
+    min-width: 0;
 }
 
 .draw-farm-circle input {
     accent-color: var(--accent, #c4783a);
+}
+
+.color-picker {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.color-swatch-btn {
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    padding: 2px;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    background: var(--panel);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+}
+
+.color-swatch-btn:hover {
+    border-color: var(--accent-border);
+}
+
+.color-swatch-btn span {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: block;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.color-picker-back {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+}
+
+.color-picker-pop {
+    position: fixed;
+    z-index: 81;
+    width: 268px;
+    padding: 12px;
+    border-radius: 12px;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 16px 36px var(--modal-back);
+}
+
+.cp-head {
+    display: grid;
+    grid-template-columns: 22px 1fr 1fr 22px;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.cp-current {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.cp-mode {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+    color: var(--muted);
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: 0.01em;
+    min-width: 0;
+}
+
+.cp-mode.on {
+    color: var(--text);
+}
+
+.cp-mode b {
+    display: block;
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0;
+    color: inherit;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cp-close {
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    padding: 0;
+}
+
+.cp-close:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+.cp-close svg {
+    width: 10px;
+    height: 10px;
+}
+
+.cp-sv {
+    position: relative;
+    width: 244px;
+    height: 132px;
+    border-radius: 10px;
+    border: 1px solid var(--line-strong);
+    background:
+        linear-gradient(to top, #000, transparent),
+        linear-gradient(to right, #fff, var(--hue));
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.cp-sv-thumb,
+.cp-hue-thumb {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.28), 0 1px 4px rgba(0, 0, 0, 0.2);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    top: 50%;
+}
+
+.cp-sv-thumb {
+    top: 0;
+}
+
+.cp-hue {
+    position: relative;
+    width: 244px;
+    height: 14px;
+    margin-top: 10px;
+    border-radius: 99px;
+    border: 1px solid var(--line-strong);
+    cursor: pointer;
+    touch-action: none;
+    background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+.cp-presets {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.cp-preset {
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    padding: 0;
+    cursor: pointer;
+}
+
+.cp-preset.on {
+    box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--accent-2);
+}
+
+.cp-hex-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: var(--ink);
+    border: 1px solid var(--line);
+}
+
+.cp-hex-chip {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    flex: 0 0 auto;
+}
+
+.cp-hex-field {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    outline: none;
+    text-transform: uppercase;
 }
 
 .slider {

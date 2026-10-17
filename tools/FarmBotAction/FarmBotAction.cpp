@@ -272,6 +272,8 @@ struct Command
     int authPort;
     int slot;
     int channelIndex;
+    int hasColor;
+    unsigned color;
 };
 
 static BYTE* g_base;
@@ -407,6 +409,9 @@ static volatile long g_farmCircleLocked;
 static float g_farmCircleR;
 static float g_farmCircleX;
 static float g_farmCircleY;
+static float g_farmCircleCr = 1.f;
+static float g_farmCircleCg = 0.f;
+static float g_farmCircleCb = 0.f;
 static int g_farmCircleHooked;
 static int g_farmCircleLogged;
 static int g_camOk;
@@ -2248,6 +2253,8 @@ static void RefreshSession()
     {
         g_sessionPhase = "Game";
         g_openedGameWindow = 1;
+        if (g_farmCircleOn)
+            EnsureFarmCircleHook();
     }
 }
 
@@ -8453,6 +8460,12 @@ static void Execute(const Command& cmd)
         g_farmCircleR = cmd.slot > 0 ? (float)cmd.slot : 0.f;
         g_farmCircleX = cmd.x;
         g_farmCircleY = cmd.y;
+        if (cmd.hasColor)
+        {
+            g_farmCircleCr = ((cmd.color >> 16) & 255) / 255.f;
+            g_farmCircleCg = ((cmd.color >> 8) & 255) / 255.f;
+            g_farmCircleCb = (cmd.color & 255) / 255.f;
+        }
         g_farmCircleLogged = 0;
         g_vpLogged = 0;
         g_vpOk = 0;
@@ -10695,8 +10708,8 @@ static void DrawFarmRingOnTerrain(const char* where)
     }
     OverlayVert verts[512];
     int nVert = 0;
-    const float hx = 3.f * 2.f / vw;
-    const float hy = 3.f * 2.f / vh;
+    const float hx = 1.f * 2.f / vw;
+    const float hy = 1.f * 2.f / vh;
     for (int i = 0; i < segs && nVert + 6 <= 512; ++i)
     {
         if (sx[i] < -9000.f || sx[i + 1] < -9000.f)
@@ -10714,10 +10727,10 @@ static void DrawFarmRingOnTerrain(const char* where)
         dy /= len;
         const float px = -dy * hx;
         const float py = dx * hy;
-        OverlayVert a0 = { ax - px, ay - py, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
-        OverlayVert a1 = { ax + px, ay + py, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
-        OverlayVert b0 = { bx - px, by - py, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
-        OverlayVert b1 = { bx + px, by + py, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
+        OverlayVert a0 = { ax - px, ay - py, 0.f, 1.f, g_farmCircleCr, g_farmCircleCg, g_farmCircleCb, 1.f };
+        OverlayVert a1 = { ax + px, ay + py, 0.f, 1.f, g_farmCircleCr, g_farmCircleCg, g_farmCircleCb, 1.f };
+        OverlayVert b0 = { bx - px, by - py, 0.f, 1.f, g_farmCircleCr, g_farmCircleCg, g_farmCircleCb, 1.f };
+        OverlayVert b1 = { bx + px, by + py, 0.f, 1.f, g_farmCircleCr, g_farmCircleCg, g_farmCircleCb, 1.f };
         verts[nVert++] = a0;
         verts[nVert++] = a1;
         verts[nVert++] = b0;
@@ -11163,10 +11176,13 @@ static HRESULT __stdcall HookDXGIPresent(void* sc, UINT sync, UINT flags)
 
 static void HookDummyDXGI()
 {
-    static int s_done;
-    if (s_done)
+    if (g_origDXGIPresent)
         return;
-    s_done = 1;
+    static DWORD s_lastTry;
+    const DWORD now = GetTickCount();
+    if (s_lastTry && now - s_lastTry < 1000)
+        return;
+    s_lastTry = now;
     HWND w = CreateWindowExA(0, "STATIC", "fbdx", WS_POPUP, 0, 0, 8, 8, nullptr, nullptr, GetModuleHandleA(nullptr), nullptr);
     if (!w)
         w = GetDesktopWindow();
@@ -12099,6 +12115,8 @@ static void Serve()
         cmd.channelIndex = json.find("\"channelIndex\"") != std::string::npos
             ? (int)JsonU32(json, "channelIndex")
             : -1;
+        cmd.hasColor = json.find("\"color\"") != std::string::npos ? 1 : 0;
+        cmd.color = JsonU32(json, "color");
         if (!TokensEqual(JsonString(json, "token"), g_token))
         {
             WriteFrame("{\"ok\":false,\"type\":\"error\",\"reason\":\"unauthorized\",\"targetVid\":0,\"convention\":\"loop-iat\"}");
