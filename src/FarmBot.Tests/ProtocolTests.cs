@@ -118,12 +118,13 @@ public class ProtocolTests
     [Fact]
     public void DecodesHudReplyAccountWithoutConfusingItForCharacter()
     {
-        var json = """{"ok":true,"type":"get_hud","reason":"hud","character":"Hero","account":"loginid","password":"secret","characterSlot":0}""";
+        var json = """{"ok":true,"type":"get_hud","reason":"hud","character":"Hero","account":"loginid","password":"secret","characterSlot":0,"map":"map_a2"}""";
         var response = ActionProtocol.DecodeResponse(Encoding.UTF8.GetBytes(json));
         Assert.Equal("loginid", response.Account);
         Assert.Equal("Hero", response.Character);
         Assert.Equal("secret", response.Password);
         Assert.Equal(0, response.CharacterSlot);
+        Assert.Equal("map_a2", response.Map);
     }
 
     [Fact]

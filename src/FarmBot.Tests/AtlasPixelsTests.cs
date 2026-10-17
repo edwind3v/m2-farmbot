@@ -33,7 +33,44 @@ public class AtlasPixelsTests
         var tight = atlas.ToCroppedBmpUrl(64000, 73000, 16000, w, h);
         var wide = atlas.ToCroppedBmpUrl(64000, 73000, 50000, w, h);
         Assert.NotEqual(tight, wide);
-        Assert.True(AtlasPixels.MinimapViewRadius(100, w, h) > AtlasPixels.MinimapViewRadius(20, w, h) * 1.5);
+        Assert.InRange(AtlasPixels.MinimapViewRadius(w, h), 28000f, 36000f);
+        Assert.True(AtlasPixels.MinimapViewRadius(w, h) < Math.Max(w, h) * 0.45f);
+        Assert.Equal(280f, AtlasPixels.RadarUnitsPerPixel);
+        Assert.True(AtlasPixels.TryWorldToMap(76800, 38400, 153600, 153600, 240, 240, out var mx, out var my));
+        Assert.Equal(120f, mx, 1);
+        Assert.Equal(60f, my, 1);
+    }
+
+    [Fact]
+    public void ResolvesCurrentMapFromDumpCache()
+    {
+        var root = AtlasPixels.CacheRoot;
+        Directory.CreateDirectory(root);
+        var current = Path.Combine(root, "current.txt");
+        string? previous = null;
+        if (File.Exists(current))
+            previous = File.ReadAllText(current);
+        File.WriteAllText(current, "maps/map_a2\r\n");
+        try
+        {
+            Assert.True(AtlasPixels.TryResolveMap("", out var map, out _, out _));
+            Assert.Equal("map_a2", map);
+            Assert.True(AtlasPixels.TryResolveMap("metin2_map_a2", out map, out _, out _));
+            Assert.Equal("metin2_map_a2", map);
+        }
+        finally
+        {
+            try
+            {
+                if (previous != null)
+                    File.WriteAllText(current, previous);
+                else if (File.Exists(current))
+                    File.Delete(current);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 
     [Fact]
@@ -78,6 +115,9 @@ public class AtlasPixelsTests
             Assert.Equal(64, atlas.Width);
             Assert.Equal(64, atlas.Height);
             Assert.Equal(51200f, atlas.WorldW);
+            var full = atlas.ToFullBmpUrl();
+            Assert.StartsWith("data:image/bmp;base64,", full);
+            Assert.Equal(full, atlas.ToFullBmpUrl());
         }
         finally
         {

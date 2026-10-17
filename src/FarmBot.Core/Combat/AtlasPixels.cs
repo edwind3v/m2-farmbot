@@ -66,16 +66,26 @@ public sealed class AtlasPixels
             var path = Path.Combine(CacheRoot, "current.txt");
             if (!File.Exists(path))
                 return false;
-            mapName = File.ReadAllText(path).Trim().Replace('\\', '/');
-            var slash = mapName.LastIndexOf('/');
-            if (slash >= 0)
-                mapName = mapName[(slash + 1)..];
+            mapName = SanitizeMapFolder(File.ReadAllText(path));
             return mapName.Length >= 3;
         }
         catch (IOException)
         {
             return false;
         }
+    }
+
+    public static bool TryResolveMap(string? preferred, out string mapName, out float worldW, out float worldH)
+    {
+        mapName = SanitizeMapFolder(preferred ?? "");
+        if (mapName.Length < 3)
+            TryReadDumpedCurrentMap(out mapName);
+        worldW = 0;
+        worldH = 0;
+        if (mapName.Length < 3)
+            return false;
+        TryWorldFromAtlasInfo(CacheRoot, mapName, out worldW, out worldH);
+        return true;
     }
 
     public static bool TryOpen(out AtlasPixels atlas)
@@ -612,18 +622,36 @@ public sealed class AtlasPixels
         return bl | (g << 8) | (r << 16);
     }
 
-    public static float MinimapViewRadius(float zoom, float worldW, float worldH)
+    /// <summary>Local follow-camera half-extent. About 40% of a typical map, not the whole atlas.</summary>
+    public const float RadarUnitsPerPixel = 280f;
+
+    /// <summary>FarmBot stage half-width in <c>Minimap.razor</c> (HalfW).</summary>
+    public const float RadarViewHalfPx = 114f;
+
+    public static float MinimapViewRadius(float worldW = 0, float worldH = 0)
     {
-        zoom = Math.Clamp(zoom, 20, 100);
         var map = Math.Max(worldW, worldH);
         if (map < 1000)
-            map = 102400f;
-        var close = Math.Clamp(map * 0.10f, 14000f, 28000f);
-        var wide = Math.Clamp(map * 0.38f, 36000f, 80000f);
-        if (wide < close + 8000f)
-            wide = close + 8000f;
-        var t = (zoom - 20f) / 80f;
-        return close + t * (wide - close);
+            return RadarViewHalfPx * RadarUnitsPerPixel;
+        return Math.Clamp(map * 0.20f, 28000f, 36000f);
+    }
+
+    public static bool TryWorldToMap(float worldX, float worldY, float worldW, float worldH, float mapW, float mapH, out float x, out float y)
+    {
+        x = 0;
+        y = 0;
+        if (worldW < 1000 || worldH < 1000 || mapW < 8 || mapH < 8)
+            return false;
+        x = Math.Abs(worldX) / worldW * mapW;
+        y = Math.Abs(worldY) / worldH * mapH;
+        return true;
+    }
+
+    public string ToFullBmpUrl()
+    {
+        if (!HasImage)
+            return "";
+        return "data:image/bmp;base64," + Convert.ToBase64String(ToBmp(Bgra, Width, Height));
     }
 
     public string ToCroppedBmpUrl(float worldX, float worldY, float viewRadius, float worldW = 0, float worldH = 0, int outSize = 256)
@@ -635,8 +663,8 @@ public sealed class AtlasPixels
         var w = worldW >= 1000 ? worldW : WorldW;
         var h = worldH >= 1000 ? worldH : WorldH;
         var hasWorld = w >= 1000 && h >= 1000;
-        if (worldY < 0)
-            worldY = -worldY;
+        worldX = Math.Abs(worldX);
+        worldY = Math.Abs(worldY);
         viewRadius = Math.Max(200, viewRadius);
         var cx = hasWorld ? worldX / w * (Width - 1) : Width * 0.5f;
         var cy = hasWorld ? worldY / h * (Height - 1) : Height * 0.5f;

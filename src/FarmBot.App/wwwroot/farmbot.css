@@ -40,6 +40,8 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    height: 100%;
+    overflow: hidden;
     background: var(--ink-2);
     padding: 8px 8px 6px;
     gap: 8px;
@@ -110,6 +112,8 @@
 .rail-map .minimap-wrap {
     width: 100%;
     min-height: 0;
+    flex: 1 1 auto;
+    height: 100%;
 }
 
 .rail-status {
@@ -262,12 +266,22 @@
 .minimap-stage {
     position: relative;
     width: 100%;
-    aspect-ratio: 16 / 10;
+    min-height: 220px;
     border-radius: 10px;
     overflow: hidden;
     border: 1px solid var(--line);
     background: #0e1016;
-    flex: 0 0 auto;
+    flex: 1 1 auto;
+}
+
+.minimap-stage.empty {
+    background-color: #0e1016;
+    background-image:
+        linear-gradient(rgba(232, 228, 218, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(232, 228, 218, 0.06) 1px, transparent 1px),
+        linear-gradient(rgba(232, 228, 218, 0.12) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(232, 228, 218, 0.12) 1px, transparent 1px);
+    background-size: 16px 16px, 16px 16px, 64px 64px, 64px 64px;
 }
 
 .minimap-atlas {
@@ -275,7 +289,7 @@
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
     pointer-events: none;
 }
 

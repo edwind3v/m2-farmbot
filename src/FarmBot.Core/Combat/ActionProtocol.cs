@@ -61,6 +61,7 @@ public sealed class ActionResponse
     public int GreenRemain { get; set; }
     public int PurpleRemain { get; set; }
     public bool Mounted { get; set; }
+    public string Map { get; set; } = "";
     public System.Text.Json.JsonElement Affects { get; set; }
     /// <summary>Affect types removed since the last use_skill arm (toggle detection).</summary>
     public System.Text.Json.JsonElement CastRemoved { get; set; }

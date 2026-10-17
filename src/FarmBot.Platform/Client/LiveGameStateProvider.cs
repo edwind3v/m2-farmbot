@@ -646,6 +646,12 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             return false;
         for (var i = 0; i + 4 <= blob.Length; i += 4)
         {
+            if (TryReadStdString(process, background + (uint)i, out var embedded) && LooksLikeMapDirectory(embedded))
+            {
+                mapName = embedded;
+                return true;
+            }
+
             var ptr = BitConverter.ToUInt32(blob, i);
             if (!IsUserPointer(ptr))
                 continue;
@@ -670,7 +676,7 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
 
     private float MinimapFacing(Entity? main)
     {
-        if (main != null && !float.IsNaN(main.Rotation))
+        if (main != null && !float.IsNaN(main.Rotation) && Math.Abs(main.Rotation) > 0.5f)
         {
             var deg = 540f - main.Rotation;
             while (deg >= 360f)

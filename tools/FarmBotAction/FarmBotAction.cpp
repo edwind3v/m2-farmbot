@@ -343,6 +343,8 @@ static DWORD g_mapsDumpLastMs;
 static int g_mapsDumpGot;
 static int g_mapsDumpMiss;
 static size_t g_mapsDumpIndex;
+static char g_currentMap[96];
+static DWORD g_mapNameMs;
 struct MapDumpItem { char virt[260]; char dest[260]; };
 static std::vector<MapDumpItem> g_mapsQueue;
 static char g_dumpVirt[260];
@@ -6269,6 +6271,160 @@ static void MapsWriteCurrent(const char* mapName)
     WriteBytes("C:\\Temp\\farmbot-maps\\current.txt", mapName, (int)strlen(mapName));
 }
 
+static int MapsLooksLikeMapDir(const char* s)
+{
+    if (!s || !s[0])
+        return 0;
+    const int n = (int)strlen(s);
+    if (n < 3 || n > 48)
+        return 0;
+    for (int i = 0; i < n; ++i)
+    {
+        const unsigned char c = (unsigned char)s[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '-' || c == '/'))
+            return 0;
+    }
+    return strstr(s, "map_") || strstr(s, "_map") || strstr(s, "metin2_") ? 1 : 0;
+}
+
+static int MapsReadStdString(const void* obj, char* out, int cap)
+{
+    if (!obj || !out || cap < 4)
+        return 0;
+    out[0] = 0;
+    __try
+    {
+        const unsigned char* p = (const unsigned char*)obj;
+        const unsigned size = *(const unsigned*)(p + 16);
+        const unsigned capc = *(const unsigned*)(p + 20);
+        const char* src = nullptr;
+        unsigned n = 0;
+        if (size <= 64 && capc >= 16 && capc < 0x10000)
+        {
+            src = *(const char* const*)p;
+            n = size;
+        }
+        else if (size > 0 && size <= 15)
+        {
+            src = (const char*)p;
+            n = size;
+        }
+        else
+        {
+            const unsigned oldSize = *(const unsigned*)(p + 4);
+            if (oldSize > 0 && oldSize <= 64)
+            {
+                src = *(const char* const*)p;
+                n = oldSize;
+            }
+        }
+        if (!src || n == 0 || n >= (unsigned)cap)
+            return 0;
+        memcpy(out, src, n);
+        out[n] = 0;
+        return out[0] ? 1 : 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        out[0] = 0;
+        return 0;
+    }
+}
+
+static int MapsScanBackground(char* out, int cap)
+{
+    if (!out || cap < 4)
+        return 0;
+    out[0] = 0;
+    if (!g_base || !kBgSingletonRva)
+        return 0;
+    __try
+    {
+        void* bg = *(void**)(g_base + kBgSingletonRva);
+        if (!bg)
+            return 0;
+        const unsigned char* p = (const unsigned char*)bg;
+        for (int i = 0; i < 0x1800; i += 4)
+        {
+            char text[64];
+            if (MapsReadStdString(p + i, text, 64) && MapsLooksLikeMapDir(text))
+            {
+                lstrcpynA(out, text, cap);
+                return 1;
+            }
+            void* ptr = *(void* const*)(p + i);
+            if ((unsigned)(uintptr_t)ptr < 0x10000 || (unsigned)(uintptr_t)ptr > 0x7FFE0000)
+                continue;
+            if (MapsReadStdString(ptr, text, 64) && MapsLooksLikeMapDir(text))
+            {
+                lstrcpynA(out, text, cap);
+                return 1;
+            }
+            if (MapsReadStdString((char*)ptr + 8, text, 64) && MapsLooksLikeMapDir(text))
+            {
+                lstrcpynA(out, text, cap);
+                return 1;
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+    return 0;
+}
+
+static void MapsRefreshCurrent()
+{
+    if (!g_inWorld || !g_openedGameWindow)
+        return;
+    const DWORD now = GetTickCount();
+    if (g_mapNameMs && now - g_mapNameMs < 2000)
+        return;
+    g_mapNameMs = now;
+
+    char name[96];
+    name[0] = 0;
+    MapsScanBackground(name, 96);
+    if (!name[0])
+    {
+        SafePyRunAfterPeek(
+            "try:\n"
+            " import background\n"
+            " n=background.GetCurrentMapName()\n"
+            " f=open(r'C:\\Temp\\farmbot-maps\\current.txt','wb')\n"
+            " f.write(str(n or ''))\n"
+            " f.close()\n"
+            "except:\n"
+            " pass\n");
+        FILE* cf = nullptr;
+        if (fopen_s(&cf, "C:\\Temp\\farmbot-maps\\current.txt", "rb") == 0 && cf)
+        {
+            const size_t n = fread(name, 1, 95, cf);
+            fclose(cf);
+            name[n] = 0;
+            for (char* p = name; *p; ++p)
+            {
+                if (*p == '\r' || *p == '\n')
+                    *p = 0;
+            }
+        }
+    }
+    if (!MapsLooksLikeMapDir(name))
+        return;
+    char leaf[96];
+    MapsSanitize(name, leaf, 96);
+    if (!leaf[0])
+        return;
+    if (_stricmp(g_currentMap, leaf) != 0)
+    {
+        lstrcpynA(g_currentMap, leaf, (int)sizeof(g_currentMap));
+        NativeLog("current map %s", g_currentMap);
+    }
+    MapsWriteCurrent(g_currentMap);
+}
+
 static void MapsBuildQueue()
 {
     g_mapsQueue.clear();
@@ -9522,6 +9678,7 @@ static void AfterPeek()
     CaptchaTick();
     DumpCaptchaStep();
     DumpMapsStep();
+    MapsRefreshCurrent();
 }
 
 static BOOL WINAPI HookPeekA(LPMSG msg, HWND hwnd, UINT min, UINT max, UINT remove)
@@ -12891,9 +13048,11 @@ static void Serve()
         reply += (!g_charactersJson.empty() &&
                   (cmd.type == "get_session" || cmd.type == "get_phase" || cmd.type == "select_character"))
             ? g_charactersJson : "[]";
-        char extra[96];
-        _snprintf_s(extra, _TRUNCATE, ",\"greenRemain\":%d,\"purpleRemain\":%d,\"mounted\":%s}",
-            g_greenRemain, g_purpleRemain, g_mounted ? "true" : "false");
+        char extra[192];
+        char mapEsc[96];
+        JsonEscape(g_currentMap, mapEsc, 96);
+        _snprintf_s(extra, _TRUNCATE, ",\"greenRemain\":%d,\"purpleRemain\":%d,\"mounted\":%s,\"map\":\"%s\"}",
+            g_greenRemain, g_purpleRemain, g_mounted ? "true" : "false", mapEsc);
         reply += extra;
         if (!WriteFrame(reply))
             break;

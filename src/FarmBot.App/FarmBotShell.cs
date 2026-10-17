@@ -29,9 +29,6 @@ public sealed class FarmBotShell : IDisposable
     private bool _live = true;
     private AtlasPixels? _atlas;
     private string _atlasMap = "";
-    private long _atlasAt;
-    private float _atlasX;
-    private float _atlasY;
     private bool _potsArmed;
     private bool _farmCircleInWorld;
     private readonly object _farmClockGate = new();
@@ -131,17 +128,15 @@ public sealed class FarmBotShell : IDisposable
 
     public string AtlasUrl { get; private set; } = "";
 
-    public float MapViewRadius
-    {
-        get
-        {
-            var player = View.Snapshot?.Player;
-            return AtlasPixels.MinimapViewRadius(
-                _config.MapZoom,
-                player?.MapWorldW ?? 0,
-                player?.MapWorldH ?? 0);
-        }
-    }
+    public bool HasAtlas => AtlasUrl.Length > 0 && MapWorldW >= 1000 && MapWorldH >= 1000;
+
+    public float MapWorldW =>
+        View.Snapshot?.Player is { MapWorldW: >= 1000 } player ? player.MapWorldW : _atlas?.WorldW ?? 0;
+
+    public float MapWorldH =>
+        View.Snapshot?.Player is { MapWorldH: >= 1000 } player ? player.MapWorldH : _atlas?.WorldH ?? 0;
+
+    public float MapViewRadius => AtlasPixels.MinimapViewRadius(MapWorldW, MapWorldH);
 
     public void SetFarmRadius(float value)
     {
@@ -152,13 +147,6 @@ public sealed class FarmBotShell : IDisposable
         // and we push a debounced update while draw is enabled.
         if (DrawFarmCircle)
             ScheduleFarmCirclePush();
-        Notify();
-    }
-
-    public void SetMapZoom(float value)
-    {
-        lock (_configGate)
-            _config.MapZoom = Math.Clamp(value, 20, 100);
         Notify();
     }
 
@@ -223,7 +211,7 @@ public sealed class FarmBotShell : IDisposable
 
     private void MaybePushFarmCircleForWorld()
     {
-        var inWorld = FarmCircleWorldReady();
+        var inWorld = View.Snapshot?.Player.MaxHp > 0;
         if (!inWorld)
         {
             _farmCircleInWorld = false;
@@ -235,21 +223,6 @@ public sealed class FarmBotShell : IDisposable
         _farmCircleInWorld = true;
         if (DrawFarmCircle)
             PushFarmCircle();
-    }
-
-    private bool FarmCircleWorldReady()
-    {
-        var snap = View.Snapshot;
-        if (snap == null)
-            return false;
-        if (snap.Entities.Count > 0)
-            return true;
-        var player = snap.Player;
-        if (player.MaxHp > 0 && player.Level >= 1 && (Math.Abs(player.X) > 1 || Math.Abs(player.Y) > 1))
-            return true;
-        if (!string.IsNullOrWhiteSpace(player.Name) && player.MaxHp > 0)
-            return true;
-        return QuickPlayOrchestrator.IsGame(View.GamePhase);
     }
 
     private void PushFarmCircle()
@@ -735,46 +708,39 @@ public sealed class FarmBotShell : IDisposable
     private void RefreshAtlas()
     {
         var player = View.Snapshot?.Player;
-        var map = player?.MapName ?? "";
         if (!_live)
         {
+            _atlas = null;
+            _atlasMap = "";
             AtlasUrl = "";
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(map) && AtlasPixels.TryReadDumpedCurrentMap(out var dumped))
-            map = dumped;
-        if (string.IsNullOrWhiteSpace(map))
+        if (!AtlasPixels.TryResolveMap(player?.MapName, out var map, out var resolvedW, out var resolvedH))
         {
+            _atlas = null;
+            _atlasMap = "";
             AtlasUrl = "";
             return;
         }
 
-        if (_atlas == null || !string.Equals(_atlasMap, map, StringComparison.OrdinalIgnoreCase))
-        {
-            if (!AtlasPixels.TryLoadFromClient(_config.ClientPath, map, player?.MapWorldW ?? 0, player?.MapWorldH ?? 0, out var atlas))
-            {
-                AtlasUrl = "";
-                return;
-            }
+        if (_atlas != null && string.Equals(_atlasMap, map, StringComparison.OrdinalIgnoreCase) && AtlasUrl.Length > 0)
+            return;
 
-            _atlas = atlas;
+        var loadW = player is { MapWorldW: >= 1000 } ? player.MapWorldW : resolvedW;
+        var loadH = player is { MapWorldH: >= 1000 } ? player.MapWorldH : resolvedH;
+        if (!AtlasPixels.TryLoadFromClient(_config.ClientPath, map, loadW, loadH, out var atlas))
+        {
+            _atlas = null;
             _atlasMap = map;
-            _log.Info($"atlas {map} {atlas.Width}x{atlas.Height}  world {atlas.WorldW:0} x {atlas.WorldH:0}");
+            AtlasUrl = "";
+            return;
         }
 
-        var x = player?.X ?? 0;
-        var y = player?.Y ?? 0;
-        var dx = x - _atlasX;
-        var dy = y - _atlasY;
-        if (AtlasUrl.Length > 0 && dx * dx + dy * dy < 40_000 && Environment.TickCount64 - _atlasAt < 500)
-            return;
-        _atlasAt = Environment.TickCount64;
-        _atlasX = x;
-        _atlasY = y;
-        var worldW = player is { MapWorldW: >= 1000 } ? player.MapWorldW : _atlas.WorldW;
-        var worldH = player is { MapWorldH: >= 1000 } ? player.MapWorldH : _atlas.WorldH;
-        AtlasUrl = _atlas.ToCroppedBmpUrl(x, y, MapViewRadius, worldW, worldH);
+        _atlas = atlas;
+        _atlasMap = map;
+        AtlasUrl = atlas.ToFullBmpUrl();
+        _log.Info($"atlas {map} {atlas.Width}x{atlas.Height}  world {atlas.WorldW:0} x {atlas.WorldH:0}");
     }
 
     private bool EnsureCompanion()

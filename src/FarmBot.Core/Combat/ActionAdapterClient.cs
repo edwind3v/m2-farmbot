@@ -294,7 +294,7 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         var castRemoved = ParseAffects(response.CastRemoved);
         if (response.MaxHp <= 0 || response.Level is < 1 or > 250)
         {
-            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame, race, response.Mounted, affects, castRemoved);
+            hud = new PlayerHudPoints(0, 0, 0, 0, 0, 0, 0, inWorld, phase, character, reason, response.StartGame, race, response.Mounted, affects, castRemoved, response.Map ?? "");
             return true;
         }
 
@@ -314,7 +314,8 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
             race,
             response.Mounted,
             affects,
-            castRemoved);
+            castRemoved,
+            response.Map ?? "");
         return true;
     }
 

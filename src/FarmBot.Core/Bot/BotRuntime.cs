@@ -95,6 +95,8 @@ public sealed class BotRuntime : IDisposable
     private float _lastOriginX;
     private float _lastOriginY;
     private float _lastOriginZ;
+    private float _lastFacingDeg;
+    private bool _hasFacing;
 
     public BotRuntime(
         IGameStateSource source,
@@ -936,6 +938,19 @@ public sealed class BotRuntime : IDisposable
         // in-world as live so entities/pots aren't blocked on MaxHp.
         if (!_inWorld)
             return snapshot;
+        var detectedMap = !string.IsNullOrWhiteSpace(hud.MapName) ? hud.MapName : snapshot.Player.MapName;
+        if (AtlasPixels.TryResolveMap(detectedMap, out var mapName, out var mapW, out var mapH))
+        {
+            snapshot = snapshot with
+            {
+                Player = snapshot.Player with
+                {
+                    MapName = mapName,
+                    MapWorldW = mapW >= 1000 ? mapW : snapshot.Player.MapWorldW,
+                    MapWorldH = mapH >= 1000 ? mapH : snapshot.Player.MapWorldH
+                }
+            };
+        }
         if (hud.MaxHp > 0)
         {
             snapshot = snapshot with
@@ -961,7 +976,13 @@ public sealed class BotRuntime : IDisposable
         {
             return snapshot with
             {
-                Player = snapshot.Player with { X = _lastOriginX, Y = _lastOriginY, Z = _lastOriginZ },
+                Player = snapshot.Player with
+                {
+                    X = _lastOriginX,
+                    Y = _lastOriginY,
+                    Z = _lastOriginZ,
+                    FacingDeg = _lastFacingDeg
+                },
                 Entities = _lastNativeActors
             };
         }
@@ -972,7 +993,13 @@ public sealed class BotRuntime : IDisposable
             {
                 return snapshot with
                 {
-                    Player = snapshot.Player with { X = _lastOriginX, Y = _lastOriginY, Z = _lastOriginZ },
+                    Player = snapshot.Player with
+                    {
+                        X = _lastOriginX,
+                        Y = _lastOriginY,
+                        Z = _lastOriginZ,
+                        FacingDeg = _lastFacingDeg
+                    },
                     Entities = _lastNativeActors
                 };
             }
@@ -997,6 +1024,8 @@ public sealed class BotRuntime : IDisposable
                 Distance = WorldGeometry.Distance(originX, originY, item.X, item.Y)
             })
             .ToList();
+        _lastFacingDeg = FacingFromMove(originX, originY, snapshot.Player.FacingDeg);
+        _hasFacing = true;
         _lastNativeActors = withDistance;
         _lastOriginX = originX;
         _lastOriginY = originY;
@@ -1009,9 +1038,22 @@ public sealed class BotRuntime : IDisposable
 
         return snapshot with
         {
-            Player = snapshot.Player with { X = originX, Y = originY, Z = originZ },
+            Player = snapshot.Player with { X = originX, Y = originY, Z = originZ, FacingDeg = _lastFacingDeg },
             Entities = withDistance
         };
+    }
+
+    private float FacingFromMove(float x, float y, float fallback)
+    {
+        if (_lastNativeActors.Count > 0)
+        {
+            var dx = x - _lastOriginX;
+            var dy = y - _lastOriginY;
+            if (dx * dx + dy * dy >= 16)
+                return (float)(Math.Atan2(dx, dy) * 180.0 / Math.PI);
+        }
+
+        return _hasFacing ? _lastFacingDeg : fallback;
     }
 
     private void NoteGamePhase(PlayerHudPoints? hud, long nowMs)

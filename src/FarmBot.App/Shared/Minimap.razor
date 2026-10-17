@@ -3,17 +3,40 @@
 @inject FarmBotShell Shell
 
 <div class="minimap-wrap">
-    <div class="minimap-stage">
-        @if (!string.IsNullOrEmpty(Shell.AtlasUrl))
-        {
-            <img class="minimap-atlas" src="@Shell.AtlasUrl" alt="" />
-        }
-        <svg class="minimap" viewBox="0 0 @N(MapW) @N(MapH)" aria-label="Farm map">
-            <rect x="0.5" y="0.5" width="@N(MapW - 1)" height="@N(MapH - 1)" rx="8" fill="@(string.IsNullOrEmpty(Shell.AtlasUrl) ? "#0e1016" : "transparent")" stroke="rgba(232,228,218,0.12)" />
-            <ellipse cx="@N(Cx)" cy="@N(Cy)" rx="@N(FarmRx)" ry="@N(FarmRy)" fill="none" stroke="@Shell.FarmCircleColor" stroke-opacity="0.7" stroke-width="1.2" />
-            @if (Shell.Config.RangedAttackEnabled)
+    <div class="minimap-stage @(HasAtlas ? "" : "empty")">
+        <svg class="minimap" viewBox="0 0 @N(MapW) @N(MapH)" preserveAspectRatio="xMidYMid meet" aria-label="Farm map">
+            <defs>
+                <clipPath id="mm-clip">
+                    <rect x="0" y="0" width="@N(MapW)" height="@N(MapH)" rx="8" />
+                </clipPath>
+            </defs>
+            <g clip-path="url(#mm-clip)">
+            @if (!HasAtlas)
             {
-                <ellipse cx="@N(Cx)" cy="@N(Cy)" rx="@N(RangedRx)" ry="@N(RangedRy)" fill="none" stroke="rgba(74,126,196,0.7)" stroke-width="1.2" stroke-dasharray="4 3" />
+                <defs>
+                    <pattern id="mm-grid" width="16" height="16" patternUnits="userSpaceOnUse">
+                        <path d="M 16 0 L 0 0 0 16" fill="none" stroke="rgba(232,228,218,0.07)" stroke-width="0.7" />
+                    </pattern>
+                    <pattern id="mm-grid-major" width="64" height="64" patternUnits="userSpaceOnUse">
+                        <path d="M 64 0 L 0 0 0 64" fill="none" stroke="rgba(232,228,218,0.14)" stroke-width="0.9" />
+                    </pattern>
+                </defs>
+                <rect x="0" y="0" width="@N(MapW)" height="@N(MapH)" fill="#0e1016" />
+                <rect x="0" y="0" width="@N(MapW)" height="@N(MapH)" fill="url(#mm-grid)" />
+                <rect x="0" y="0" width="@N(MapW)" height="@N(MapH)" fill="url(#mm-grid-major)" />
+            }
+            else
+            {
+                <image href="@Shell.AtlasUrl" x="@N(AtlasX)" y="@N(AtlasY)" width="@N(AtlasDrawW)" height="@N(AtlasDrawH)" preserveAspectRatio="none" />
+            }
+            <rect x="0.5" y="0.5" width="@N(MapW - 1)" height="@N(MapH - 1)" rx="8" fill="transparent" stroke="rgba(232,228,218,0.12)" />
+            @if (TryPlayerPoint(out var px, out var py))
+            {
+                <ellipse cx="@N(px)" cy="@N(py)" rx="@N(FarmRx)" ry="@N(FarmRy)" fill="none" stroke="@Shell.FarmCircleColor" stroke-opacity="0.7" stroke-width="1.2" />
+                @if (Shell.Config.RangedAttackEnabled)
+                {
+                    <ellipse cx="@N(px)" cy="@N(py)" rx="@N(RangedRx)" ry="@N(RangedRy)" fill="none" stroke="rgba(74,126,196,0.7)" stroke-width="1.2" stroke-dasharray="4 3" />
+                }
             }
             @foreach (var mark in Marks)
             {
@@ -25,8 +48,12 @@
                     <circle cx="@N(mark.X)" cy="@N(mark.Y)" r="6.2" fill="none" stroke="#d9a06a" stroke-width="1.2" />
                 }
             }
-            <g transform="rotate(@N(Facing), @N(Cx), @N(Cy))">
-                <polygon points="@N(Cx),@N(Cy - 7) @N(Cx + 5.2),@N(Cy + 6) @N(Cx),@N(Cy + 2.4) @N(Cx - 5.2),@N(Cy + 6)" fill="#c4783a" />
+            @if (TryPlayerPoint(out px, out py))
+            {
+                <g transform="rotate(@N(Facing), @N(px), @N(py))">
+                    <polygon points="@N(px),@N(py - 7) @N(px + 5.2),@N(py + 6) @N(px),@N(py + 2.4) @N(px - 5.2),@N(py + 6)" fill="#c4783a" />
+                </g>
+            }
             </g>
         </svg>
     </div>
@@ -40,10 +67,6 @@
             <span>Farm radius <b>@Shell.Config.FarmRadius.ToString("0")</b></span>
             <input type="range" min="1000" max="8000" step="25" value="@Shell.Config.FarmRadius.ToString(CultureInfo.InvariantCulture)" @oninput="OnFarmRadius" />
         </label>
-        <label class="slider">
-            <span>Zoom <b>@Shell.Config.MapZoom.ToString("0")</b></span>
-            <input type="range" min="20" max="100" step="1" value="@Shell.Config.MapZoom.ToString(CultureInfo.InvariantCulture)" @oninput="OnZoom" />
-        </label>
         <div class="draw-farm-circle-row">
             <label class="draw-farm-circle" title="Show the farm radius on the ground in-game; locks to start position when you hit Start">
                 <input type="checkbox" checked="@Shell.DrawFarmCircle" @onchange="() => Shell.ToggleDrawFarmCircle()" />
@@ -56,24 +79,73 @@
 
 @code {
     private const double MapW = 240;
-    private const double MapH = 150;
+    private const double MapH = 240;
     private const double Cx = 120;
-    private const double Cy = 75;
+    private const double Cy = 120;
     private const double HalfW = 114;
-    private const double HalfH = 70;
+    private const double HalfH = 114;
 
     private sealed record Mark(double X, double Y, string Fill, string Label, bool Target);
 
     private IReadOnlyList<Mark> Marks => BuildMarks();
 
+    private bool HasAtlas => Shell.HasAtlas;
+
     private double ViewRadius => Shell.MapViewRadius;
 
-    private double FarmRx => Math.Clamp(HalfW * Shell.Config.FarmRadius / ViewRadius, 4, HalfW);
-    private double FarmRy => Math.Clamp(HalfH * Shell.Config.FarmRadius / ViewRadius, 4, HalfH);
-    private double RangedRx => Math.Clamp(HalfW * Shell.Config.RangedAttackRadius / ViewRadius, 4, HalfW);
-    private double RangedRy => Math.Clamp(HalfH * Shell.Config.RangedAttackRadius / ViewRadius, 4, HalfH);
+    private double WorldW => Shell.MapWorldW;
 
-    private float Facing => Shell.View.Snapshot?.Player.FacingDeg ?? 0;
+    private double WorldH => Shell.MapWorldH;
+
+    private double AtlasDrawW => HasAtlas && WorldW >= 1000 ? MapW * WorldW / (2 * ViewRadius) : MapW;
+
+    private double AtlasDrawH => HasAtlas && WorldH >= 1000 ? MapH * WorldH / (2 * ViewRadius) : MapH;
+
+    private double AtlasX => Cx - OriginX / WorldW * AtlasDrawW;
+
+    private double AtlasY => Cy - OriginY / WorldH * AtlasDrawH;
+
+    private double OriginX
+    {
+        get
+        {
+            var player = Shell.View.Snapshot?.Player;
+            return player == null ? 0 : Math.Abs(player.X);
+        }
+    }
+
+    private double OriginY
+    {
+        get
+        {
+            var player = Shell.View.Snapshot?.Player;
+            return player == null ? 0 : Math.Abs(player.Y);
+        }
+    }
+
+    private double FarmRx => RadiusX(Shell.Config.FarmRadius);
+
+    private double FarmRy => RadiusY(Shell.Config.FarmRadius);
+
+    private double RangedRx => RadiusX(Shell.Config.RangedAttackRadius);
+
+    private double RangedRy => RadiusY(Shell.Config.RangedAttackRadius);
+
+    private float Facing
+    {
+        get
+        {
+            var deg = Shell.View.Snapshot?.Player.FacingDeg ?? 0;
+            // Atlas Y grows downward; the grid fallback keeps world Y up.
+            if (HasAtlas)
+                deg = 180f - deg;
+            while (deg < 0)
+                deg += 360f;
+            while (deg >= 360f)
+                deg -= 360f;
+            return deg;
+        }
+    }
 
     protected override void OnInitialized() => Shell.Changed += OnChanged;
 
@@ -87,13 +159,41 @@
             Shell.SetFarmRadius(value);
     }
 
-    private void OnZoom(ChangeEventArgs e)
+    private void OnCircleColor(string hex) => Shell.SetFarmCircleColor(hex);
+
+    private double RadiusX(float world) => Math.Clamp(HalfW * world / ViewRadius, 4, HalfW);
+
+    private double RadiusY(float world) => Math.Clamp(HalfH * world / ViewRadius, 4, HalfH);
+
+    private bool TryPlayerPoint(out double x, out double y)
     {
-        if (float.TryParse(Convert.ToString(e.Value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
-            Shell.SetMapZoom(value);
+        var player = Shell.View.Snapshot?.Player;
+        if (player == null)
+        {
+            x = Cx;
+            y = Cy;
+            return false;
+        }
+
+        return TryProject(player.X, player.Y, out x, out y);
     }
 
-    private void OnCircleColor(string hex) => Shell.SetFarmCircleColor(hex);
+    private bool TryProject(float worldX, float worldY, out double x, out double y)
+    {
+        if (HasAtlas && WorldW >= 1000 && WorldH >= 1000)
+        {
+            x = AtlasX + Math.Abs(worldX) / WorldW * AtlasDrawW;
+            y = AtlasY + Math.Abs(worldY) / WorldH * AtlasDrawH;
+            return x is >= 0 and <= MapW && y is >= 0 and <= MapH;
+        }
+
+        var player = Shell.View.Snapshot?.Player;
+        var ox = player?.X ?? 0;
+        var oy = player?.Y ?? 0;
+        x = Cx + (worldX - ox) * HalfW / ViewRadius;
+        y = Cy - (worldY - oy) * HalfH / ViewRadius;
+        return Math.Abs(x - Cx) <= HalfW && Math.Abs(y - Cy) <= HalfH;
+    }
 
     private IReadOnlyList<Mark> BuildMarks()
     {
@@ -103,22 +203,18 @@
             return Array.Empty<Mark>();
 
         var player = snapshot.Player;
-        var scaleX = HalfW / ViewRadius;
-        var scaleY = HalfH / ViewRadius;
         var bosses = Shell.BossVnums().ToHashSet();
         var marks = new List<Mark>();
         foreach (var entity in snapshot.Entities)
         {
             if (!TryColor(entity, bosses, out var fill))
                 continue;
-            var dx = (entity.X - player.X) * scaleX;
-            var dy = (entity.Y - player.Y) * scaleY;
-            if (Math.Abs(dx) > HalfW || Math.Abs(dy) > HalfH)
+            if (!TryProject(entity.X, entity.Y, out var x, out var y))
                 continue;
             var label = string.IsNullOrWhiteSpace(entity.Name)
                 ? $"{EntityMapping.TypeName(entity.ResolvedType)}  VNUM {entity.Vnum}  {entity.Distance:0}"
                 : $"{entity.Name}  VNUM {entity.Vnum}  {entity.Distance:0}";
-            marks.Add(new Mark(Cx + dx, Cy - dy, fill, label, view.Target?.Vid == entity.Vid));
+            marks.Add(new Mark(x, y, fill, label, view.Target?.Vid == entity.Vid));
         }
 
         return marks;

@@ -76,7 +76,8 @@ public sealed class ActionModuleHost
         }
 
         var workdir = Path.GetDirectoryName(exePath) ?? "";
-        if (!RunLoader($"--launch \"{exePath}\" --workdir \"{workdir}\"", out status, 45000, exePath))
+        var extra = $"--launch \"{exePath}\" --workdir \"{workdir}\"";
+        if (!RunLoader(extra, out status, 45000, exePath))
             return false;
         if (!LoaderOutput.TryParseLaunchedPid(status, out processId))
         {
