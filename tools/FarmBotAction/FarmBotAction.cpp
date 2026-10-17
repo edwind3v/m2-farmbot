@@ -1,6 +1,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d9.h>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#include <dxgi.h>
 #include <psapi.h>
 #include <cmath>
 #include <cstdint>
@@ -16,6 +19,9 @@
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "d3d9.lib")
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "psapi.lib")
 
 // In-process x86 adapter. Drains on CPythonApplication::Loop (PeekMessage/GetMessage)
@@ -88,6 +94,18 @@ static unsigned kIsAttackSkillRva = 0;
 static unsigned kIsMountingRva = 0;
 static unsigned kIsAffectRva = 0;
 static unsigned kSendChatRva = 0;
+static unsigned kSetDiffuseColorRva = 0;
+static unsigned kRenderLineRva = 0;
+static unsigned kRenderLine3dRva = 0;
+static unsigned kRenderGroundCircleRva = 0;
+static unsigned kRenderSphereRva = 0;
+static unsigned kRenderCylinderRva = 0;
+static unsigned kRenderGameRva = 0;
+static unsigned kCharRenderRva = 0;
+static unsigned kSetGameRenderStateRva = 0;
+static unsigned kSetInterfaceRenderStateRva = 0;
+static unsigned kScreenSingletonRva = 0;
+static unsigned kStateManagerRva = 0;
 static unsigned kSendClickRva = 0xCE930;
 static unsigned kItemSingletonRva = 0x482CAC;
 static unsigned kGetCloseItemRva = 0xBB480;
@@ -149,6 +167,12 @@ static unsigned kPointsDisp = 0;
 static unsigned kPointXor = 0;
 static const unsigned kMiniMapRva = 0x482BA8;
 static const unsigned kBackgroundRva = 0x48238C;
+static unsigned kBgSingletonRva = 0x3C1763C;
+static unsigned kGetHeightRva = 0x3C4450;
+typedef float (__thiscall* FnGetHeight)(void* self, float x, float y);
+static const unsigned kMatViewRva = 0x3C29FD0u;
+static const unsigned kMatProjRva = 0x3C2A010u;
+static const unsigned kCamMgrRva = 0x3C17EA8u;
 static const unsigned kLoadAtlasRva = 0xF9980;
 static const unsigned kGetAtlasSizeRva = 0xF93B0;
 static const unsigned kUpdateAtlasRva = 0xFC0D0;
@@ -378,6 +402,96 @@ static DWORD g_baerimWorldAtMs;
 static int NativeFarm() { return g_arthion || g_baerim; }
 static unsigned g_atlasSeq;
 static volatile long g_atlasCrash;
+static volatile long g_farmCircleOn;
+static volatile long g_farmCircleLocked;
+static float g_farmCircleR;
+static float g_farmCircleX;
+static float g_farmCircleY;
+static int g_farmCircleHooked;
+static int g_farmCircleLogged;
+static int g_camOk;
+static D3DMATRIX g_camView;
+static D3DMATRIX g_camProj;
+typedef HRESULT (__stdcall* FnEndScene9)(IDirect3DDevice9* dev);
+typedef HRESULT (__stdcall* FnBeginScene9)(IDirect3DDevice9* dev);
+typedef HRESULT (__stdcall* FnPresent9)(IDirect3DDevice9* dev, const RECT* src, const RECT* dst, HWND hwnd, const RGNDATA* dirty);
+static FnEndScene9 g_origEndScene;
+static FnBeginScene9 g_origBeginScene;
+static FnPresent9 g_origPresent;
+typedef HRESULT (__stdcall* FnDrawIndexed9)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
+typedef HRESULT (__stdcall* FnDrawPrim9)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT);
+typedef HRESULT (__stdcall* FnSetTransform9)(IDirect3DDevice9*, D3DTRANSFORMSTATETYPE, const D3DMATRIX*);
+typedef HRESULT (__stdcall* FnDrawUP9)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT);
+static FnDrawIndexed9 g_origDIP;
+static FnDrawPrim9 g_origDP;
+static FnSetTransform9 g_origSetTransform;
+static FnDrawUP9 g_origDrawUP;
+static unsigned g_nDIP;
+typedef HRESULT (__stdcall* FnDXGIPresent)(void* sc, UINT sync, UINT flags);
+typedef void (__stdcall* FnVSSetCB)(void* ctx, UINT start, UINT n, ID3D11Buffer* const* bufs);
+typedef void (__stdcall* FnDrawIndexed11)(void* ctx, UINT indexCount, UINT startIndex, INT baseVertex);
+typedef void (__stdcall* FnDraw11)(void* ctx, UINT vertexCount, UINT startVertex);
+typedef void (__stdcall* FnDrawIndexedInstanced11)(void* ctx, UINT indexCountPerInstance, UINT instanceCount, UINT startIndex, INT baseVertex, UINT startInstance);
+typedef void (__stdcall* FnDrawInstanced11)(void* ctx, UINT vertexCountPerInstance, UINT instanceCount, UINT startVertex, UINT startInstance);
+typedef void (__stdcall* FnPSSetShader11)(void* ctx, ID3D11PixelShader* ps, ID3D11ClassInstance* const* inst, UINT n);
+static FnDXGIPresent g_origDXGIPresent;
+static FnVSSetCB g_origVSSetCB;
+static FnDrawIndexed11 g_origDrawIndexed11;
+static FnDraw11 g_origDraw11;
+static FnDrawIndexedInstanced11 g_origDrawIndexedInstanced11;
+static FnDrawInstanced11 g_origDrawInstanced11;
+static FnPSSetShader11 g_origPSSetShader11;
+static unsigned g_nDXGIPresent;
+static unsigned g_vpCaptureFrame = 0xFFFFFFFFu;
+static float g_vp[16];
+static int g_vpOk;
+static float g_vpScore = 1e9f;
+static int g_vpLogged;
+static int g_vpLocal;
+static int g_vpAxis;
+static float g_vpFrame[16];
+static float g_vpFrameScore = 1e9f;
+static int g_vpFrameOk;
+static int g_vpFrameLocal;
+static int g_vpFrameAxis;
+static int g_vpCopies;
+static float g_vpLastCb[16];
+static int g_vpLastCbOk;
+static unsigned g_nVSSetCB;
+static unsigned g_nDraw11;
+static float g_vpMinDist = 99.f;
+static float g_vpMinDx;
+static float g_vpMinDy;
+static ID3D11Buffer* g_vpStaging;
+static UINT g_vpStagingBytes;
+static ID3D11Device* g_vpStagingDev;
+static ID3D11Texture2D* g_ovBb;
+static ID3D11RenderTargetView* g_ovRtv;
+static float* g_pView;
+static float* g_pProj;
+static ID3D11VertexShader* g_ovVs;
+static ID3D11PixelShader* g_ovPs;
+static ID3D11InputLayout* g_ovIl;
+static ID3D11Buffer* g_ovVb;
+static ID3D11Buffer* g_ovCb;
+static ID3D11RasterizerState* g_ovRs;
+static ID3D11BlendState* g_ovBs;
+static ID3D11DepthStencilState* g_ovDs;
+static ID3D11Device* g_ovDev;
+static IDirect3DDevice9* g_d3d9;
+static int g_inCircleDraw;
+static int g_drew3d;
+static char g_d3d9How[32];
+static unsigned g_nBeginScene;
+static unsigned g_nEndScene;
+static unsigned g_nPresent;
+static unsigned g_nEndSincePresent;
+static unsigned g_nBeginSincePresent;
+static HRESULT g_lastUpHr = E_FAIL;
+static DWORD g_farmCircleOnAtMs;
+static int g_endNeverLogged;
+static void KeepD3D9(IDirect3DDevice9* dev);
+static void HookDeviceEndScene(IDirect3DDevice9* dev);
 
 static FnPeek g_peekA;
 static FnPeek g_peekW;
@@ -392,6 +506,44 @@ static FnVoid g_origCombo;
 static FnVoid g_origChase;
 static FnMoveToDest g_origMoveToDest;
 static FnInRange g_origInRange;
+typedef void (__thiscall* FnRenderGame)(void* self);
+typedef void (__thiscall* FnCharRender)(void* self);
+typedef void (__thiscall* FnRenderCylinder)(void* self, const void* mat, float x, float y, float z, float r, float h, int fill);
+typedef void (__thiscall* FnRenderSphere)(void* self, const void* mat, float x, float y, float z, float r, int fill);
+typedef void (__thiscall* FnRenderLine3d)(void* self, float x1, float y1, float z1, float x2, float y2, float z2);
+typedef HRESULT (__stdcall* FnSetRenderState)(void* dev, unsigned state, unsigned value);
+typedef void* (__cdecl* FnPyCFunction)(void* self, void* args);
+typedef void* (__cdecl* FnPyBuildValue)(const char* fmt, ...);
+static FnRenderGame g_origRenderGame;
+static FnRenderGame g_origBgRender;
+static FnRenderGame g_origMapWorld;
+static FnRenderGame g_origAppWorld;
+static FnRenderGame g_origTerrain;
+static FnRenderGame g_origHtp;
+static FnRenderGame g_origHtp2;
+static FnRenderGame g_origTerrainFlush;
+static FnRenderGame g_origD3DSubmit;
+static FnCharRender g_origCharRender;
+static unsigned kBgRenderRva = 0x130540;
+static unsigned kMapWorldRva = 0x130640;
+static unsigned kAppWorldRva = 0x20C780;
+static unsigned kTerrainRva = 0x3D22E0;
+static unsigned kHtpRva = 0x400180;
+static unsigned kHtp2Rva = 0x4003A0;
+static unsigned kTerrainFlushRva = 0x47E930;
+static unsigned kD3DSubmitRva = 0x492580;
+static int g_inMapRender;
+static int g_inTerrain;
+static int g_inPaintPs;
+static ID3D11PixelShader* g_magPs;
+static ID3D11Device* g_magDev;
+static unsigned g_nMapDraw;
+static unsigned g_nTerrainDraw;
+static int g_drewTerrainRing;
+static ID3D11DeviceContext* g_liveCtx;
+static IDXGISwapChain* g_liveSwap;
+static ID3D11DepthStencilState* g_ovDsZ;
+static void EnsureFarmCircleHook();
 static volatile long g_botCall;
 static unsigned g_lastUpdateMode = 0xFFFFFFFFu;
 
@@ -406,8 +558,13 @@ static long g_logBusy = 0;
 
 static void NativeLog(const char* fmt, ...)
 {
-    if (InterlockedCompareExchange(&g_logBusy, 1, 0) != 0)
-        return;
+    int spun = 0;
+    while (InterlockedCompareExchange(&g_logBusy, 1, 0) != 0)
+    {
+        if (++spun > 64)
+            return;
+        Sleep(0);
+    }
     char body[400];
     va_list ap;
     va_start(ap, fmt);
@@ -1295,6 +1452,7 @@ static bool CopyTexture(IDirect3DTexture9* tex, BYTE* dst, unsigned* outW, unsig
     IDirect3DDevice9* dev = nullptr;
     if (FAILED(tex->GetDevice(&dev)) || !dev)
         return false;
+    KeepD3D9(dev);
     IDirect3DSurface9* src = nullptr;
     IDirect3DSurface9* sys = nullptr;
     bool ok = false;
@@ -5244,6 +5402,21 @@ static bool ReadPixel(void* inst, float* x, float* y)
     }
 }
 
+static bool ReadPixelZ(void* inst, float* z)
+{
+    if (!UserPtr(inst) || !z || !kGraphicDisp || !kPixelZDisp)
+        return false;
+    __try
+    {
+        *z = *(float*)((char*)inst + kGraphicDisp + kPixelZDisp);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
 static void* MainInstance()
 {
     if (g_baerim)
@@ -8273,6 +8446,35 @@ static void Execute(const Command& cmd)
         return;
     }
 
+    if (cmd.type == "set_farm_circle")
+    {
+        g_farmCircleOn = cmd.force ? 1 : 0;
+        g_farmCircleLocked = cmd.avoid ? 1 : 0;
+        g_farmCircleR = cmd.slot > 0 ? (float)cmd.slot : 0.f;
+        g_farmCircleX = cmd.x;
+        g_farmCircleY = cmd.y;
+        g_farmCircleLogged = 0;
+        g_vpLogged = 0;
+        g_vpOk = 0;
+        g_vpScore = 1e9f;
+        g_vpFrameOk = 0;
+        g_farmCircleOnAtMs = GetTickCount();
+        EnsureFarmCircleHook();
+        g_lastOk = true;
+        g_lastReason = g_farmCircleOn
+            ? (g_farmCircleLocked ? "farm circle locked" : "farm circle follow")
+            : "farm circle off";
+        NativeLog(
+            "set_farm_circle on=%d locked=%d r=%.0f hooked=%d dxgi=%d nPresent=%u",
+            (int)g_farmCircleOn,
+            (int)g_farmCircleLocked,
+            g_farmCircleR,
+            g_farmCircleHooked,
+            g_origDXGIPresent ? 1 : 0,
+            g_nDXGIPresent);
+        return;
+    }
+
     if (cmd.type == "toggle_mount")
     {
         RefreshSession();
@@ -8832,6 +9034,42 @@ static BYTE* Unwrap(BYTE* p)
     return p;
 }
 
+static unsigned InsnLen(const BYTE* p)
+{
+    const BYTE b = p[0];
+    if (b == 0x6A)
+        return 2;
+    if (b == 0x68 || b == 0xE8 || b == 0xE9 || b == 0xA1 || b == 0xA3)
+        return 5;
+    if (b >= 0xB8 && b <= 0xBF)
+        return 5;
+    if (b >= 0x50 && b <= 0x5F)
+        return 1;
+    if (b == 0xEB)
+        return 2;
+    if (b == 0x83)
+        return 3;
+    if (b == 0x33 || b == 0x85 || b == 0x3B)
+        return 2;
+    if (b == 0x8B || b == 0x89 || b == 0x8D)
+    {
+        const BYTE m = p[1];
+        const int mod = m >> 6;
+        const int rm = m & 7;
+        if (mod == 3)
+            return 2;
+        unsigned n = 2;
+        if (rm == 4)
+            n += 1;
+        if (mod == 1)
+            n += 1;
+        else if (mod == 2 || (mod == 0 && rm == 5) || (mod == 0 && rm == 4 && (p[2] & 7) == 5))
+            n += 4;
+        return n;
+    }
+    return 0;
+}
+
 static unsigned StealLen(const BYTE* p)
 {
     if (p[0] == 0x8B && p[1] == 0xFF && p[2] == 0x55 && p[3] == 0x8B && p[4] == 0xEC)
@@ -8854,25 +9092,31 @@ static unsigned StealLen(const BYTE* p)
         return 6;
     if (p[0] == 0x8B && p[1] == 0xFF && p[2] == 0x55 && p[3] == 0x8B && p[4] == 0xEC)
         return 5;
-    return 0;
+    // CMapOutdoor D3D11 terrain flush: push esi; mov esi,ecx; mov [esi+0x154],0
+    if (p[0] == 0x56 && p[1] == 0x8B && p[2] == 0xF1 && p[3] == 0xC7 && p[4] == 0x86)
+        return 13;
+    if (p[0] == 0x55 && p[1] == 0x8B && p[2] == 0xEC && p[3] == 0x81 && p[4] == 0xEC)
+        return 9;
+    // d3d9 EndScene on this box: push 0x14; mov eax, imm32
+    if (p[0] == 0x6A && p[2] == 0xB8)
+        return 7;
+    if (p[0] == 0x6A && (p[2] == 0xE8 || p[2] == 0xE9))
+        return 7;
+    unsigned n = 0;
+    for (int i = 0; i < 8 && n < 5; ++i)
+    {
+        const unsigned k = InsnLen(p + n);
+        if (k == 0)
+            break;
+        n += k;
+        if (n > 16)
+            return 0;
+    }
+    return n >= 5 ? n : 0;
 }
 
-static bool Trampoline(void* target, void* hook, void** orig)
+static bool PatchJmp(BYTE* src, unsigned n, void* hook)
 {
-    if (!target || !hook || !orig || *orig)
-        return *orig != nullptr;
-    BYTE* src = Unwrap((BYTE*)target);
-    if (!src)
-        return false;
-    const unsigned n = StealLen(src);
-    if (n < 5)
-        return false;
-    BYTE* tramp = (BYTE*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!tramp)
-        return false;
-    memcpy(tramp, src, n);
-    tramp[n] = 0xE9;
-    *(DWORD*)(tramp + n + 1) = (DWORD)(src + n - (tramp + n + 5));
     DWORD oldp = 0;
     if (!VirtualProtect(src, n, PAGE_EXECUTE_READWRITE, &oldp))
         return false;
@@ -8882,6 +9126,60 @@ static bool Trampoline(void* target, void* hook, void** orig)
         src[i] = 0x90;
     VirtualProtect(src, n, oldp, &oldp);
     FlushInstructionCache(GetCurrentProcess(), src, n);
+    return true;
+}
+
+static bool Trampoline(void* target, void* hook, void** orig)
+{
+    if (!target || !hook || !orig || *orig)
+        return *orig != nullptr;
+    BYTE* src = Unwrap((BYTE*)target);
+    if (!src)
+        return false;
+    BYTE* tramp = (BYTE*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp)
+        return false;
+    // CPythonBackground::Render: push edi; mov edi,ecx; call rel32
+    if (src[0] == 0x57 && src[1] == 0x8B && src[2] == 0xF9 && src[3] == 0xE8)
+    {
+        tramp[0] = 0x57;
+        tramp[1] = 0x8B;
+        tramp[2] = 0xF9;
+        tramp[3] = 0xE8;
+        const DWORD dest = (DWORD)(src + 8 + *(int*)(src + 4));
+        *(DWORD*)(tramp + 4) = dest - (DWORD)(tramp + 8);
+        tramp[8] = 0xE9;
+        *(DWORD*)(tramp + 9) = (DWORD)(src + 8 - (tramp + 13));
+        if (!PatchJmp(src, 8, hook))
+            return false;
+        *orig = tramp;
+        return true;
+    }
+    // CPythonCharacterManager::Render: push esi; push edi; mov edi,ecx; call rel32
+    if (src[0] == 0x56 && src[1] == 0x57 && src[2] == 0x8B && src[3] == 0xF9 && src[4] == 0xE8)
+    {
+        tramp[0] = 0x56;
+        tramp[1] = 0x57;
+        tramp[2] = 0x8B;
+        tramp[3] = 0xF9;
+        tramp[4] = 0xE8;
+        const DWORD dest = (DWORD)(src + 9 + *(int*)(src + 5));
+        *(DWORD*)(tramp + 5) = dest - (DWORD)(tramp + 9);
+        tramp[9] = 0xE9;
+        *(DWORD*)(tramp + 10) = (DWORD)(src + 9 - (tramp + 14));
+        if (!PatchJmp(src, 9, hook))
+            return false;
+        *orig = tramp;
+        return true;
+    }
+    const unsigned n = StealLen(src);
+    if (n < 5)
+        return false;
+    memcpy(tramp, src, n);
+    tramp[n] = 0xE9;
+    *(DWORD*)(tramp + n + 1) = (DWORD)(src + n - (tramp + n + 5));
+    if (!PatchJmp(src, n, hook))
+        return false;
     *orig = tramp;
     return true;
 }
@@ -8920,6 +9218,2168 @@ static bool SwapIat(HMODULE mod, FARPROC want, void* hook, void** orig)
     return false;
 }
 
+static int CodePtr(const void* p)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!p || !VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
+        return 0;
+    const DWORD prot = mbi.Protect & 0xFF;
+    return prot == PAGE_EXECUTE || prot == PAGE_EXECUTE_READ ||
+        prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY;
+}
+
+static int LooksLikeCom(void* p)
+{
+    if (!UserPtr(p) || !UserPtr(*(void**)p))
+        return 0;
+    void** vt = *(void***)p;
+    return ReadableBytes(vt, 4 * 20) >= 4 * 20 && CodePtr(vt[0]) && CodePtr(vt[2]);
+}
+
+static void ModName(const void* p, char* out, int n)
+{
+    out[0] = 0;
+    HMODULE m = nullptr;
+    if (!p || !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            (LPCSTR)p, &m) || !m)
+        return;
+    char path[MAX_PATH];
+    if (!GetModuleFileNameA(m, path, MAX_PATH))
+        return;
+    const char* s = strrchr(path, '\\');
+    strncpy_s(out, (size_t)n, s ? s + 1 : path, _TRUNCATE);
+}
+
+static int VtableInModule(void* p, HMODULE mod)
+{
+    if (!mod || !LooksLikeCom(p))
+        return 0;
+    void** vt = *(void***)p;
+    return InModule(vt, mod) || InModule(vt[0], mod) || InModule(vt[17], mod);
+}
+
+static int D3dModuleVtable(void* p)
+{
+    HMODULE mods[4] = {
+        GetModuleHandleA("d3d9.dll"),
+        GetModuleHandleA("d3d9on12.dll"),
+        GetModuleHandleA("d3d9ex.dll"),
+        GetModuleHandleA("dxvk_d3d9.dll")
+    };
+    for (int i = 0; i < 4; ++i)
+    {
+        if (VtableInModule(p, mods[i]))
+            return 1;
+    }
+    return 0;
+}
+
+static IDirect3DDevice9* QueryD3D9Device(void* p)
+{
+    if (!D3dModuleVtable(p))
+        return nullptr;
+    IDirect3DDevice9* dev = nullptr;
+    __try
+    {
+        if (FAILED(((IUnknown*)p)->QueryInterface(__uuidof(IDirect3DDevice9), (void**)&dev)) || !dev)
+            return nullptr;
+        D3DDEVICE_CREATION_PARAMETERS cp = {};
+        if (FAILED(dev->GetCreationParameters(&cp)))
+        {
+            dev->Release();
+            return nullptr;
+        }
+        return dev;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
+// Accept a wrapped IDirect3DDevice9 whose vtable lives in baerim.exe, not d3d9.dll.
+static IDirect3DDevice9* TryDeviceLoose(void* p)
+{
+    if (!LooksLikeCom(p))
+        return nullptr;
+    void** vt = *(void***)p;
+    if (!CodePtr(vt[9]) || !CodePtr(vt[17]) || !CodePtr(vt[42]) || !CodePtr(vt[47]))
+        return nullptr;
+    IDirect3DDevice9* dev = (IDirect3DDevice9*)p;
+    __try
+    {
+        D3DDEVICE_CREATION_PARAMETERS cp = {};
+        if (FAILED(dev->GetCreationParameters(&cp)))
+            return nullptr;
+        if (cp.AdapterOrdinal > 16)
+            return nullptr;
+        if (cp.DeviceType != D3DDEVTYPE_HAL && cp.DeviceType != D3DDEVTYPE_REF &&
+            cp.DeviceType != D3DDEVTYPE_SW && cp.DeviceType != D3DDEVTYPE_NULLREF)
+            return nullptr;
+        D3DVIEWPORT9 vp = {};
+        if (FAILED(dev->GetViewport(&vp)))
+            return nullptr;
+        char vtMod[48] = {};
+        ModName(vt, vtMod, 48);
+        NativeLog("farm circle TryDeviceLoose p=%p vt=%p mod=%s wnd=%p type=%u vp=%ux%u",
+            p, vt, vtMod, cp.hFocusWindow, (unsigned)cp.DeviceType, vp.Width, vp.Height);
+        dev->AddRef();
+        return dev;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
+static IDirect3DDevice9* AnyDevice(void* p)
+{
+    IDirect3DDevice9* dev = QueryD3D9Device(p);
+    if (dev)
+        return dev;
+    return TryDeviceLoose(p);
+}
+
+static void DumpPtrSlot(const char* tag, int off, void* p)
+{
+    char vtMod[40] = {};
+    char m0[40] = {};
+    char m17[40] = {};
+    char m42[40] = {};
+    void** vt = nullptr;
+    if (LooksLikeCom(p))
+    {
+        vt = *(void***)p;
+        ModName(vt, vtMod, 40);
+        ModName(vt[0], m0, 40);
+        if (ReadableBytes(vt, 4 * 43) >= 4 * 43)
+        {
+            ModName(vt[17], m17, 40);
+            ModName(vt[42], m42, 40);
+        }
+    }
+    NativeLog("farm circle dump %s +0x%X p=%p vt=%p mod=%s m0=%s present=%s end=%s d3d9=%d d3d8=%d",
+        tag, off, p, vt, vtMod, m0, m17, m42,
+        D3dModuleVtable(p), VtableInModule(p, GetModuleHandleA("d3d8.dll")));
+}
+
+static void DumpFindEvidence(void* mgr)
+{
+    static void* s_dumpedMgr = (void*)1;
+    if (s_dumpedMgr == mgr)
+        return;
+    s_dumpedMgr = mgr;
+    NativeLog("farm circle gfx d3d9=%p d3d8=%p d3d11=%p dxgi=%p on12=%p",
+        GetModuleHandleA("d3d9.dll"), GetModuleHandleA("d3d8.dll"),
+        GetModuleHandleA("d3d11.dll"), GetModuleHandleA("dxgi.dll"),
+        GetModuleHandleA("d3d9on12.dll"));
+    if (kRenderLine3dRva && g_base)
+    {
+        BYTE* fn = (BYTE*)g_base + kRenderLine3dRva;
+        NativeLog("farm circle RenderLine3d %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+            fn[0], fn[1], fn[2], fn[3], fn[4], fn[5], fn[6], fn[7],
+            fn[8], fn[9], fn[10], fn[11], fn[12], fn[13], fn[14], fn[15]);
+        NativeLog("farm circle RenderLine3d+16 %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+            fn[16], fn[17], fn[18], fn[19], fn[20], fn[21], fn[22], fn[23],
+            fn[24], fn[25], fn[26], fn[27], fn[28], fn[29], fn[30], fn[31]);
+    }
+    if (UserPtr(mgr))
+    {
+        const int n = ReadableBytes(mgr, 0x80);
+        NativeLog("farm circle dump mgr=%p bytes=%d", mgr, n);
+        DumpPtrSlot("mgr", 0, mgr);
+        BYTE* p = (BYTE*)mgr;
+        for (int off = 0; off + 4 <= n && off <= 0x40; off += 4)
+            DumpPtrSlot("mgr", off, *(void**)(p + off));
+    }
+    else
+        NativeLog("farm circle dump mgr invalid %p", mgr);
+    __try
+    {
+        void* mini = MiniMap();
+        IDirect3DTexture9* tex = FindAtlasTexture(mini, nullptr);
+        NativeLog("farm circle atlas mini=%p tex=%p", mini, tex);
+        if (tex)
+        {
+            IDirect3DDevice9* fromTex = nullptr;
+            HRESULT hr = tex->GetDevice(&fromTex);
+            NativeLog("farm circle atlas GetDevice hr=0x%X dev=%p", (unsigned)hr, fromTex);
+            if (fromTex)
+                fromTex->Release();
+            tex->Release();
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        NativeLog("farm circle atlas dump fault");
+    }
+}
+
+static IDirect3DDevice9* BorrowD3D9(IDirect3DDevice9* dev)
+{
+    if (!dev)
+        return nullptr;
+    KeepD3D9(dev);
+    dev->Release();
+    return g_d3d9;
+}
+
+static IDirect3DDevice9* FindD3D9DeviceFrom(void* root)
+{
+    if (!UserPtr(root))
+        return nullptr;
+    IDirect3DDevice9* dev = AnyDevice(root);
+    if (dev)
+        return BorrowD3D9(dev);
+    const int n = ReadableBytes(root, 0x2000) & ~3;
+    BYTE* p = (BYTE*)root;
+    for (int off = 0; off + 4 <= n; off += 4)
+    {
+        void* child = *(void**)(p + off);
+        dev = AnyDevice(child);
+        if (dev)
+            return BorrowD3D9(dev);
+        if (!UserPtr(child))
+            continue;
+        const int m = ReadableBytes(child, 0x120) & ~3;
+        BYTE* q = (BYTE*)child;
+        for (int j = 0; j + 4 <= m; j += 4)
+        {
+            dev = AnyDevice(*(void**)(q + j));
+            if (dev)
+                return BorrowD3D9(dev);
+        }
+    }
+    return nullptr;
+}
+
+static IDirect3DDevice9* DeviceFromFn(unsigned rva)
+{
+    if (!g_base || !rva)
+        return nullptr;
+    BYTE* fn = (BYTE*)g_base + rva;
+    const int n = ReadableBytes(fn, 0x200);
+    if (n < 8)
+        return nullptr;
+    for (int i = 0; i + 6 < n; ++i)
+    {
+        unsigned va = 0;
+        if (fn[i] == 0xA1)
+            va = *(unsigned*)(fn + i + 1);
+        else if (fn[i] == 0x8B && (fn[i + 1] == 0x0D || fn[i + 1] == 0x15 || fn[i + 1] == 0x35 || fn[i + 1] == 0x3D))
+            va = *(unsigned*)(fn + i + 2);
+        else
+            continue;
+        if (va < 0x10000 || va >= 0x7FFF0000)
+            continue;
+        void* slot = (void*)va;
+        void* mgr = UserPtr(slot) ? *(void**)slot : nullptr;
+        IDirect3DDevice9* dev = FindD3D9DeviceFrom(UserPtr(mgr) ? mgr : slot);
+        if (dev)
+            return dev;
+    }
+    return nullptr;
+}
+
+static IDirect3DDevice9* ScanClientDataForDevice()
+{
+    if (!g_base)
+        return nullptr;
+    MODULEINFO info = {};
+    if (!GetModuleInformation(GetCurrentProcess(), (HMODULE)g_base, &info, sizeof(info)))
+        return nullptr;
+    BYTE* p = (BYTE*)info.lpBaseOfDll;
+    BYTE* end = p + info.SizeOfImage;
+    while (p + 4 <= end)
+    {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
+        {
+            p += 0x1000;
+            continue;
+        }
+        BYTE* regionEnd = (BYTE*)mbi.BaseAddress + mbi.RegionSize;
+        const DWORD prot = mbi.Protect & 0xFF;
+        if (prot != PAGE_READWRITE && prot != PAGE_WRITECOPY && prot != PAGE_EXECUTE_READWRITE)
+        {
+            p = regionEnd;
+            continue;
+        }
+        if (regionEnd > end)
+            regionEnd = end;
+        for (; p + 4 <= regionEnd; p += 4)
+        {
+            IDirect3DDevice9* dev = QueryD3D9Device(*(void**)p);
+            if (dev)
+                return BorrowD3D9(dev);
+        }
+        p = regionEnd;
+    }
+    return nullptr;
+}
+
+static IDirect3DDevice9* FindD3D9Device()
+{
+    if (g_d3d9)
+        return g_d3d9;
+    if (!g_base)
+        return nullptr;
+    __try
+    {
+        IDirect3DDevice9* dev = nullptr;
+        if (kStateManagerRva)
+        {
+            void* slot = (void*)(g_base + kStateManagerRva);
+            void* mgr = UserPtr(slot) ? *(void**)slot : nullptr;
+            DumpFindEvidence(UserPtr(mgr) ? mgr : slot);
+            dev = FindD3D9DeviceFrom(UserPtr(mgr) ? mgr : slot);
+            if (dev)
+            {
+                memcpy(g_d3d9How, "stateMgr", 9);
+                return dev;
+            }
+        }
+        dev = DeviceFromFn(kRenderLine3dRva);
+        if (dev)
+        {
+            memcpy(g_d3d9How, "line3d", 7);
+            return dev;
+        }
+        dev = DeviceFromFn(kRenderLineRva);
+        if (dev)
+        {
+            memcpy(g_d3d9How, "line2d", 7);
+            return dev;
+        }
+        if (kScreenSingletonRva)
+        {
+            void* slot = (void*)(g_base + kScreenSingletonRva);
+            void* screen = UserPtr(slot) ? *(void**)slot : nullptr;
+            dev = FindD3D9DeviceFrom(UserPtr(screen) ? screen : slot);
+            if (dev)
+            {
+                memcpy(g_d3d9How, "screen", 7);
+                return dev;
+            }
+        }
+        IDirect3DTexture9* tex = FindAtlasTexture(MiniMap(), nullptr);
+        if (tex)
+        {
+            IDirect3DDevice9* fromTex = nullptr;
+            tex->GetDevice(&fromTex);
+            tex->Release();
+            if (fromTex)
+            {
+                memcpy(g_d3d9How, "atlas", 6);
+                return BorrowD3D9(fromTex);
+            }
+        }
+        static DWORD s_lastScan;
+        const DWORD now = GetTickCount();
+        if (!s_lastScan || now - s_lastScan > 2000)
+        {
+            s_lastScan = now;
+            dev = ScanClientDataForDevice();
+            if (dev)
+            {
+                memcpy(g_d3d9How, "dataScan", 9);
+                return dev;
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    return nullptr;
+}
+
+static int ShouldLogProbe(unsigned n)
+{
+    return n <= 20 || (n % 60) == 0;
+}
+
+static void DescribeDeviceWindow(IDirect3DDevice9* dev, HWND* outWnd, int* outOurs, char* cls, int clsN, char* title, int titleN, RECT* client)
+{
+    *outWnd = nullptr;
+    *outOurs = 0;
+    cls[0] = 0;
+    title[0] = 0;
+    client->left = client->top = client->right = client->bottom = 0;
+    D3DDEVICE_CREATION_PARAMETERS cp = {};
+    if (FAILED(dev->GetCreationParameters(&cp)) || !cp.hFocusWindow)
+        return;
+    *outWnd = cp.hFocusWindow;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(cp.hFocusWindow, &pid);
+    *outOurs = pid == GetCurrentProcessId() ? 1 : 0;
+    GetClassNameA(cp.hFocusWindow, cls, clsN);
+    GetWindowTextA(cp.hFocusWindow, title, titleN);
+    GetClientRect(cp.hFocusWindow, client);
+}
+
+static HRESULT DrawMagentaProbe(IDirect3DDevice9* dev, const char* where, unsigned n)
+{
+    if (!dev || !g_farmCircleOn || g_inCircleDraw)
+        return E_FAIL;
+    g_inCircleDraw = 1;
+    HRESULT hr = E_FAIL;
+    IDirect3DBaseTexture9* oldTex = nullptr;
+    IDirect3DVertexShader9* oldVs = nullptr;
+    IDirect3DPixelShader9* oldPs = nullptr;
+    IDirect3DSurface9* rt = nullptr;
+    IDirect3DSurface9* bb = nullptr;
+    IDirect3DSwapChain9* chain0 = nullptr;
+    IDirect3DSwapChain9* chain1 = nullptr;
+    D3DVIEWPORT9 vp = {};
+    HWND wnd = nullptr;
+    int ours = 0;
+    char cls[48] = {};
+    char title[64] = {};
+    RECT client = {};
+    int rtEqBb = -1;
+    __try
+    {
+        DescribeDeviceWindow(dev, &wnd, &ours, cls, 48, title, 64, &client);
+        dev->GetViewport(&vp);
+        dev->GetRenderTarget(0, &rt);
+        if (SUCCEEDED(dev->GetSwapChain(0, &chain0)) && chain0)
+            chain0->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &bb);
+        else
+            dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb);
+        dev->GetSwapChain(1, &chain1);
+        if (rt && bb)
+            rtEqBb = rt == bb ? 1 : 0;
+        DWORD oldFvf = 0, oldZ = 0, oldZw = 0, oldBlend = 0, oldCull = 0, oldLight = 0, oldFog = 0;
+        DWORD oldCop = 0, oldCarg = 0, oldAop = 0, oldCop1 = 0, oldCw = 0, oldFill = 0, oldScissor = 0;
+        dev->GetFVF(&oldFvf);
+        dev->GetRenderState(D3DRS_ZENABLE, &oldZ);
+        dev->GetRenderState(D3DRS_ZWRITEENABLE, &oldZw);
+        dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &oldBlend);
+        dev->GetRenderState(D3DRS_CULLMODE, &oldCull);
+        dev->GetRenderState(D3DRS_LIGHTING, &oldLight);
+        dev->GetRenderState(D3DRS_FOGENABLE, &oldFog);
+        dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldCw);
+        dev->GetRenderState(D3DRS_FILLMODE, &oldFill);
+        dev->GetRenderState(D3DRS_SCISSORTESTENABLE, &oldScissor);
+        dev->GetTextureStageState(0, D3DTSS_COLOROP, &oldCop);
+        dev->GetTextureStageState(0, D3DTSS_COLORARG1, &oldCarg);
+        dev->GetTextureStageState(0, D3DTSS_ALPHAOP, &oldAop);
+        dev->GetTextureStageState(1, D3DTSS_COLOROP, &oldCop1);
+        dev->GetTexture(0, &oldTex);
+        dev->GetVertexShader(&oldVs);
+        dev->GetPixelShader(&oldPs);
+        dev->SetVertexShader(nullptr);
+        dev->SetPixelShader(nullptr);
+        dev->SetTexture(0, nullptr);
+        dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
+        dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+        dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+        dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+        dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+        dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
+        dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+        dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+        dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+        dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+        dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+        dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+        dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+        dev->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
+        const float x0 = (float)vp.X + (float)vp.Width * 0.1f;
+        const float y0 = (float)vp.Y + (float)vp.Height * 0.1f;
+        const float x1 = (float)vp.X + (float)vp.Width * 0.9f;
+        const float y1 = (float)vp.Y + (float)vp.Height * 0.9f;
+        struct RhwVert { float x, y, z, rhw; unsigned color; };
+        const unsigned mag = 0xFFFF00FFu;
+        RhwVert v[4] = {
+            { x0, y0, 0.f, 1.f, mag },
+            { x1, y0, 0.f, 1.f, mag },
+            { x0, y1, 0.f, 1.f, mag },
+            { x1, y1, 0.f, 1.f, mag }
+        };
+        hr = dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(RhwVert));
+        g_lastUpHr = hr;
+        if (oldVs)
+            dev->SetVertexShader(oldVs);
+        if (oldPs)
+            dev->SetPixelShader(oldPs);
+        if (oldFvf)
+            dev->SetFVF(oldFvf);
+        dev->SetTexture(0, oldTex);
+        dev->SetTextureStageState(0, D3DTSS_COLOROP, oldCop);
+        dev->SetTextureStageState(0, D3DTSS_COLORARG1, oldCarg);
+        dev->SetTextureStageState(0, D3DTSS_ALPHAOP, oldAop);
+        dev->SetTextureStageState(1, D3DTSS_COLOROP, oldCop1);
+        dev->SetRenderState(D3DRS_LIGHTING, oldLight);
+        dev->SetRenderState(D3DRS_ZENABLE, oldZ);
+        dev->SetRenderState(D3DRS_ZWRITEENABLE, oldZw);
+        dev->SetRenderState(D3DRS_FOGENABLE, oldFog);
+        dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldBlend);
+        dev->SetRenderState(D3DRS_CULLMODE, oldCull);
+        dev->SetRenderState(D3DRS_COLORWRITEENABLE, oldCw);
+        dev->SetRenderState(D3DRS_FILLMODE, oldFill);
+        dev->SetRenderState(D3DRS_SCISSORTESTENABLE, oldScissor);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        hr = E_FAIL;
+        g_lastUpHr = hr;
+        NativeLog("DrawPrimitiveUP FAULT where=%s n=%u dev=%p", where, n, dev);
+    }
+    if (oldTex)
+        oldTex->Release();
+    if (oldVs)
+        oldVs->Release();
+    if (oldPs)
+        oldPs->Release();
+    if (ShouldLogProbe(n) || FAILED(hr))
+    {
+        NativeLog(
+            "Hook%s n=%u dev=%p vp=%u,%u %ux%u wnd=%p ours=%d cls=%s title=%s client=%dx%d rt=%p bb=%p chain0=%p chain1=%p rtEqBb=%d DrawPrimitiveUP hr=0x%X",
+            where, n, dev, vp.X, vp.Y, vp.Width, vp.Height, wnd, ours, cls, title,
+            client.right - client.left, client.bottom - client.top,
+            rt, bb, chain0, chain1, rtEqBb, (unsigned)hr);
+    }
+    if (rt)
+        rt->Release();
+    if (bb)
+        bb->Release();
+    if (chain0)
+        chain0->Release();
+    if (chain1)
+        chain1->Release();
+    g_inCircleDraw = 0;
+    return hr;
+}
+
+static int DeviceIsDummyWindow(IDirect3DDevice9* dev)
+{
+    D3DDEVICE_CREATION_PARAMETERS cp = {};
+    if (FAILED(dev->GetCreationParameters(&cp)) || !cp.hFocusWindow)
+        return 0;
+    return cp.hFocusWindow == GetDesktopWindow() ? 1 : 0;
+}
+
+static HRESULT __stdcall HookEndScene(IDirect3DDevice9* dev)
+{
+    ++g_nEndScene;
+    ++g_nEndSincePresent;
+    if (dev && !DeviceIsDummyWindow(dev))
+    {
+        if (!g_d3d9How[0])
+            memcpy(g_d3d9How, "EndScene", 9);
+        KeepD3D9(dev);
+        DrawMagentaProbe(dev, "EndScene", g_nEndScene);
+    }
+    else if (ShouldLogProbe(g_nEndScene))
+        NativeLog("HookEndScene dummy/skip n=%u dev=%p", g_nEndScene, dev);
+    return g_origEndScene ? g_origEndScene(dev) : D3D_OK;
+}
+
+static HRESULT __stdcall HookBeginScene(IDirect3DDevice9* dev)
+{
+    g_drew3d = 0;
+    ++g_nBeginScene;
+    ++g_nBeginSincePresent;
+    if (dev && !DeviceIsDummyWindow(dev))
+        KeepD3D9(dev);
+    if (ShouldLogProbe(g_nBeginScene))
+        NativeLog("HookBeginScene n=%u dev=%p", g_nBeginScene, dev);
+    return g_origBeginScene ? g_origBeginScene(dev) : D3D_OK;
+}
+
+static HRESULT __stdcall HookPresent(IDirect3DDevice9* dev, const RECT* src, const RECT* dst, HWND hwnd, const RGNDATA* dirty)
+{
+    ++g_nPresent;
+    if (dev && !DeviceIsDummyWindow(dev))
+    {
+        KeepD3D9(dev);
+        if (ShouldLogProbe(g_nPresent) || g_nEndSincePresent != 1)
+        {
+            NativeLog("HookPresent n=%u dev=%p hwnd=%p begins=%u ends=%u sincePresent begin=%u end=%u",
+                g_nPresent, dev, hwnd, g_nBeginScene, g_nEndScene, g_nBeginSincePresent, g_nEndSincePresent);
+        }
+        DrawMagentaProbe(dev, "Present", g_nPresent);
+    }
+    g_nBeginSincePresent = 0;
+    g_nEndSincePresent = 0;
+    return g_origPresent ? g_origPresent(dev, src, dst, hwnd, dirty) : D3D_OK;
+}
+
+static HRESULT __stdcall HookDIP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, INT baseVert,
+    UINT minIndex, UINT numVerts, UINT startIndex, UINT primCount)
+{
+    ++g_nDIP;
+    if (!g_inCircleDraw && dev && !DeviceIsDummyWindow(dev))
+    {
+        if (!g_d3d9How[0])
+            memcpy(g_d3d9How, "DIP", 4);
+        KeepD3D9(dev);
+        if (ShouldLogProbe(g_nDIP))
+            NativeLog("HookDIP n=%u dev=%p type=%u prims=%u", g_nDIP, dev, (unsigned)type, primCount);
+        if (g_farmCircleOn && g_nEndScene == 0 && g_nDIP <= 5)
+            DrawMagentaProbe(dev, "DIP", g_nDIP);
+    }
+    return g_origDIP ? g_origDIP(dev, type, baseVert, minIndex, numVerts, startIndex, primCount) : D3D_OK;
+}
+
+static HRESULT __stdcall HookDP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, UINT start, UINT count)
+{
+    if (!g_inCircleDraw && dev && !DeviceIsDummyWindow(dev))
+        KeepD3D9(dev);
+    return g_origDP ? g_origDP(dev, type, start, count) : D3D_OK;
+}
+
+static HRESULT __stdcall HookDrawUP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride)
+{
+    if (!g_inCircleDraw && dev && !DeviceIsDummyWindow(dev))
+        KeepD3D9(dev);
+    return g_origDrawUP ? g_origDrawUP(dev, type, count, data, stride) : D3D_OK;
+}
+
+static HRESULT __stdcall HookSetTransform(IDirect3DDevice9* dev, D3DTRANSFORMSTATETYPE state, const D3DMATRIX* matrix)
+{
+    if (!g_inCircleDraw && dev && !DeviceIsDummyWindow(dev))
+        KeepD3D9(dev);
+    return g_origSetTransform ? g_origSetTransform(dev, state, matrix) : D3D_OK;
+}
+
+static void TryHalTrampoline(void** vt, int slot, void* hook, void** orig, const char* name)
+{
+    if (*orig || !vt || !vt[slot])
+        return;
+    BYTE* p = Unwrap((BYTE*)vt[slot]);
+    if (Trampoline(vt[slot], hook, orig))
+    {
+        NativeLog("farm circle CODE trampoline %s fn=%p steal=%u", name, vt[slot], StealLen(p));
+        return;
+    }
+    NativeLog("farm circle %s steal fail %02X %02X %02X %02X %02X %02X %02X",
+        name, p[0], p[1], p[2], p[3], p[4], p[5], p[6]);
+}
+
+static void HookDeviceEndScene(IDirect3DDevice9* dev)
+{
+    (void)dev;
+}
+
+static void KeepD3D9(IDirect3DDevice9* dev)
+{
+    if (!dev)
+        return;
+    if (g_d3d9 != dev)
+    {
+        g_d3d9 = dev;
+        D3DDEVICE_CREATION_PARAMETERS cp = {};
+        HWND wnd = nullptr;
+        char title[96] = {};
+        if (SUCCEEDED(dev->GetCreationParameters(&cp)))
+            wnd = cp.hFocusWindow;
+        if (wnd)
+            GetWindowTextA(wnd, title, sizeof(title));
+        NativeLog("farm circle live d3d9: YES ptr=%p wnd=%p title=%s how=%s",
+            dev, wnd, title, g_d3d9How[0] ? g_d3d9How : "hook");
+    }
+}
+
+static void HookDummyDeviceClasses()
+{
+    static int s_done;
+    if (s_done)
+        return;
+    s_done = 1;
+    IDirect3D9* d3d = Direct3DCreate9(D3D_SDK_VERSION);
+    if (!d3d)
+    {
+        NativeLog("farm circle Direct3DCreate9 failed");
+        return;
+    }
+    D3DPRESENT_PARAMETERS pp = {};
+    pp.Windowed = TRUE;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.hDeviceWindow = GetDesktopWindow();
+    pp.BackBufferFormat = D3DFMT_UNKNOWN;
+    IDirect3DDevice9* dummy = nullptr;
+    HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, pp.hDeviceWindow,
+        D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &dummy);
+    if (FAILED(hr) || !dummy)
+        hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, pp.hDeviceWindow,
+            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dummy);
+    NativeLog("farm circle dummy for CODE trampoline hr=0x%X dev=%p vt=%p",
+        (unsigned)hr, dummy, dummy ? *(void***)dummy : nullptr);
+    if (dummy)
+    {
+        void** vt = *(void***)dummy;
+        TryHalTrampoline(vt, 83, (void*)HookDrawUP, (void**)&g_origDrawUP, "DrawPrimitiveUP");
+        TryHalTrampoline(vt, 82, (void*)HookDIP, (void**)&g_origDIP, "DrawIndexedPrimitive");
+        TryHalTrampoline(vt, 81, (void*)HookDP, (void**)&g_origDP, "DrawPrimitive");
+        TryHalTrampoline(vt, 44, (void*)HookSetTransform, (void**)&g_origSetTransform, "SetTransform");
+        TryHalTrampoline(vt, 42, (void*)HookEndScene, (void**)&g_origEndScene, "EndScene");
+        TryHalTrampoline(vt, 41, (void*)HookBeginScene, (void**)&g_origBeginScene, "BeginScene");
+        TryHalTrampoline(vt, 17, (void*)HookPresent, (void**)&g_origPresent, "Present");
+        dummy->Release();
+    }
+    d3d->Release();
+}
+
+static IDirect3DDevice9* TryGetViewport(void* p)
+{
+    if (!UserPtr(p) || !UserPtr(*(void**)p))
+        return nullptr;
+    IDirect3DDevice9* dev = (IDirect3DDevice9*)p;
+    __try
+    {
+        D3DVIEWPORT9 vp = {};
+        if (FAILED(dev->GetViewport(&vp)))
+            return nullptr;
+        if (vp.Width < 64 || vp.Width > 16384 || vp.Height < 64 || vp.Height > 16384)
+            return nullptr;
+        D3DDEVICE_CREATION_PARAMETERS cp = {};
+        const HRESULT hr = dev->GetCreationParameters(&cp);
+        NativeLog("farm circle viewport-ok p=%p vp=%u,%u %ux%u createhr=0x%X wnd=%p",
+            p, vp.X, vp.Y, vp.Width, vp.Height, (unsigned)hr, cp.hFocusWindow);
+        return dev;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
+static IDirect3DDevice9* ProbeStateManagerDevice()
+{
+    if (!g_base || !kStateManagerRva)
+        return nullptr;
+    void* slot = (void*)(g_base + kStateManagerRva);
+    void* mgr = UserPtr(slot) ? *(void**)slot : nullptr;
+    if (!UserPtr(mgr))
+        return nullptr;
+    static void* s_raw;
+    BYTE* p = (BYTE*)mgr;
+    const int n = ReadableBytes(mgr, 0x100);
+    if (s_raw != mgr && n >= 20)
+    {
+        s_raw = mgr;
+        void* a = *(void**)(p + 4);
+        NativeLog("farm circle mgr raw vt=%p +4=%p +8=%p +C=%p",
+            *(void**)p, a, *(void**)(p + 8), *(void**)(p + 12));
+        if (UserPtr(a) && ReadableBytes(a, 16) >= 16)
+        {
+            unsigned* u = (unsigned*)a;
+            NativeLog("farm circle mgr+4 dwords %08X %08X %08X %08X", u[0], u[1], u[2], u[3]);
+            char m0[40] = {}, m1[40] = {};
+            ModName((void*)u[0], m0, 40);
+            if (UserPtr((void*)u[0]))
+                ModName(*(void**)(void*)u[0], m1, 40);
+            NativeLog("farm circle mgr+4 first=%s inner=%s", m0, m1);
+        }
+    }
+    for (int off = 0; off + 4 <= n && off <= 0x80; off += 4)
+    {
+        void* cand = *(void**)(p + off);
+        IDirect3DDevice9* dev = TryGetViewport(cand);
+        if (dev)
+            return dev;
+        if (!UserPtr(cand))
+            continue;
+        const int m = ReadableBytes(cand, 0x80);
+        BYTE* q = (BYTE*)cand;
+        for (int j = 0; j + 4 <= m; j += 4)
+        {
+            dev = TryGetViewport(*(void**)(q + j));
+            if (dev)
+                return dev;
+            dev = TryGetViewport(q + j);
+            if (dev)
+                return dev;
+        }
+    }
+    return nullptr;
+}
+
+static int FarmCirclePos(float* x, float* y, float* z)
+{
+    if (g_farmCircleR < 50.f)
+        return 0;
+    void* inst = MainInstance();
+    if (!inst)
+        inst = CallGetMainActor();
+    if (g_farmCircleLocked)
+    {
+        *x = g_farmCircleX;
+        *y = kNegateY ? -g_farmCircleY : g_farmCircleY;
+    }
+    else if (!ReadPixel(inst, x, y))
+        return 0;
+    if (!ReadPixelZ(inst, z))
+        *z = 0.f;
+    return 1;
+}
+
+static void MatMul4(float* o, const float* a, const float* b)
+{
+    float t[16];
+    for (int r = 0; r < 4; ++r)
+    {
+        for (int c = 0; c < 4; ++c)
+            t[r * 4 + c] = a[r * 4 + 0] * b[0 * 4 + c] + a[r * 4 + 1] * b[1 * 4 + c] +
+                a[r * 4 + 2] * b[2 * 4 + c] + a[r * 4 + 3] * b[3 * 4 + c];
+    }
+    memcpy(o, t, 64);
+}
+
+static int ProjectPoint(const float* vp, float x, float y, float z, float* nx, float* ny)
+{
+    const float cx = x * vp[0] + y * vp[4] + z * vp[8] + vp[12];
+    const float cy = x * vp[1] + y * vp[5] + z * vp[9] + vp[13];
+    const float cw = x * vp[3] + y * vp[7] + z * vp[11] + vp[15];
+    if (cw > -0.0001f && cw < 0.0001f)
+        return 0;
+    if (cw < 0.f)
+        return 0;
+    *nx = cx / cw;
+    *ny = cy / cw;
+    return *nx == *nx && *ny == *ny;
+}
+
+static void AxisPos(int axis, float x, float y, float z, float* ox, float* oy, float* oz)
+{
+    if (axis == 1)
+    {
+        *ox = x;
+        *oy = z;
+        *oz = y;
+    }
+    else
+    {
+        *ox = x;
+        *oy = y;
+        *oz = z;
+    }
+}
+
+static int ScoreMatrix(const float* vp, float px, float py, float pz, int local, int axis, float* score)
+{
+    const float tx = local ? 0.f : px;
+    const float ty = local ? 0.f : py;
+    const float tz = local ? 0.f : pz;
+    float ax, ay, az, ox, oy;
+    AxisPos(axis, tx, ty, tz, &ax, &ay, &az);
+    if (!ProjectPoint(vp, ax, ay, az, &ox, &oy))
+        return 0;
+    const float dist = sqrtf(ox * ox + oy * oy);
+    if (dist < g_vpMinDist)
+        g_vpMinDist = dist;
+    if (dist > 4.f)
+        return 0;
+    if (local && dist > 0.22f)
+        return 0;
+    const float probe = 800.f;
+    float bx, by, bz, qx, qy, rx, ry;
+    AxisPos(axis, tx + probe, ty, tz, &bx, &by, &bz);
+    if (!ProjectPoint(vp, bx, by, bz, &qx, &qy))
+        return 0;
+    AxisPos(axis, tx, ty + probe, tz, &bx, &by, &bz);
+    if (!ProjectPoint(vp, bx, by, bz, &rx, &ry))
+        return 0;
+    const float dx = sqrtf((qx - ox) * (qx - ox) + (qy - oy) * (qy - oy));
+    const float dy = sqrtf((rx - ox) * (rx - ox) + (ry - oy) * (ry - oy));
+    if (dist <= g_vpMinDist + 0.0001f)
+    {
+        g_vpMinDx = dx;
+        g_vpMinDy = dy;
+    }
+    const float scale = dx > dy ? dx : dy;
+    const float spanMin = dx < dy ? dx : dy;
+    if (scale < 0.05f || scale > 3.f)
+        return 0;
+    if (spanMin < 0.02f)
+        return 0;
+    *score = dist * 8.f + fabsf(dx - dy) * 0.2f + 0.2f / scale;
+    return 1;
+}
+
+static void ConsiderOne(const float* m, float x, float y, float z)
+{
+    float tp[16];
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+            tp[c * 4 + r] = m[r * 4 + c];
+    const float* mats[2] = { m, tp };
+    for (int t = 0; t < 2; ++t)
+    {
+        float sc = 0.f;
+        if (!ScoreMatrix(mats[t], x, y, z, 1, 0, &sc))
+            continue;
+        if (!g_vpFrameOk || sc < g_vpFrameScore)
+        {
+            memcpy(g_vpFrame, mats[t], 64);
+            g_vpFrameScore = sc;
+            g_vpFrameOk = 1;
+            g_vpFrameLocal = 1;
+            g_vpFrameAxis = 0;
+        }
+    }
+}
+
+static float TerrainZ(float x, float y, float fallback)
+{
+    if (!g_base || !kGetHeightRva || !kBgSingletonRva)
+        return fallback;
+    void* slot = (void*)(g_base + kBgSingletonRva);
+    if (!UserPtr(slot))
+        return fallback;
+    void* bg = *(void**)slot;
+    if (!UserPtr(bg) || ReadableBytes(bg, 0x40) < 0x40)
+        return fallback;
+    if (!*(void**)((char*)bg + 0x38))
+        return fallback;
+    FnGetHeight fn = (FnGetHeight)(g_base + kGetHeightRva);
+    float z = fallback;
+    __try
+    {
+        z = fn(bg, x, y);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return fallback;
+    }
+    if (z != z || z < -50000.f || z > 200000.f)
+        return fallback;
+    return z;
+}
+
+static void ConsiderCbMatrices(const float* m, int nFloats, float x, float y, float z)
+{
+    for (int off = 0; off + 16 <= nFloats; off += 4)
+        ConsiderOne(m + off, x, y, z);
+    const int mats = nFloats / 16;
+    for (int i = 0; i + 1 < mats; ++i)
+    {
+        float vp[16];
+        MatMul4(vp, m + i * 16, m + (i + 1) * 16);
+        ConsiderOne(vp, x, y, z);
+        MatMul4(vp, m + (i + 1) * 16, m + i * 16);
+        ConsiderOne(vp, x, y, z);
+    }
+}
+
+static void ConsiderGraphicBase(float x, float y, float z)
+{
+    if (!g_base)
+        return;
+    float* ident = (float*)(g_base + 0x3784FF0u);
+    if (ReadableBytes(ident, 64 * 7) < 64 * 7)
+        return;
+    float* view = ident + 16;
+    float* proj = ident + 32;
+    float* world = ident + 80;
+    float vp[16];
+    float wvp[16];
+    MatMul4(vp, view, proj);
+    ConsiderOne(vp, x, y, z);
+    MatMul4(vp, proj, view);
+    ConsiderOne(vp, x, y, z);
+    MatMul4(vp, view, proj);
+    MatMul4(wvp, world, vp);
+    ConsiderOne(wvp, x, y, z);
+}
+
+static void TryCaptureVpFromCB(void* ctx, ID3D11Buffer* cb)
+{
+    if (!ctx || !cb || g_inCircleDraw || g_vpCopies >= 12)
+        return;
+    float x = 0, y = 0, z = 0;
+    if (!FarmCirclePos(&x, &y, &z))
+        return;
+    ID3D11Device* dev = nullptr;
+    ((ID3D11DeviceContext*)ctx)->GetDevice(&dev);
+    if (!dev)
+        return;
+    D3D11_BUFFER_DESC bd = {};
+    cb->GetDesc(&bd);
+    if (bd.ByteWidth < 64 || bd.ByteWidth > 4096)
+    {
+        dev->Release();
+        return;
+    }
+    if (g_vpStaging && (g_vpStagingDev != dev || g_vpStagingBytes != bd.ByteWidth))
+    {
+        g_vpStaging->Release();
+        g_vpStaging = nullptr;
+        g_vpStagingDev = nullptr;
+        g_vpStagingBytes = 0;
+    }
+    if (!g_vpStaging)
+    {
+        D3D11_BUFFER_DESC sd = bd;
+        sd.Usage = D3D11_USAGE_STAGING;
+        sd.BindFlags = 0;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        sd.MiscFlags = 0;
+        if (FAILED(dev->CreateBuffer(&sd, nullptr, &g_vpStaging)) || !g_vpStaging)
+        {
+            dev->Release();
+            return;
+        }
+        g_vpStagingDev = dev;
+        g_vpStagingBytes = bd.ByteWidth;
+    }
+    ++g_vpCopies;
+    ID3D11DeviceContext* ic = (ID3D11DeviceContext*)ctx;
+    ic->CopyResource(g_vpStaging, cb);
+    D3D11_MAPPED_SUBRESOURCE map = {};
+    if (SUCCEEDED(ic->Map(g_vpStaging, 0, D3D11_MAP_READ, 0, &map)) && map.pData)
+    {
+        const int before = g_vpFrameOk;
+        const float beforeSc = g_vpFrameScore;
+        memcpy(g_vpLastCb, map.pData, 64);
+        g_vpLastCbOk = 1;
+        ConsiderCbMatrices((const float*)map.pData, (int)(bd.ByteWidth / 4), x, y, z);
+        ic->Unmap(g_vpStaging, 0);
+        if (g_vpFrameOk && (!before || g_vpFrameScore + 0.001f < beforeSc) && g_vpLogged < 8)
+        {
+            ++g_vpLogged;
+            NativeLog("farm circle terrain vp bytes=%u local=%d axis=%d score=%.3f xyz=%.0f,%.0f,%.0f r=%.0f",
+                bd.ByteWidth, g_vpFrameLocal, g_vpFrameAxis, g_vpFrameScore, x, y, z, g_farmCircleR);
+        }
+    }
+    dev->Release();
+}
+
+static unsigned g_vpDraws;
+static unsigned g_vpBinds;
+
+static void EnsureMagPs(ID3D11Device* dev)
+{
+    if (g_magPs && g_magDev == dev)
+        return;
+    if (!dev)
+        return;
+    static const char kPs[] =
+        "float4 main() : SV_TARGET { return float4(1.0, 0.0, 1.0, 1.0); }\n";
+    ID3DBlob* psb = nullptr;
+    ID3DBlob* err = nullptr;
+    HRESULT hr = D3DCompile(kPs, sizeof(kPs) - 1, nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psb, &err);
+    if (FAILED(hr))
+    {
+        NativeLog("terrain paint PS hr=0x%X %s", (unsigned)hr, err ? (char*)err->GetBufferPointer() : "");
+        if (err)
+            err->Release();
+        return;
+    }
+    if (err)
+        err->Release();
+    ID3D11PixelShader* ps = nullptr;
+    if (FAILED(dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &ps)) || !ps)
+    {
+        psb->Release();
+        return;
+    }
+    psb->Release();
+    if (g_magPs)
+        g_magPs->Release();
+    g_magPs = ps;
+    g_magDev = dev;
+    NativeLog("terrain paint magenta PS ready");
+}
+
+static void PaintMapDraw(void* ctx)
+{
+    if (!ctx)
+        return;
+    ++g_nMapDraw;
+}
+
+static void __stdcall HookVSSetCB(void* ctx, UINT start, UINT n, ID3D11Buffer* const* bufs)
+{
+    if (g_origVSSetCB)
+        g_origVSSetCB(ctx, start, n, bufs);
+    ++g_nVSSetCB;
+    if (!g_farmCircleOn || g_inCircleDraw || !bufs)
+        return;
+    ++g_vpBinds;
+}
+
+static void CaptureVpFromCtx(void* ctx)
+{
+    if (!ctx || g_inCircleDraw || g_vpCopies >= 12)
+        return;
+    ID3D11Buffer* cbs[4] = {};
+    ((ID3D11DeviceContext*)ctx)->VSGetConstantBuffers(0, 4, cbs);
+    for (int i = 0; i < 4; ++i)
+    {
+        if (!cbs[i])
+            continue;
+        TryCaptureVpFromCB(ctx, cbs[i]);
+        cbs[i]->Release();
+        if (g_vpCopies >= 12)
+            break;
+    }
+}
+
+static void NoteLiveDraw(void* ctx)
+{
+    ++g_nDraw11;
+    ++g_vpDraws;
+    g_liveCtx = (ID3D11DeviceContext*)ctx;
+    PaintMapDraw(ctx);
+}
+
+static int ShouldCaptureDraw(UINT primCount)
+{
+    if (!g_farmCircleOn || g_inCircleDraw || primCount < 6 || g_vpCopies >= 12)
+        return 0;
+    if (g_vpFrameOk && g_vpFrameScore < 0.35f)
+        return 0;
+    if (g_vpCopies < 2)
+        return 1;
+    return (g_nDraw11 % 48u) == 0u;
+}
+
+static void MaybeCaptureDraw(void* ctx, UINT primCount)
+{
+    (void)ctx;
+    (void)primCount;
+}
+
+static void __stdcall HookDrawIndexed11(void* ctx, UINT indexCount, UINT startIndex, INT baseVertex)
+{
+    NoteLiveDraw(ctx);
+    if (g_origDrawIndexed11)
+        g_origDrawIndexed11(ctx, indexCount, startIndex, baseVertex);
+    MaybeCaptureDraw(ctx, indexCount);
+}
+
+static void __stdcall HookDraw11(void* ctx, UINT vertexCount, UINT startVertex)
+{
+    NoteLiveDraw(ctx);
+    if (g_origDraw11)
+        g_origDraw11(ctx, vertexCount, startVertex);
+    MaybeCaptureDraw(ctx, vertexCount);
+}
+
+static void __stdcall HookDrawIndexedInstanced11(void* ctx, UINT indexCountPerInstance, UINT instanceCount, UINT startIndex, INT baseVertex, UINT startInstance)
+{
+    NoteLiveDraw(ctx);
+    if (g_origDrawIndexedInstanced11)
+        g_origDrawIndexedInstanced11(ctx, indexCountPerInstance, instanceCount, startIndex, baseVertex, startInstance);
+    MaybeCaptureDraw(ctx, indexCountPerInstance * (instanceCount ? instanceCount : 1));
+}
+
+static void __stdcall HookDrawInstanced11(void* ctx, UINT vertexCountPerInstance, UINT instanceCount, UINT startVertex, UINT startInstance)
+{
+    NoteLiveDraw(ctx);
+    if (g_origDrawInstanced11)
+        g_origDrawInstanced11(ctx, vertexCountPerInstance, instanceCount, startVertex, startInstance);
+    MaybeCaptureDraw(ctx, vertexCountPerInstance * (instanceCount ? instanceCount : 1));
+}
+
+static void __stdcall HookPSSetShader11(void* ctx, ID3D11PixelShader* ps, ID3D11ClassInstance* const* inst, UINT n)
+{
+    if (g_origPSSetShader11)
+        g_origPSSetShader11(ctx, ps, inst, n);
+}
+
+struct OverlayVert
+{
+    float x, y, z, w;
+    float r, g, b, a;
+};
+
+static int WorldToClip(float x, float y, float z, float ox, float oy, float oz, OverlayVert* v)
+{
+    if (g_vpLocal)
+    {
+        x -= ox;
+        y -= oy;
+        z -= oz;
+    }
+    float ax, ay, az;
+    AxisPos(g_vpAxis, x, y, z, &ax, &ay, &az);
+    v->x = ax * g_vp[0] + ay * g_vp[4] + az * g_vp[8] + g_vp[12];
+    v->y = ax * g_vp[1] + ay * g_vp[5] + az * g_vp[9] + g_vp[13];
+    v->z = ax * g_vp[2] + ay * g_vp[6] + az * g_vp[10] + g_vp[14];
+    v->w = ax * g_vp[3] + ay * g_vp[7] + az * g_vp[11] + g_vp[15];
+    v->r = 1.f;
+    v->g = 0.15f;
+    v->b = 1.f;
+    v->a = 0.9f;
+    return v->w < -0.001f || v->w > 0.001f;
+}
+
+static int EnsureOverlay(ID3D11Device* dev)
+{
+    if (g_ovVs && g_ovDev == dev)
+        return 1;
+    if (!dev)
+        return 0;
+    static const char kVs[] =
+        "#pragma pack_matrix(row_major)\n"
+        "cbuffer CB : register(b0) { float4x4 vp; };\n"
+        "struct VSIn { float4 p : POSITION; float4 c : COLOR; };\n"
+        "struct VSOut { float4 p : SV_POSITION; float4 c : COLOR; };\n"
+        "VSOut main(VSIn i) { VSOut o; o.p = mul(i.p, vp); o.c = i.c; return o; }\n";
+    static const char kPs[] =
+        "struct VSOut { float4 p : SV_POSITION; float4 c : COLOR; };\n"
+        "float4 main(VSOut i) : SV_TARGET { return i.c; }\n";
+    ID3DBlob* vsb = nullptr;
+    ID3DBlob* psb = nullptr;
+    ID3DBlob* err = nullptr;
+    HRESULT hr = D3DCompile(kVs, sizeof(kVs) - 1, nullptr, nullptr, nullptr, "main", "vs_4_0", 0, 0, &vsb, &err);
+    if (FAILED(hr))
+    {
+        NativeLog("farm circle VS compile hr=0x%X %s", (unsigned)hr, err ? (char*)err->GetBufferPointer() : "");
+        if (err)
+            err->Release();
+        return 0;
+    }
+    if (err)
+        err->Release();
+    err = nullptr;
+    hr = D3DCompile(kPs, sizeof(kPs) - 1, nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psb, &err);
+    if (FAILED(hr))
+    {
+        NativeLog("farm circle PS compile hr=0x%X %s", (unsigned)hr, err ? (char*)err->GetBufferPointer() : "");
+        if (err)
+            err->Release();
+        vsb->Release();
+        return 0;
+    }
+    if (err)
+        err->Release();
+    if (FAILED(dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &g_ovVs)))
+    {
+        vsb->Release();
+        psb->Release();
+        return 0;
+    }
+    if (FAILED(dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &g_ovPs)))
+    {
+        vsb->Release();
+        psb->Release();
+        return 0;
+    }
+    D3D11_INPUT_ELEMENT_DESC il[2] = {};
+    il[0].SemanticName = "POSITION";
+    il[0].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    il[0].AlignedByteOffset = 0;
+    il[1].SemanticName = "COLOR";
+    il[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    il[1].AlignedByteOffset = 16;
+    if (FAILED(dev->CreateInputLayout(il, 2, vsb->GetBufferPointer(), vsb->GetBufferSize(), &g_ovIl)))
+    {
+        vsb->Release();
+        psb->Release();
+        return 0;
+    }
+    vsb->Release();
+    psb->Release();
+    D3D11_BUFFER_DESC vbd = {};
+    vbd.ByteWidth = sizeof(OverlayVert) * 512;
+    vbd.Usage = D3D11_USAGE_DYNAMIC;
+    vbd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    vbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    if (FAILED(dev->CreateBuffer(&vbd, nullptr, &g_ovVb)))
+        return 0;
+    D3D11_RASTERIZER_DESC rd = {};
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_NONE;
+    rd.ScissorEnable = FALSE;
+    rd.DepthClipEnable = FALSE;
+    rd.DepthBias = 0;
+    rd.SlopeScaledDepthBias = 0.f;
+    if (FAILED(dev->CreateRasterizerState(&rd, &g_ovRs)))
+        return 0;
+    D3D11_BLEND_DESC bld = {};
+    bld.RenderTarget[0].BlendEnable = TRUE;
+    bld.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    bld.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    bld.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    bld.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    bld.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+    bld.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    bld.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    if (FAILED(dev->CreateBlendState(&bld, &g_ovBs)))
+        return 0;
+    D3D11_DEPTH_STENCIL_DESC dd = {};
+    dd.DepthEnable = FALSE;
+    dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+    if (FAILED(dev->CreateDepthStencilState(&dd, &g_ovDs)))
+        return 0;
+    D3D11_DEPTH_STENCIL_DESC dz = {};
+    dz.DepthEnable = TRUE;
+    dz.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    dz.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    if (FAILED(dev->CreateDepthStencilState(&dz, &g_ovDsZ)))
+        return 0;
+    D3D11_BUFFER_DESC cbd = {};
+    cbd.ByteWidth = 64;
+    cbd.Usage = D3D11_USAGE_DYNAMIC;
+    cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    if (FAILED(dev->CreateBuffer(&cbd, nullptr, &g_ovCb)))
+        return 0;
+    g_ovDev = dev;
+    NativeLog("farm circle D3D11 terrain ring ready");
+    return 1;
+}
+
+static void MulVecMat(float* o, const float* v, const float* m)
+{
+    o[0] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8] + v[3] * m[12];
+    o[1] = v[0] * m[1] + v[1] * m[5] + v[2] * m[9] + v[3] * m[13];
+    o[2] = v[0] * m[2] + v[1] * m[6] + v[2] * m[10] + v[3] * m[14];
+    o[3] = v[0] * m[3] + v[1] * m[7] + v[2] * m[11] + v[3] * m[15];
+}
+
+static int FarmW2S(float x, float y, float z, float vw, float vh,
+    const float* world, const float* view, const float* proj, float* sx, float* sy)
+{
+    float p[4] = { x, y, z, 1.f };
+    float a[4], b[4], c[4];
+    MulVecMat(a, p, world);
+    MulVecMat(b, a, view);
+    MulVecMat(c, b, proj);
+    if (c[3] <= 0.001f)
+        return 0;
+    const float ndx = c[0] / c[3];
+    const float ndy = c[1] / c[3];
+    const float ndz = c[2] / c[3];
+    if (ndz >= 1.f)
+        return 0;
+    *sx = (ndx + 1.f) * 0.5f * vw;
+    *sy = (1.f - ndy) * 0.5f * vh;
+    return 1;
+}
+
+static int MatLooksOk(const float* m)
+{
+    float s = 0.f;
+    for (int i = 0; i < 16; ++i)
+        s += fabsf(m[i]);
+    return s == s && s > 0.5f;
+}
+
+static int LoadFarmW2S(float* world, float* view, float* proj)
+{
+    static const float kIdent[16] = {
+        1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1
+    };
+    memcpy(world, kIdent, 64);
+    memcpy(view, kIdent, 64);
+    memcpy(proj, kIdent, 64);
+    int ok = 0;
+    __try
+    {
+        if (!g_base)
+            return 0;
+        float* gbProj = (float*)(g_base + kMatProjRva);
+        float* gbView = (float*)(g_base + kMatViewRva);
+        if (ReadableBytes(gbProj, 64) < 64 || !MatLooksOk(gbProj))
+            return 0;
+        memcpy(proj, gbProj, 64);
+        if (ReadableBytes(gbView, 64) >= 64 && MatLooksOk(gbView))
+        {
+            memcpy(view, gbView, 64);
+            ok = 1;
+        }
+        void** slot = (void**)(g_base + kCamMgrRva);
+        if (UserPtr(slot))
+        {
+            void* mgr = *slot;
+            if (UserPtr(mgr) && ReadableBytes(mgr, 0x10) >= 0x10)
+            {
+                void* cam = *(void**)((char*)mgr + 0xC);
+                if (UserPtr(cam) && ReadableBytes((char*)cam + 0x6C, 64) >= 64)
+                {
+                    float* camView = (float*)((char*)cam + 0x6C);
+                    if (MatLooksOk(camView))
+                    {
+                        memcpy(view, camView, 64);
+                        ok = 1;
+                    }
+                }
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok = 0;
+    }
+    return ok;
+}
+
+static void HookLiveVSSetCB(ID3D11DeviceContext* ctx)
+{
+    if (!ctx)
+        return;
+    void** vt = *(void***)ctx;
+    TryHalTrampoline(vt, 7, (void*)HookVSSetCB, (void**)&g_origVSSetCB, "VSSetConstantBuffers");
+    TryHalTrampoline(vt, 9, (void*)HookPSSetShader11, (void**)&g_origPSSetShader11, "PSSetShader11");
+    TryHalTrampoline(vt, 12, (void*)HookDrawIndexed11, (void**)&g_origDrawIndexed11, "DrawIndexed11");
+    TryHalTrampoline(vt, 13, (void*)HookDraw11, (void**)&g_origDraw11, "Draw11");
+    TryHalTrampoline(vt, 20, (void*)HookDrawIndexedInstanced11, (void**)&g_origDrawIndexedInstanced11, "DrawIndexedInstanced11");
+    TryHalTrampoline(vt, 21, (void*)HookDrawInstanced11, (void**)&g_origDrawInstanced11, "DrawInstanced11");
+}
+
+static void DrawFarmRingOnTerrain(const char* where)
+{
+    if (g_drewTerrainRing || !g_farmCircleOn || g_inCircleDraw || !g_inWorld)
+        return;
+    ID3D11DeviceContext* ctx = g_liveCtx;
+    if (!ctx)
+        return;
+    float cx = 0, cy = 0, cz = 0;
+    if (!FarmCirclePos(&cx, &cy, &cz))
+        return;
+    ID3D11Device* dev = nullptr;
+    ctx->GetDevice(&dev);
+    if (!dev)
+        return;
+    if (!EnsureOverlay(dev))
+    {
+        dev->Release();
+        return;
+    }
+    float world[16], view[16], proj[16];
+    if (!LoadFarmW2S(world, view, proj))
+    {
+        if (g_farmCircleLogged < 8)
+        {
+            ++g_farmCircleLogged;
+            NativeLog("farm circle w2s no view/proj where=%s", where);
+        }
+        dev->Release();
+        return;
+    }
+    float vw = 1280.f, vh = 720.f;
+    if (g_liveSwap)
+    {
+        DXGI_SWAP_CHAIN_DESC scd = {};
+        if (SUCCEEDED(g_liveSwap->GetDesc(&scd)) && scd.BufferDesc.Width >= 64)
+        {
+            vw = (float)scd.BufferDesc.Width;
+            vh = (float)scd.BufferDesc.Height;
+        }
+    }
+    const float r = g_farmCircleR;
+    const float groundZ = TerrainZ(cx, cy, cz) + 5.f;
+    const int segs = 48;
+    float sx[49], sy[49];
+    int vis = 0;
+    for (int i = 0; i <= segs; ++i)
+    {
+        const float a = (3.14159265f * 2.f) * (float)i / (float)segs;
+        const float wx = cx + cosf(a) * r;
+        const float wy = cy + sinf(a) * r;
+        const float wz = TerrainZ(wx, wy, cz) + 5.f;
+        if (FarmW2S(wx, wy, wz, vw, vh, world, view, proj, &sx[i], &sy[i]))
+            ++vis;
+        else
+            sx[i] = sy[i] = -9999.f;
+    }
+    if (vis < 2)
+    {
+        if (g_farmCircleLogged < 8)
+        {
+            ++g_farmCircleLogged;
+            NativeLog("farm circle w2s hidden where=%s vis=%d r=%.0f xyz=%.0f,%.0f,%.0f proj11=%.2f %gx%g",
+                where, vis, r, cx, cy, groundZ, proj[11], vw, vh);
+        }
+        dev->Release();
+        return;
+    }
+    OverlayVert verts[512];
+    int nVert = 0;
+    const float hx = 3.f * 2.f / vw;
+    const float hy = 3.f * 2.f / vh;
+    for (int i = 0; i < segs && nVert + 6 <= 512; ++i)
+    {
+        if (sx[i] < -9000.f || sx[i + 1] < -9000.f)
+            continue;
+        const float ax = sx[i] / vw * 2.f - 1.f;
+        const float ay = 1.f - sy[i] / vh * 2.f;
+        const float bx = sx[i + 1] / vw * 2.f - 1.f;
+        const float by = 1.f - sy[i + 1] / vh * 2.f;
+        float dx = bx - ax;
+        float dy = by - ay;
+        const float len = sqrtf(dx * dx + dy * dy);
+        if (len < 1e-6f)
+            continue;
+        dx /= len;
+        dy /= len;
+        const float px = -dy * hx;
+        const float py = dx * hy;
+        OverlayVert a0 = { ax - px, ay - py, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
+        OverlayVert a1 = { ax + px, ay + py, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
+        OverlayVert b0 = { bx - px, by - py, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
+        OverlayVert b1 = { bx + px, by + py, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
+        verts[nVert++] = a0;
+        verts[nVert++] = a1;
+        verts[nVert++] = b0;
+        verts[nVert++] = a1;
+        verts[nVert++] = b1;
+        verts[nVert++] = b0;
+    }
+    if (nVert <= 0)
+    {
+        dev->Release();
+        return;
+    }
+    static const float kIdent[16] = {
+        1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1
+    };
+    memcpy(g_vp, kIdent, 64);
+    D3D11_MAPPED_SUBRESOURCE map = {};
+    if (FAILED(ctx->Map(g_ovVb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map)) || !map.pData)
+    {
+        dev->Release();
+        return;
+    }
+    memcpy(map.pData, verts, sizeof(OverlayVert) * (size_t)nVert);
+    ctx->Unmap(g_ovVb, 0);
+    map = {};
+    if (FAILED(ctx->Map(g_ovCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map)) || !map.pData)
+    {
+        dev->Release();
+        return;
+    }
+    memcpy(map.pData, g_vp, 64);
+    ctx->Unmap(g_ovCb, 0);
+    ID3D11RenderTargetView* curRtv = nullptr;
+    ID3D11DepthStencilView* curDsv = nullptr;
+    ctx->OMGetRenderTargets(1, &curRtv, &curDsv);
+    ID3D11RenderTargetView* drawRtv = curRtv;
+    ID3D11Texture2D* bb = nullptr;
+    if (!drawRtv && g_liveSwap)
+    {
+        if (SUCCEEDED(g_liveSwap->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) && bb)
+        {
+            if (bb != g_ovBb)
+            {
+                if (g_ovRtv)
+                    g_ovRtv->Release();
+                g_ovRtv = nullptr;
+                if (g_ovBb)
+                    g_ovBb->Release();
+                g_ovBb = bb;
+                g_ovBb->AddRef();
+                if (FAILED(dev->CreateRenderTargetView(bb, nullptr, &g_ovRtv)))
+                {
+                    D3D11_TEXTURE2D_DESC td = {};
+                    bb->GetDesc(&td);
+                    D3D11_RENDER_TARGET_VIEW_DESC rd = {};
+                    rd.Format = td.Format;
+                    rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+                    dev->CreateRenderTargetView(bb, &rd, &g_ovRtv);
+                }
+            }
+            drawRtv = g_ovRtv;
+        }
+    }
+    if (!drawRtv)
+    {
+        if (g_farmCircleLogged < 8)
+        {
+            ++g_farmCircleLogged;
+            NativeLog("terrain ring no RT where=%s", where);
+        }
+        if (curRtv)
+            curRtv->Release();
+        if (curDsv)
+            curDsv->Release();
+        if (bb)
+            bb->Release();
+        dev->Release();
+        return;
+    }
+    ID3D11BlendState* oldBs = nullptr;
+    FLOAT oldBlend[4] = {};
+    UINT oldSampleMask = 0;
+    ID3D11DepthStencilState* oldDs = nullptr;
+    UINT oldStencil = 0;
+    ID3D11RasterizerState* oldRs = nullptr;
+    ID3D11InputLayout* oldIl = nullptr;
+    D3D11_PRIMITIVE_TOPOLOGY oldTopo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+    ID3D11Buffer* oldVb = nullptr;
+    UINT oldStride = 0, oldOff = 0;
+    ID3D11Buffer* oldIb = nullptr;
+    DXGI_FORMAT oldIfmt = DXGI_FORMAT_UNKNOWN;
+    UINT oldIoff = 0;
+    ID3D11VertexShader* oldVs = nullptr;
+    ID3D11PixelShader* oldPs = nullptr;
+    ID3D11GeometryShader* oldGs = nullptr;
+    ID3D11HullShader* oldHs = nullptr;
+    ID3D11DomainShader* oldDsSh = nullptr;
+    ID3D11Buffer* oldCb = nullptr;
+    D3D11_VIEWPORT oldVp = {};
+    UINT nVp = 1;
+    ctx->OMGetBlendState(&oldBs, oldBlend, &oldSampleMask);
+    ctx->OMGetDepthStencilState(&oldDs, &oldStencil);
+    ctx->RSGetState(&oldRs);
+    ctx->IAGetInputLayout(&oldIl);
+    ctx->IAGetPrimitiveTopology(&oldTopo);
+    ctx->IAGetVertexBuffers(0, 1, &oldVb, &oldStride, &oldOff);
+    ctx->IAGetIndexBuffer(&oldIb, &oldIfmt, &oldIoff);
+    UINT nClass = 0;
+    ctx->VSGetShader(&oldVs, nullptr, &nClass);
+    nClass = 0;
+    ctx->PSGetShader(&oldPs, nullptr, &nClass);
+    nClass = 0;
+    ctx->GSGetShader(&oldGs, nullptr, &nClass);
+    nClass = 0;
+    ctx->HSGetShader(&oldHs, nullptr, &nClass);
+    nClass = 0;
+    ctx->DSGetShader(&oldDsSh, nullptr, &nClass);
+    ctx->VSGetConstantBuffers(0, 1, &oldCb);
+    ctx->RSGetViewports(&nVp, &oldVp);
+    const UINT stride = sizeof(OverlayVert);
+    const UINT offset = 0;
+    const float blend[4] = { 0, 0, 0, 0 };
+    D3D11_VIEWPORT drawVp = oldVp;
+    if (g_liveSwap)
+    {
+        DXGI_SWAP_CHAIN_DESC scd = {};
+        if (SUCCEEDED(g_liveSwap->GetDesc(&scd)) && scd.BufferDesc.Width >= 64 && scd.BufferDesc.Height >= 64)
+        {
+            drawVp.TopLeftX = 0.f;
+            drawVp.TopLeftY = 0.f;
+            drawVp.Width = (float)scd.BufferDesc.Width;
+            drawVp.Height = (float)scd.BufferDesc.Height;
+            drawVp.MinDepth = 0.f;
+            drawVp.MaxDepth = 1.f;
+        }
+    }
+    if (drawVp.Width < 64.f || drawVp.Height < 64.f)
+    {
+        drawVp.TopLeftX = 0.f;
+        drawVp.TopLeftY = 0.f;
+        drawVp.Width = 1280.f;
+        drawVp.Height = 720.f;
+        drawVp.MinDepth = 0.f;
+        drawVp.MaxDepth = 1.f;
+    }
+    g_inCircleDraw = 1;
+    ctx->OMSetRenderTargets(1, &drawRtv, nullptr);
+    ctx->OMSetBlendState(g_ovBs, blend, 0xFFFFFFFF);
+    ctx->OMSetDepthStencilState(g_ovDs, 0);
+    ctx->RSSetState(g_ovRs);
+    ctx->RSSetViewports(1, &drawVp);
+    ctx->IASetInputLayout(g_ovIl);
+    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx->IASetVertexBuffers(0, 1, &g_ovVb, &stride, &offset);
+    ctx->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+    ctx->VSSetShader(g_ovVs, nullptr, 0);
+    ctx->VSSetConstantBuffers(0, 1, &g_ovCb);
+    ctx->PSSetShader(g_ovPs, nullptr, 0);
+    ctx->GSSetShader(nullptr, nullptr, 0);
+    ctx->HSSetShader(nullptr, nullptr, 0);
+    ctx->DSSetShader(nullptr, nullptr, 0);
+    ctx->Draw((UINT)nVert, 0);
+    if (curRtv)
+        ctx->OMSetRenderTargets(1, &curRtv, curDsv);
+    else
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+    ctx->OMSetBlendState(oldBs, oldBlend, oldSampleMask);
+    ctx->OMSetDepthStencilState(oldDs, oldStencil);
+    ctx->RSSetState(oldRs);
+    ctx->IASetInputLayout(oldIl);
+    ctx->IASetPrimitiveTopology(oldTopo);
+    ctx->IASetVertexBuffers(0, 1, &oldVb, &oldStride, &oldOff);
+    ctx->IASetIndexBuffer(oldIb, oldIfmt, oldIoff);
+    ctx->VSSetShader(oldVs, nullptr, 0);
+    ctx->VSSetConstantBuffers(0, 1, &oldCb);
+    ctx->PSSetShader(oldPs, nullptr, 0);
+    ctx->GSSetShader(oldGs, nullptr, 0);
+    ctx->HSSetShader(oldHs, nullptr, 0);
+    ctx->DSSetShader(oldDsSh, nullptr, 0);
+    if (nVp)
+        ctx->RSSetViewports(nVp, &oldVp);
+    g_inCircleDraw = 0;
+    g_drewTerrainRing = 1;
+    if (g_farmCircleLogged < 8)
+    {
+        float px = 0, py = 0;
+        FarmW2S(cx, cy, groundZ, vw, vh, world, view, proj, &px, &py);
+        ++g_farmCircleLogged;
+        NativeLog("farm circle w2s where=%s r=%.0f xyz=%.0f,%.0f,%.0f vis=%d verts=%d player=%.0f,%.0f proj11=%.2f viewT=%.0f,%.0f,%.0f %gx%g",
+            where, r, cx, cy, groundZ, vis, nVert, px, py, proj[11], view[12], view[13], view[14], vw, vh);
+    }
+    if (oldBs) oldBs->Release();
+    if (oldDs) oldDs->Release();
+    if (oldRs) oldRs->Release();
+    if (oldIl) oldIl->Release();
+    if (oldVb) oldVb->Release();
+    if (oldIb) oldIb->Release();
+    if (oldVs) oldVs->Release();
+    if (oldPs) oldPs->Release();
+    if (oldGs) oldGs->Release();
+    if (oldHs) oldHs->Release();
+    if (oldDsSh) oldDsSh->Release();
+    if (oldCb) oldCb->Release();
+    if (curRtv) curRtv->Release();
+    if (curDsv) curDsv->Release();
+    if (bb) bb->Release();
+    dev->Release();
+}
+
+static void DrawFarmRadiusDXGI(void* swap)
+{
+    IDXGISwapChain* sc = (IDXGISwapChain*)swap;
+    DXGI_SWAP_CHAIN_DESC desc = {};
+    if (FAILED(sc->GetDesc(&desc)) || desc.BufferDesc.Width <= 64 || desc.BufferDesc.Height <= 64)
+        return;
+    ID3D11Device* dev = nullptr;
+    if (FAILED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&dev)) || !dev)
+        return;
+    ID3D11DeviceContext* ctx = nullptr;
+    dev->GetImmediateContext(&ctx);
+    if (!ctx)
+    {
+        dev->Release();
+        return;
+    }
+    HookLiveVSSetCB(ctx);
+    float px = 0, py = 0, pz = 0;
+    if (FarmCirclePos(&px, &py, &pz))
+        ConsiderGraphicBase(px, py, pz);
+    if (g_vpFrameOk)
+    {
+        memcpy(g_vp, g_vpFrame, 64);
+        g_vpLocal = g_vpFrameLocal;
+        g_vpAxis = g_vpFrameAxis;
+        g_vpOk = 1;
+    }
+    const int copies = g_vpCopies;
+    const unsigned draws = g_nDraw11;
+    const unsigned vsb = g_nVSSetCB;
+    const float minDist = g_vpMinDist;
+    const float minDx = g_vpMinDx;
+    const float minDy = g_vpMinDy;
+    g_vpFrameOk = 0;
+    g_vpFrameScore = 1e9f;
+    g_vpCopies = 0;
+    g_vpDraws = 0;
+    g_vpBinds = 0;
+    g_vpMinDist = 99.f;
+    g_vpMinDx = 0.f;
+    g_vpMinDy = 0.f;
+    if (!g_vpOk || !EnsureOverlay(dev))
+    {
+        if (!g_vpOk && g_farmCircleLogged < 12)
+        {
+            ++g_farmCircleLogged;
+            NativeLog("farm circle waiting vp vs=%u draw=%u copies=%d minDist=%.2f dx=%.3f dy=%.3f pos=%d",
+                vsb, draws, copies, minDist, minDx, minDy, FarmCirclePos(&px, &py, &pz));
+        }
+        ctx->Release();
+        dev->Release();
+        return;
+    }
+    float cx = 0, cy = 0, cz = 0;
+    if (!FarmCirclePos(&cx, &cy, &cz))
+    {
+        ctx->Release();
+        dev->Release();
+        return;
+    }
+    const float r = g_farmCircleR;
+    const float groundZ = TerrainZ(cx, cy, cz);
+    cz = groundZ + 10.f;
+    float halfW = r * 0.012f;
+    if (halfW < 18.f)
+        halfW = 18.f;
+    if (halfW > 55.f)
+        halfW = 55.f;
+    const int segs = 48;
+    OverlayVert ringIn[49];
+    OverlayVert ringOut[49];
+    int okIn[49];
+    int okOut[49];
+    int vis = 0;
+    for (int i = 0; i <= segs; ++i)
+    {
+        const float a = (3.14159265f * 2.f) * (float)i / (float)segs;
+        const float c = cosf(a);
+        const float s = sinf(a);
+        const float x0 = cx + (r - halfW) * c;
+        const float y0 = cy + (r - halfW) * s;
+        const float x1 = cx + (r + halfW) * c;
+        const float y1 = cy + (r + halfW) * s;
+        const float z0 = TerrainZ(x0, y0, groundZ) + 10.f;
+        const float z1 = TerrainZ(x1, y1, groundZ) + 10.f;
+        okIn[i] = WorldToClip(x0, y0, z0, cx, cy, cz, &ringIn[i]);
+        okOut[i] = WorldToClip(x1, y1, z1, cx, cy, cz, &ringOut[i]);
+        if (okIn[i] && okOut[i] && ringIn[i].w > 0.f && ringOut[i].w > 0.f)
+            ++vis;
+    }
+    OverlayVert verts[512];
+    int nVert = 0;
+    for (int i = 0; i < segs; ++i)
+    {
+        if (!okIn[i] || !okOut[i] || !okIn[i + 1] || !okOut[i + 1])
+            continue;
+        if (nVert + 6 > 512)
+            break;
+        verts[nVert++] = ringIn[i];
+        verts[nVert++] = ringOut[i];
+        verts[nVert++] = ringIn[i + 1];
+        verts[nVert++] = ringOut[i];
+        verts[nVert++] = ringOut[i + 1];
+        verts[nVert++] = ringIn[i + 1];
+    }
+    if (nVert <= 0)
+    {
+        if (g_farmCircleLogged < 8)
+        {
+            ++g_farmCircleLogged;
+            NativeLog("farm circle terrain clip empty r=%.0f vis=%d local=%d axis=%d", r, vis, g_vpLocal, g_vpAxis);
+        }
+        ctx->Release();
+        dev->Release();
+        return;
+    }
+    D3D11_MAPPED_SUBRESOURCE map = {};
+    if (SUCCEEDED(ctx->Map(g_ovVb, 0, D3D11_MAP_WRITE_DISCARD, 0, &map)) && map.pData)
+    {
+        memcpy(map.pData, verts, sizeof(OverlayVert) * (size_t)nVert);
+        ctx->Unmap(g_ovVb, 0);
+    }
+    ID3D11Texture2D* bb = nullptr;
+    sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb);
+    if (bb && bb != g_ovBb)
+    {
+        if (g_ovRtv)
+            g_ovRtv->Release();
+        g_ovRtv = nullptr;
+        if (g_ovBb)
+            g_ovBb->Release();
+        g_ovBb = bb;
+        g_ovBb->AddRef();
+        if (FAILED(dev->CreateRenderTargetView(bb, nullptr, &g_ovRtv)))
+        {
+            D3D11_TEXTURE2D_DESC td = {};
+            bb->GetDesc(&td);
+            D3D11_RENDER_TARGET_VIEW_DESC rd = {};
+            rd.Format = td.Format;
+            rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+            dev->CreateRenderTargetView(bb, &rd, &g_ovRtv);
+        }
+    }
+    ID3D11RenderTargetView* rtv = g_ovRtv;
+    if (rtv)
+    {
+        D3D11_VIEWPORT vp = {};
+        vp.Width = (float)desc.BufferDesc.Width;
+        vp.Height = (float)desc.BufferDesc.Height;
+        vp.MaxDepth = 1.f;
+        const UINT stride = sizeof(OverlayVert);
+        const UINT offset = 0;
+        const float blend[4] = { 0, 0, 0, 0 };
+        ID3D11ShaderResourceView* nullSrv[1] = { nullptr };
+        g_inCircleDraw = 1;
+        ctx->OMSetRenderTargets(1, &rtv, nullptr);
+        ctx->OMSetBlendState(g_ovBs, blend, 0xFFFFFFFF);
+        ctx->OMSetDepthStencilState(g_ovDs, 0);
+        ctx->RSSetState(g_ovRs);
+        ctx->RSSetViewports(1, &vp);
+        ctx->IASetInputLayout(g_ovIl);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ctx->IASetVertexBuffers(0, 1, &g_ovVb, &stride, &offset);
+        ctx->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+        ctx->VSSetShader(g_ovVs, nullptr, 0);
+        ctx->PSSetShader(g_ovPs, nullptr, 0);
+        ctx->GSSetShader(nullptr, nullptr, 0);
+        ctx->HSSetShader(nullptr, nullptr, 0);
+        ctx->DSSetShader(nullptr, nullptr, 0);
+        ctx->PSSetShaderResources(0, 1, nullSrv);
+        ctx->Draw((UINT)nVert, 0);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        g_inCircleDraw = 0;
+        OverlayVert origin = {};
+        WorldToClip(cx, cy, cz, cx, cy, cz, &origin);
+        const float ndx = (origin.w > 0.001f || origin.w < -0.001f) ? origin.x / origin.w : 0.f;
+        const float ndy = (origin.w > 0.001f || origin.w < -0.001f) ? origin.y / origin.w : 0.f;
+        if (g_farmCircleLogged < 8)
+        {
+            ++g_farmCircleLogged;
+            NativeLog("farm circle terrain r=%.0f xyz=%.0f,%.0f,%.0f ndc=%.2f,%.2f vis=%d verts=%d local=%d axis=%d %ux%u",
+                r, cx, cy, cz, ndx, ndy, vis, nVert, g_vpLocal, g_vpAxis, desc.BufferDesc.Width, desc.BufferDesc.Height);
+        }
+    }
+    if (bb)
+        bb->Release();
+    ctx->Release();
+    dev->Release();
+}
+
+static HRESULT __stdcall HookDXGIPresent(void* sc, UINT sync, UINT flags)
+{
+    ++g_nDXGIPresent;
+    if (ShouldLogProbe(g_nDXGIPresent) && !g_farmCircleOn)
+        NativeLog("HookDXGIPresent n=%u sc=%p sync=%u flags=%u circle=%d",
+            g_nDXGIPresent, sc, sync, flags, (int)g_farmCircleOn);
+    if (g_farmCircleOn)
+    {
+        IDXGISwapChain* chain = (IDXGISwapChain*)sc;
+        g_liveSwap = chain;
+        ID3D11Device* dev = nullptr;
+        if (SUCCEEDED(chain->GetDevice(__uuidof(ID3D11Device), (void**)&dev)) && dev)
+        {
+            ID3D11DeviceContext* ctx = nullptr;
+            dev->GetImmediateContext(&ctx);
+            if (ctx)
+                g_liveCtx = ctx;
+            __try
+            {
+                DrawFarmRingOnTerrain("present");
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                NativeLog("terrain ring present fault");
+            }
+            if (ctx)
+                ctx->Release();
+            dev->Release();
+        }
+        g_nMapDraw = 0;
+        g_drewTerrainRing = 0;
+        g_nTerrainDraw = 0;
+        g_inTerrain = 0;
+        g_inMapRender = 0;
+        g_vpCopies = 0;
+        g_vpFrameOk = 0;
+        g_vpFrameScore = 1e9f;
+        g_vpLastCbOk = 0;
+        g_vpMinDist = 99.f;
+        g_liveSwap = nullptr;
+    }
+    return g_origDXGIPresent ? g_origDXGIPresent(sc, sync, flags) : S_OK;
+}
+
+static void HookDummyDXGI()
+{
+    static int s_done;
+    if (s_done)
+        return;
+    s_done = 1;
+    HWND w = CreateWindowExA(0, "STATIC", "fbdx", WS_POPUP, 0, 0, 8, 8, nullptr, nullptr, GetModuleHandleA(nullptr), nullptr);
+    if (!w)
+        w = GetDesktopWindow();
+    DXGI_SWAP_CHAIN_DESC sd = {};
+    sd.BufferCount = 1;
+    sd.BufferDesc.Width = 8;
+    sd.BufferDesc.Height = 8;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = w;
+    sd.SampleDesc.Count = 1;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    IDXGISwapChain* sc = nullptr;
+    ID3D11Device* dev = nullptr;
+    ID3D11DeviceContext* ctx = nullptr;
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
+        D3D11_SDK_VERSION, &sd, &sc, &dev, nullptr, &ctx);
+    NativeLog("farm circle DXGI dummy hr=0x%X sc=%p vt=%p", (unsigned)hr, sc, sc ? *(void***)sc : nullptr);
+    if (sc)
+    {
+        void** vt = *(void***)sc;
+        TryHalTrampoline(vt, 8, (void*)HookDXGIPresent, (void**)&g_origDXGIPresent, "DXGIPresent");
+        sc->Release();
+    }
+    if (ctx)
+    {
+        HookLiveVSSetCB(ctx);
+        ctx->Release();
+    }
+    if (dev)
+        dev->Release();
+}
+
+static void HookD3D9EndSceneVtable()
+{
+    HookDummyDXGI();
+}
+
+static void* FarmCircleScreen()
+{
+    const unsigned rva = kScreenSingletonRva ? kScreenSingletonRva : 0x3C18BB8u;
+    if (!g_base)
+        return nullptr;
+    BYTE* slot = (BYTE*)(g_base + rva);
+    if (!UserPtr(slot))
+        return nullptr;
+    void* screen = *(void**)slot;
+    if (UserPtr(screen) && ReadableBytes(screen, 16) >= 16)
+        return screen;
+    return slot;
+}
+
+static void DrawFarmCircle()
+{
+}
+
+static void BeginTerrainPass()
+{
+    g_inTerrain = g_farmCircleOn ? 1 : 0;
+    g_inMapRender = g_inTerrain;
+    g_nTerrainDraw = 0;
+}
+
+static void EndTerrainPass(const char* where)
+{
+    (void)where;
+}
+
+static void __fastcall HookHtp(void* self)
+{
+    BeginTerrainPass();
+    if (g_origHtp)
+        g_origHtp(self);
+    EndTerrainPass("htp");
+}
+
+static void __fastcall HookHtp2(void* self)
+{
+    BeginTerrainPass();
+    if (g_origHtp2)
+        g_origHtp2(self);
+    EndTerrainPass("htp2");
+}
+
+static void __fastcall HookTerrainFlush(void* self)
+{
+    g_inTerrain = g_farmCircleOn ? 1 : 0;
+    if (g_origTerrainFlush)
+        g_origTerrainFlush(self);
+    EndTerrainPass("flush");
+}
+
+static void __fastcall HookD3DSubmit(void* self)
+{
+    if (g_origD3DSubmit)
+        g_origD3DSubmit(self);
+    if (g_farmCircleOn)
+        EndTerrainPass("submit");
+}
+
+static void __fastcall HookTerrain(void* self)
+{
+    BeginTerrainPass();
+    if (g_origTerrain)
+        g_origTerrain(self);
+    EndTerrainPass("RenderTerrain");
+}
+
+static void __fastcall HookMapWorld(void* self)
+{
+    if (g_origMapWorld)
+        g_origMapWorld(self);
+}
+
+static void __fastcall HookAppWorld(void* self)
+{
+    if (g_origAppWorld)
+        g_origAppWorld(self);
+}
+
+static void __fastcall HookBgRender(void* self)
+{
+    BeginTerrainPass();
+    if (g_origBgRender)
+        g_origBgRender(self);
+    EndTerrainPass("BgRender");
+}
+
+static void __fastcall HookCharRender(void* self)
+{
+    if (g_origCharRender)
+        g_origCharRender(self);
+    DrawFarmCircle();
+}
+
+static void __fastcall HookRenderGame(void* self)
+{
+    g_drew3d = 0;
+    if (g_origRenderGame)
+        g_origRenderGame(self);
+    if (!g_origCharRender)
+        DrawFarmCircle();
+}
+
+static void EnsureFarmCircleHook()
+{
+    if (!g_base)
+        return;
+    if (!kCharRenderRva)
+        kCharRenderRva = 0x13C930u;
+    if (!kRenderLine3dRva)
+        kRenderLine3dRva = 0x3409E0u;
+    if (!kScreenSingletonRva)
+        kScreenSingletonRva = 0x3C18BB8u;
+    HookD3D9EndSceneVtable();
+    if (kBgRenderRva && !g_origBgRender &&
+        Trampoline(g_base + kBgRenderRva, (void*)HookBgRender, (void**)&g_origBgRender))
+    {
+        ++g_iatHooks;
+        NativeLog("Background::Render hook rva=0x%X", kBgRenderRva);
+    }
+    if (kMapWorldRva && !g_origMapWorld &&
+        Trampoline(g_base + kMapWorldRva, (void*)HookMapWorld, (void**)&g_origMapWorld))
+    {
+        ++g_iatHooks;
+        NativeLog("mapWorld hook rva=0x%X", kMapWorldRva);
+    }
+    if (kAppWorldRva && !g_origAppWorld &&
+        Trampoline(g_base + kAppWorldRva, (void*)HookAppWorld, (void**)&g_origAppWorld))
+    {
+        ++g_iatHooks;
+        NativeLog("appWorld hook rva=0x%X", kAppWorldRva);
+    }
+    if (kTerrainRva && !g_origTerrain &&
+        Trampoline(g_base + kTerrainRva, (void*)HookTerrain, (void**)&g_origTerrain))
+    {
+        ++g_iatHooks;
+        NativeLog("RenderTerrain hook rva=0x%X", kTerrainRva);
+    }
+    if (kHtpRva && !g_origHtp &&
+        Trampoline(g_base + kHtpRva, (void*)HookHtp, (void**)&g_origHtp))
+    {
+        ++g_iatHooks;
+        NativeLog("terrain HTP hook rva=0x%X", kHtpRva);
+    }
+    if (kHtp2Rva && !g_origHtp2 &&
+        Trampoline(g_base + kHtp2Rva, (void*)HookHtp2, (void**)&g_origHtp2))
+    {
+        ++g_iatHooks;
+        NativeLog("terrain HTP2 hook rva=0x%X", kHtp2Rva);
+    }
+    (void)kTerrainFlushRva;
+    (void)kD3DSubmitRva;
+    if (kRenderGameRva && !g_origRenderGame &&
+        Trampoline(g_base + kRenderGameRva, (void*)HookRenderGame, (void**)&g_origRenderGame))
+    {
+        ++g_iatHooks;
+        NativeLog("farm circle RenderGame hook rva=0x%X state=0x%X", kRenderGameRva, kStateManagerRva);
+    }
+    if (kCharRenderRva && !g_origCharRender &&
+        Trampoline(g_base + kCharRenderRva, (void*)HookCharRender, (void**)&g_origCharRender))
+    {
+        ++g_iatHooks;
+        NativeLog("farm circle CharRender hook rva=0x%X state=0x%X", kCharRenderRva, kStateManagerRva);
+    }
+    g_farmCircleHooked = (g_origTerrainFlush || g_origD3DSubmit || g_origHtp || g_origHtp2 ||
+        g_origTerrain || g_origMapWorld || g_origBgRender || g_origCharRender ||
+        g_origRenderGame || g_origDXGIPresent) ? 1 : 0;
+    if (!g_farmCircleHooked && (kCharRenderRva || kRenderGameRva))
+        NativeLog("farm circle hook failed charRender=0x%X renderGame=0x%X", kCharRenderRva, kRenderGameRva);
+}
+
 static void InstallLoopHooks(HMODULE client)
 {
     HMODULE user = GetModuleHandleA("user32.dll");
@@ -8952,6 +11412,10 @@ static void InstallLoopHooks(HMODULE client)
             ++g_iatHooks;
         if (!g_baerim && kSetLoginInfoRva && Trampoline((BYTE*)client + kSetLoginInfoRva, (void*)HookSetLoginInfo, (void**)&g_setLoginInfo))
             ++g_iatHooks;
+        EnsureFarmCircleHook();
+        if (!g_farmCircleHooked && (kCharRenderRva || kRenderGameRva))
+            NativeLog("farm circle pending charRender=0x%X renderGame=0x%X state=0x%X",
+                kCharRenderRva, kRenderGameRva, kStateManagerRva);
         if (!NativeFarm())
             return;
         if (g_baerim)
@@ -9151,6 +11615,18 @@ static void ClearLoginRvas()
     kIsMountingRva = 0;
     kIsAffectRva = 0;
     kSendChatRva = 0;
+    kSetDiffuseColorRva = 0;
+    kRenderLineRva = 0;
+    kRenderLine3dRva = 0;
+    kRenderGroundCircleRva = 0;
+    kRenderSphereRva = 0;
+    kRenderCylinderRva = 0;
+    kRenderGameRva = 0;
+    kCharRenderRva = 0;
+    kSetGameRenderStateRva = 0;
+    kSetInterfaceRenderStateRva = 0;
+    kScreenSingletonRva = 0;
+    kStateManagerRva = 0;
     kGetStatusRva = 0;
     kGetStatusSlot = 0;
     kPointsDisp = 0;
@@ -9396,6 +11872,30 @@ static void LoadConfig()
             kIsAffectRva = ParseHex(line + 9);
         else if (strncmp(line, "sendChat=", 9) == 0)
             kSendChatRva = ParseHex(line + 9);
+        else if (strncmp(line, "setDiffuse=", 11) == 0)
+            kSetDiffuseColorRva = ParseHex(line + 11);
+        else if (strncmp(line, "renderLine=", 11) == 0)
+            kRenderLineRva = ParseHex(line + 11);
+        else if (strncmp(line, "renderLine3d=", 13) == 0)
+            kRenderLine3dRva = ParseHex(line + 13);
+        else if (strncmp(line, "renderGroundCircle=", 19) == 0)
+            kRenderGroundCircleRva = ParseHex(line + 19);
+        else if (strncmp(line, "renderSphere=", 13) == 0)
+            kRenderSphereRva = ParseHex(line + 13);
+        else if (strncmp(line, "renderCylinder=", 15) == 0)
+            kRenderCylinderRva = ParseHex(line + 15);
+        else if (strncmp(line, "renderGame=", 11) == 0)
+            kRenderGameRva = ParseHex(line + 11);
+        else if (strncmp(line, "charRender=", 11) == 0)
+            kCharRenderRva = ParseHex(line + 11);
+        else if (strncmp(line, "setGameRs=", 10) == 0)
+            kSetGameRenderStateRva = ParseHex(line + 10);
+        else if (strncmp(line, "setUiRs=", 8) == 0)
+            kSetInterfaceRenderStateRva = ParseHex(line + 8);
+        else if (strncmp(line, "screen=", 7) == 0)
+            kScreenSingletonRva = ParseHex(line + 7);
+        else if (strncmp(line, "stateMgr=", 9) == 0)
+            kStateManagerRva = ParseHex(line + 9);
         else if (strncmp(line, "mainPtr=", 8) == 0)
             kMainPtrDisp = ParseHex(line + 8);
         else if (strncmp(line, "mapDisp=", 8) == 0)
@@ -9636,7 +12136,7 @@ static void Serve()
                 cmd.type == "skip_intro" || cmd.type == "get_atlas" || cmd.type == "get_hud" ||
                 cmd.type == "get_entities" || cmd.type == "get_skills" || cmd.type == "use_item" ||
                 cmd.type == "use_skill" || cmd.type == "is_skill_active" || cmd.type == "is_skill_cool" ||
-                cmd.type == "toggle_mount";
+                cmd.type == "set_farm_circle" || cmd.type == "toggle_mount";
             if (waitReply)
             {
                 const DWORD waitMs =

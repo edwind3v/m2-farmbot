@@ -229,6 +229,18 @@ public sealed class ActionModuleHost
             AppendHex(text, "isMounting", player.IsMountingHorseRva);
             AppendHex(text, "isAffect", player.IsAffectRva);
             AppendHex(text, "sendChat", player.SendChatPacketRva);
+            AppendHex(text, "setDiffuse", player.SetDiffuseColorRva);
+            AppendHex(text, "renderLine", player.RenderLineRva);
+            AppendHex(text, "renderLine3d", player.RenderLine3dRva);
+            AppendHex(text, "renderGroundCircle", player.RenderGroundCircleRva);
+            AppendHex(text, "renderSphere", player.RenderSphereRva);
+            AppendHex(text, "renderCylinder", player.RenderCylinderRva);
+            AppendHex(text, "renderGame", player.RenderGameRva);
+            AppendHex(text, "charRender", player.CharRenderRva);
+            AppendHex(text, "setGameRs", player.SetGameRenderStateRva);
+            AppendHex(text, "setUiRs", player.SetInterfaceRenderStateRva);
+            AppendHex(text, "screen", player.ScreenSingletonRva);
+            AppendHex(text, "stateMgr", player.StateManagerRva);
             AppendHex(text, "combo", player.ComboAttackRva);
             AppendHex(text, "setAuto", player.SetAutoRva);
             AppendHex(text, "reserve", player.ReserveClickRva);
@@ -286,6 +298,11 @@ public sealed class ActionModuleHost
 
             var recovered = BaerimActionLayoutRecoverer.Recover(exePath);
             var player = recovered.Player;
+            if (player.RenderGameRva == 0 || player.RenderLineRva == 0 || player.ScreenSingletonRva == 0)
+            {
+                try { File.Delete(cachePath); } catch { /* ignore */ }
+                return "";
+            }
             var entity = recovered.Entity;
             var text = new StringBuilder(recovered.Login.ToNativeConfig());
             text.Append("profile=baerim\n");
@@ -342,6 +359,18 @@ public sealed class ActionModuleHost
             AppendHex(text, "isMounting", player.IsMountingHorseRva);
             AppendHex(text, "isAffect", player.IsAffectRva);
             AppendHex(text, "sendChat", player.SendChatPacketRva);
+            AppendHex(text, "setDiffuse", player.SetDiffuseColorRva);
+            AppendHex(text, "renderLine", player.RenderLineRva);
+            AppendHex(text, "renderLine3d", player.RenderLine3dRva);
+            AppendHex(text, "renderGroundCircle", player.RenderGroundCircleRva);
+            AppendHex(text, "renderSphere", player.RenderSphereRva);
+            AppendHex(text, "renderCylinder", player.RenderCylinderRva);
+            AppendHex(text, "renderGame", player.RenderGameRva);
+            AppendHex(text, "charRender", player.CharRenderRva);
+            AppendHex(text, "setGameRs", player.SetGameRenderStateRva);
+            AppendHex(text, "setUiRs", player.SetInterfaceRenderStateRva);
+            AppendHex(text, "screen", player.ScreenSingletonRva);
+            AppendHex(text, "stateMgr", player.StateManagerRva);
             AppendHex(text, "combo", player.ComboAttackRva);
             AppendHex(text, "setAuto", player.SetAutoRva);
             AppendHex(text, "reserve", player.ReserveClickRva);
@@ -404,7 +433,13 @@ public sealed class ActionModuleHost
                    (HasHexKey(text, "sendChat") || HasHexKey(text, "net")) &&
                    HasHexKey(text, "setLogin") &&
                    HasHexKey(text, "account") &&
-                   HasHexKey(text, "connect");
+                   HasHexKey(text, "connect") &&
+                   HasHexKey(text, "renderGame") &&
+                   HasHexKey(text, "renderLine") &&
+                   HasHexKey(text, "renderLine3d") &&
+                   HasHexKey(text, "charRender") &&
+                   HasHexKey(text, "stateMgr") &&
+                   HasHexKey(text, "screen");
         }
         catch
         {

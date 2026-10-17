@@ -1,0 +1,166 @@
+what-we-tried-circle-draw
+=========================
+Temporary notes. Goal: draw the farm radius as a visible circle on the terrain
+around the player inside baerim.exe. Status: still not visible in game.
+
+How to test: FarmBot UI checkbox "Draw farm circle". Native log is
+C:\Temp\farmbot-native.log. Layout cache is
+%TEMP%\FarmBotAction_layout_baerim_*.cfg.
+
+Draw command is set_farm_circle (enabled, locked, radius, center x/y) from
+FarmBotShell.PushFarmCircle -> ActionAdapterClient.TrySetFarmCircle ->
+FarmBotAction.cpp.
+
+
+Confirmed facts
+---------------
+- baerim.exe is 32-bit. Runtime image base 0x1000000.
+- DirectX: imports d3d9.dll + d3dx9_43.dll (also dxgi.dll / d3d11.dll, but
+  textures already work as IDirect3DTexture9). This is a D3D9 client.
+- Player world position is readable (graphic+0x3F4, pixel x/y/z at +0x514/518/51C).
+  Y is stored negated vs C# entity JSON (negateY=1). Z around ~5980 in tests.
+- Farm radius from UI is 1000..8000. Native rejects r < 50.
+- Render hooks CAN fire (DrawFarmCircle runs; "waiting for d3d9 device" spam).
+- We still never get the GAME's IDirect3DDevice9, so nothing is submitted to
+  the real backbuffer.
+
+
+Recovered RVAs (latest layout, still valid)
+-------------------------------------------
+  renderLine        0x3407D0   CScreen 2D line (thiscall, 5 floats, ret 0x14)
+  renderLine3d      0x3409E0   next 6-float thiscall (ret 0x18)
+  renderGroundCircle 0x14D4B0  Python wrapper, not a native draw
+  renderGame        0x20BC70   CPythonApplication::RenderGame
+  charRender        0x13C930   pattern match for CPythonCharacterManager::Render
+  screen            0x3C18BB8  CScreen singleton
+  stateMgr          0x3C17628  used by RenderLine3d as mov edi,[STATEMANAGER]
+  setDiffuse        recovered then ZEROED (Python helper, wrong arity)
+  setGameRs/setUiRs ZEROED (1-float thiscall ret 4; calling them stack-smashes)
+  sphere/cylinder   0          never recovered
+
+Client-source reference (not injectable): some-assets/colision render/how-to.txt
+shows the intended Metin2 way: STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR)
+then CScreen::RenderSphere / RenderCylinder / RenderD3DXMesh (D3DXCreateCylinder).
+That needs a real CScreen, ms_lpCylinderMesh, and SetDiffuseColor / TFACTOR setup.
+We do not have working native RVAs for those.
+
+
+Attempt 1 — CScreen::RenderLine3d from a render hook
+----------------------------------------------------
+How: Recover grp.RenderLine, then the following 6-float thiscall as RenderLine3d.
+Hook RenderGame (and later CharRender) with a 5-byte trampoline. After the
+original function, build a 48-segment XY circle at player x/y/z and call
+RenderLine3d(screen, x1,y1,z1, x2,y2,z2). Color via SetDiffuseColor or
+STATEMANAGER SetRenderState(D3DRS_TEXTUREFACTOR=29).
+
+Why it failed:
+- SetDiffuseColor / SetGameRenderState were Python helpers. Calling them
+  crashed the client, so they were discarded. Color was never set.
+  Metin2 RenderLine3d uses CGraphicBase::ms_DiffuseColor (static). Default is
+  0x00000000, so even a successful call draws an invisible line.
+- "color is screen+8" was a misread of [ebx+8] (first stack float x1 after
+  push ebx; mov ebx,esp), not a color field.
+- 13:18 log: farm circle draw fault — SEH caught a crash inside RenderLine3d
+  (bad this, wrong function 0x3408C0 at one point, or missing PDT stream state).
+- FarmCircleScreen() could fall back to a dummy 256-byte buffer as `this`.
+
+
+Attempt 2 — CScreen::RenderGroundCircle
+---------------------------------------
+How: Call recovered renderGroundCircle=0x14D4B0 with player x, negated y, z, r.
+Log: farm circle RenderGroundCircle x=30329 y=-59516 z=5980 r=2825 (no fault).
+
+Why it failed: that RVA is the Python METH_VARARGS wrapper, not the native
+thiscall. It did not draw a 3D ground circle. Sphere/cylinder RVAs were 0.
+
+
+Attempt 3 — CharRender-only hook + later RenderLine3d
+-----------------------------------------------------
+How: Prefer trampoline of charRender=0x13C930 (push esi; push edi; mov edi,ecx;
+call …). If that installed, skip RenderGame.
+
+Why it failed: trampoline reported success (hooked=1) but the latest session
+before D3D work logged neither "draw" nor "draw fault". Either the matched
+function is not the per-frame character pass, or ReadPixel/main failed silently.
+RenderGame (known to run) was never installed in that build because CharRender
+succeeded first.
+
+
+Attempt 4 — Draw with IDirect3DDevice9 from STATEMANAGER
+--------------------------------------------------------
+How: Confirmed d3d9.dll. Walk CStateManager (stateMgr pointer or object) at
+offsets 0..0x80, QueryInterface IDirect3DDevice9. DrawPrimitiveUP LINESTRIP
+with D3DFVF_XYZ|DIFFUSE, identity world, lighting/fog off. Hook dummy-device
+vtable[42] EndScene, save view/proj during 3D, redraw at EndScene.
+
+Why it failed (13:53–13:54):
+- Dummy EndScene hooked: dev=0CBB64E0 orig=6BC46520 (NULLREF/dummy vtable).
+- RenderGame + CharRender trampolines installed and DID run.
+- FindD3D9Device never found the game device (vtable filter required d3d9.dll;
+  CStateManager layout did not yield a QI-able device in the scanned range).
+- Dummy EndScene never ran on the game device, so g_d3d9 stayed null.
+- Log spam: farm circle waiting for d3d9 device … end=1
+  (end=1 only means the dummy hook was installed, not that the game called it).
+- Thin 1-pixel lines at z+10/+45 would also have been easy to miss in grass /
+  z-fight if a draw had happened. It did not.
+
+
+Attempt 5 — HAL trampoline + thick ground mesh + XYZRHW overlay
+---------------------------------------------------------------
+How (current code in FarmBotAction.cpp):
+- Direct3DCreate9 + CreateDevice HAL dummy (not NULLREF).
+- Trampoline dummy vtable EndScene/BeginScene/Present code in d3d9.dll so every
+  HAL device should hit the hook; cache `this` as g_d3d9.
+- Also QI-scan STATEMANAGER ±0x200 / object +0x400, screen singleton, atlas
+  texture GetDevice (CopyTexture / FindAtlasTexture).
+- Draw a 55-unit-wide ground annulus + 70-unit wall at player Z (Z disabled),
+  then a projected XYZRHW overlay at Present/EndScene.
+
+Why it still failed (14:00–14:01, after reattach):
+- HAL Present trampoline DID install: 6BCC2370.
+- EndScene trampoline DID NOT: prologue 6A 14 B8 D9 FF C6
+  (push 0x14 / mov eax, …). StealLen() only recognizes a few prologues
+  (8B FF 55 8B EC, 55 8B EC, …) so it refused to patch EndScene.
+- Fallback still vtable-hooked the DUMMY device:
+  device vtable hooked dev=0CB37FE0 end=6BC46520
+  present orig was overwritten to 05B30000 (our trampoline), not the game.
+- set_farm_circle hooked=1, then still:
+  farm circle waiting for d3d9 device
+- No "d3d9 draw hr=" line. Still no game device, so still no primitives.
+- Present trampoline on the dummy HAL function may not be the same Present
+  the game calls (or `this` never arrived / overlay returned early on !g_camOk).
+
+
+What is actually blocking
+-------------------------
+We can hook game render (RenderGame/CharRender run). We can read player x/y/z.
+We cannot talk to the live IDirect3DDevice9 the client uses for the swap chain.
+
+Until g_d3d9 is the game device (BeginScene/EndScene/Present `this`, or
+STATEMANAGER.m_lpD3DDev, or texture->GetDevice from a real in-game texture),
+no D3D path will show. Calling CScreen without SetDiffuseColor / game render
+state also stays invisible or crashes.
+
+
+Ideas not done yet
+------------------
+- Force a 6-byte trampoline on EndScene prologue `6A 14 B8 …` (StealLen miss).
+- Find CGraphicBase::ms_lpd3dDevice / CStateManager::m_lpD3DDev displacement
+  from RenderLine3d (it already does mov edi,[stateMgr]).
+- Write ms_DiffuseColor and call native RenderLine3d/RenderCylinder with a
+  real CScreen during CharRender (the how-to.txt path).
+- Hook IDirect3DDevice9::EndScene by scanning d3d9.dll for the real HAL
+  prologue instead of creating a dummy device.
+- Draw 2D in the FarmBot minimap only (already works in UI; not in-game).
+
+
+Key log lines (copy-paste)
+--------------------------
+13:18:06  farm circle draw fault          (RenderLine3d crashed)
+13:29:35  RenderGroundCircle x=… y=-…     (Python wrapper, no picture)
+13:43:45  CharRender hook …               (hooked, no draw log)
+13:53:03  EndScene hooked dummy 0CBB64E0
+13:54:39  waiting for d3d9 device end=1   (render hook ran, no device)
+14:00:43  HAL Present trampoline …
+14:00:43  EndScene prologue 6A 14 B8 D9 FF C6
+14:01:06  waiting for d3d9 device         (still no game device)

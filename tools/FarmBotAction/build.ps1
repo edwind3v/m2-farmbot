@@ -5,7 +5,7 @@ $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvarsall.bat"
 $here = $PSScriptRoot
 $dll = Join-Path $here "FarmBotAction.dll"
 $load = Join-Path $here "FarmBotLoad.exe"
-cmd /c "`"$vcvars`" x86 && cl /nologo /EHsc /O2 /LD /Fe`"$dll`" `"$here\FarmBotAction.cpp`" /link /DLL user32.lib kernel32.lib psapi.lib d3d9.lib && cl /nologo /EHsc /O2 /Fe`"$load`" `"$here\FarmBotLoad.cpp`" /link user32.lib kernel32.lib"
+cmd /c "`"$vcvars`" x86 && cl /nologo /EHsc /O2 /LD /Fe`"$dll`" `"$here\FarmBotAction.cpp`" /link /DLL user32.lib kernel32.lib psapi.lib d3d9.lib d3d11.lib dxgi.lib d3dcompiler.lib && cl /nologo /EHsc /O2 /Fe`"$load`" `"$here\FarmBotLoad.cpp`" /link user32.lib kernel32.lib"
 if ($LASTEXITCODE -ne 0) { throw "FarmBotAction build failed." }
 Write-Host "built $dll"
 Write-Host "built $load"

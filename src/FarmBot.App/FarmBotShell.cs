@@ -146,6 +146,11 @@ public sealed class FarmBotShell : IDisposable
     {
         lock (_configGate)
             _config.FarmRadius = Math.Clamp(value, 1000, 8000);
+        // Don't sync to the game on every slider tick — that stalls the UI.
+        // Native circle reads radius on the next PushFarmCircle (toggle/start/stop)
+        // and we push a debounced update while draw is enabled.
+        if (DrawFarmCircle)
+            ScheduleFarmCirclePush();
         Notify();
     }
 
@@ -154,6 +159,70 @@ public sealed class FarmBotShell : IDisposable
         lock (_configGate)
             _config.MapZoom = Math.Clamp(value, 20, 100);
         Notify();
+    }
+
+    public bool DrawFarmCircle
+    {
+        get
+        {
+            lock (_configGate)
+                return _config.DrawFarmCircle;
+        }
+    }
+
+    public void ToggleDrawFarmCircle()
+    {
+        lock (_configGate)
+            _config.DrawFarmCircle = !_config.DrawFarmCircle;
+        PushFarmCircle();
+        Notify();
+    }
+
+    private CancellationTokenSource? _farmCirclePushCts;
+
+    private void ScheduleFarmCirclePush()
+    {
+        _farmCirclePushCts?.Cancel();
+        _farmCirclePushCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _farmCirclePushCts = cts;
+        _ = PushFarmCircleDebouncedAsync(cts.Token);
+    }
+
+    private async Task PushFarmCircleDebouncedAsync(CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(150, token);
+            if (!token.IsCancellationRequested)
+                PushFarmCircle();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void PushFarmCircle()
+    {
+        if (_actionSink == null || !_actionSink.Available)
+            return;
+        bool draw;
+        float radius;
+        float cx;
+        float cy;
+        lock (_configGate)
+        {
+            draw = _config.DrawFarmCircle;
+            radius = _config.FarmRadius;
+            cx = _config.FarmCenterX;
+            cy = _config.FarmCenterY;
+        }
+
+        var view = _runtime?.Capture();
+        var botOn = view is { Enabled: true, RangedOnly: false };
+        var locked = draw && botOn && radius > 0;
+        if (!_actionSink.TrySetFarmCircle(draw, locked, radius, cx, cy))
+            _log.Warn("set farm circle failed: " + _actionSink.Status);
     }
 
     public bool ShowPotions
@@ -428,6 +497,7 @@ public sealed class FarmBotShell : IDisposable
         _atlas = null;
         _atlasMap = "";
         _log.Info($"companion attached to PID {client.ProcessId}: {_actionSink.Status}");
+        PushFarmCircle();
         Notify();
     }
 
@@ -465,6 +535,7 @@ public sealed class FarmBotShell : IDisposable
         _atlas = null;
         _atlasMap = "";
         _log.Info($"companion launched {path}: {_actionSink.Status}");
+        PushFarmCircle();
         Notify();
     }
 
@@ -486,6 +557,7 @@ public sealed class FarmBotShell : IDisposable
 
         ConfigStore.Save(_configPath, _config);
         _runtime?.SetEnabled(true);
+        PushFarmCircle();
         _log.Info("bot started");
     }
 
@@ -500,20 +572,29 @@ public sealed class FarmBotShell : IDisposable
 
         ConfigStore.Save(_configPath, _config);
         _runtime?.SetRangedOnly(true);
+        PushFarmCircle();
         _log.Info("ranged attack started; follows the player");
     }
 
-    public void StopBot() => _runtime?.Stop();
+    public void StopBot()
+    {
+        _runtime?.Stop();
+        PushFarmCircle();
+    }
 
     public void ToggleRun()
     {
         if (_runtime?.Capture().Enabled == true)
-            _runtime.Stop();
+            StopBot();
         else
             StartBot();
     }
 
-    public void Panic() => _runtime?.Panic();
+    public void Panic()
+    {
+        _runtime?.Panic();
+        PushFarmCircle();
+    }
 
     public void SaveSettings()
     {

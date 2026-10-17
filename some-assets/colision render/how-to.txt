@@ -1,0 +1,291 @@
+this is only in the client source.
+
+`GameLib/ActorInstanceRender.cpp`
+search for void `CActorInstance::RenderCollisionData()` and replace whole function with
+
+ 
+
+void CActorInstance::RenderCollisionData()
+{
+    static CScreen screen;
+    D3DXVECTOR3 object_center;
+    float sphere_radius;
+    GetBoundingSphere(object_center, sphere_radius);
+    //render-box
+    if (false)//nice but kinda useless, enable if needed
+    {
+        STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(0, isShow() ? 255 : 0, isShow() ? 0 : 255));
+        screen.RenderSphere(NULL,
+            object_center.x, //left - right
+            object_center.y, // front - back
+            object_center.z, // up - down
+            sphere_radius,
+            D3DFILL_WIREFRAME
+        );
+    }
+    //hit-box
+    for (const TCollisionPointInstance& point : m_DefendingPointInstanceList)
+    {
+        for (const CDynamicSphereInstance& collision : point.SphereInstanceVector)
+        {
+            STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(255, 0, 0));
+            screen.RenderSphere(NULL,
+                collision.v3Position.x, //left - right
+                collision.v3Position.y, // front - back
+                collision.v3Position.z, // up - down
+                collision.fRadius,
+                D3DFILL_WIREFRAME
+            );
+        }
+    }
+    //click-box
+    for (const TCollisionPointInstance& point : m_BodyPointInstanceList)
+    {
+        for (const CDynamicSphereInstance& collision : point.SphereInstanceVector)
+        {
+            STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(0, 255, 0));
+            screen.RenderSphere(NULL,
+                collision.v3Position.x, //left - right
+                collision.v3Position.y, // front - back
+                collision.v3Position.z, // up - down
+                collision.fRadius,
+                D3DFILL_WIREFRAME
+            );
+        }
+    }
+    //AoE-Skill-box
+    for (const CDynamicSphereInstance& collision : m_kSplashArea.SphereInstanceVector)
+    {
+        STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(0, 0, 255));
+        screen.RenderSphere(NULL,
+            collision.v3Position.x, //left - right
+            collision.v3Position.y, // front - back
+            collision.v3Position.z, // up - down
+            collision.fRadius,
+            D3DFILL_WIREFRAME
+        );
+    }
+}
+ 
+
+`EterLib/GrpScreen.h`
+change
+
+void RenderD3DXMesh(LPD3DXMESH lpMesh, const D3DXMATRIX * c_pmatWorld, float fx, float fy, float fz, float fRadius, D3DFILLMODE d3dFillMode);
+to
+ 
+
+void RenderBox(D3DXMATRIX c_pmatWorld, D3DXVECTOR3 size, D3DFILLMODE d3dFillMode = D3DFILL_SOLID);
+void RenderD3DXMesh(LPD3DXMESH lpMesh, const D3DXMATRIX * c_pmatWorld, D3DFILLMODE d3dFillMode);
+`EterLib/GrpScreen.cpp`
+add
+
+#include <cmath>
+at the top
+
+change
+
+void CScreen::RenderD3DXMesh(LPD3DXMESH lpMesh, const D3DXMATRIX * c_pmatWorld, float fx, float fy, float fz, float fRadius, D3DFILLMODE d3dFillMode) {
+...
+}
+to
+
+void CScreen::RenderD3DXMesh(LPD3DXMESH lpMesh, const D3DXMATRIX * matWorld, D3DFILLMODE d3dFillMode)
+{
+CD3DXMeshRenderingOption SetRenderingOption(d3dFillMode, *matWorld);
+#if DIRECT3D_VERSION >= 0x0900
+LPDIRECT3DINDEXBUFFER9 lpIndexBuffer;
+LPDIRECT3DVERTEXBUFFER9 lpVertexBuffer;
+lpMesh->GetIndexBuffer(&lpIndexBuffer);
+lpMesh->GetVertexBuffer(&lpVertexBuffer);
+STATEMANAGER.SetFVF(lpMesh->GetFVF());
+#else
+LPDIRECT3DINDEXBUFFER8 lpIndexBuffer;
+LPDIRECT3DVERTEXBUFFER8 lpVertexBuffer;
+lpMesh->GetIndexBuffer(&lpIndexBuffer);
+lpMesh->GetVertexBuffer(&lpVertexBuffer);
+STATEMANAGER.SetVertexShader(lpMesh->GetFVF());
+#endif
+STATEMANAGER.SetIndices(lpIndexBuffer, 0);
+STATEMANAGER.SetStreamSource(0, lpVertexBuffer, 24);
+STATEMANAGER.DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, lpMesh->GetNumVertices(), 0, lpMesh->GetNumFaces());
+}
+change
+
+void CScreen::RenderSphere(const D3DXMATRIX * c_pmatWorld, float fx, float fy, float fz, float fRadius, D3DFILLMODE d3dFillMode) {
+...
+}
+to
+
+void CScreen::RenderSphere(const D3DXMATRIX * c_pmatWorld, float fx, float fy, float fz, float fRadius, D3DFILLMODE d3dFillMode)
+{
+D3DXMATRIX matTranslation;
+D3DXMATRIX matScaling;
+D3DXMatrixTranslation(&matTranslation, fx, fy, fz);
+D3DXMatrixScaling(&matScaling, fRadius, fRadius, fRadius);
+D3DXMATRIX matWorld = matScaling * matTranslation;
+if (c_pmatWorld)
+{
+matWorld *= *c_pmatWorld;
+}
+RenderD3DXMesh(ms_lpSphereMesh, &matWorld, d3dFillMode);
+}
+change
+
+void CScreen::RenderCylinder(const D3DXMATRIX * c_pmatWorld, float fx, float fy, float fz, float fRadius, float height, D3DFILLMODE d3dFillMode)
+to
+
+void CScreen::RenderCylinder(const D3DXMATRIX * c_pmatWorld, float fx, float fy, float fz, float fRadius, float height, D3DFILLMODE d3dFillMode)
+{
+D3DXMATRIX matTranslation;
+D3DXMATRIX matScaling;
+D3DXMatrixTranslation(&matTranslation, fx, fy, fz);
+D3DXMatrixScaling(&matScaling, fRadius, fRadius, fRadius + height);
+D3DXMATRIX matWorld;
+matWorld = matScaling * matTranslation;
+if (c_pmatWorld)
+{
+matWorld *= *c_pmatWorld;
+}
+RenderD3DXMesh(ms_lpCylinderMesh, &matWorld, d3dFillMode);
+}
+void CScreen::RenderBox(D3DXMATRIX world, D3DXVECTOR3 size, D3DFILLMODE d3dFillMode)
+{
+D3DXMATRIX scale;
+//width, height, depth
+D3DXMatrixScaling(&scale, size.x, size.y, 10);
+D3DXMATRIX result = scale * world;
+RenderD3DXMesh(ms_lpBoxMesh, &result, d3dFillMode);
+}
+`EterLib/GrpDevice.cpp`
+find
+
+D3DXCreateCylinder(ms_lpd3dDevice, 1.0f, 1.0f, 1.0f, 8, 8, &ms_lpCylinderMesh, NULL);
+add below
+
+D3DXCreateBox(ms_lpd3dDevice, 1.0f, 1.0f, 1.0f, &ms_lpBoxMesh, NULL);
+find
+
+safe_release(ms_lpCylinderMesh);
+add below
+
+safe_release(ms_lpBoxMesh);
+`EterLib/GrpBase.h`
+find
+
+static LPD3DXMESH ms_lpCylinderMesh;
+add below
+
+static LPD3DXMESH ms_lpBoxMesh;
+`EterLib/GrpBase.cpp`
+find
+
+LPD3DXMESH CGraphicBase::ms_lpCylinderMesh = NULL;
+add below
+
+LPD3DXMESH CGraphicBase::ms_lpBoxMesh = NULL;
+`EterLib/CollisionData.h`
+
+find
+
+D3DXVECTOR3 v3InsideVector[4];
+add below
+
+D3DXVECTOR3 size;
+D3DXMATRIX trans;
+find every
+
+D3DFILL_SOLID
+inside the `EterLib/CollisionData.h` file and replace with
+
+D3DFILL_WIREFRAME
+`EterLib/CollisionData.cpp`
+find
+
+D3DXVec3Cross(&PlaneData.v3InsideVector[3], &PlaneData.v3Normal, &v3Line3);
+add below
+
+PlaneData.trans = matTransform;
+PlaneData.size.x = c_pCollisionData->fDimensions[0];
+PlaneData.size.y = c_pCollisionData->fDimensions[1];
+find
+
+void CSphereCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+and replace with
+
+void CSphereCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+{
+static CScreen s;
+STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(255, 255, 0));
+s.RenderSphere(
+NULL,
+m_attribute.v3Position.x,
+m_attribute.v3Position.y,
+m_attribute.v3Position.z,
+m_attribute.fRadius,
+d3dFillMode
+);
+}
+void CPlaneCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+and replace with
+
+void CPlaneCollisionInstance::Render(D3DFILLMODE)
+{
+static CScreen s;
+STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(50, 50, 255));
+s.RenderBox(
+m_attribute.trans,
+m_attribute.size,
+D3DFILL_WIREFRAME
+);
+}
+void CCylinderCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+and replace with
+
+void CCylinderCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+{
+static CScreen s;
+STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(0, 255, 255));
+s.RenderCylinder(
+NULL,
+m_attribute.v3Position.x,
+m_attribute.v3Position.y,
+m_attribute.v3Position.z,
+m_attribute.fRadius,
+m_attribute.fHeight,
+d3dFillMode
+);
+}
+void CAABBCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+and replace with
+
+void CAABBCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+{
+static CScreen s;
+STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(255, 50, 255));
+s.RenderCube(
+m_attribute.v3Min.x,
+m_attribute.v3Min.y,
+m_attribute.v3Min.z,
+m_attribute.v3Max.x,
+m_attribute.v3Max.y,
+m_attribute.v3Max.z
+);
+}
+void COBBCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+and replace with
+
+void COBBCollisionInstance::Render(D3DFILLMODE d3dFillMode)
+{
+static CScreen s;
+STATEMANAGER.SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_XRGB(255, 255, 50));
+s.RenderCube(
+m_attribute.v3Min.x,
+m_attribute.v3Min.y,
+m_attribute.v3Min.z,
+m_attribute.v3Max.x,
+m_attribute.v3Max.y,
+m_attribute.v3Max.z,
+m_attribute.matRot
+);
+}

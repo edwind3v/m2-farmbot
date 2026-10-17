@@ -82,6 +82,18 @@ public sealed record PlayerActionLayout(
     public uint IsMountingHorseRva { get; init; }
     public uint IsAffectRva { get; init; }
     public uint SendChatPacketRva { get; init; }
+    public uint SetDiffuseColorRva { get; init; }
+    public uint RenderLineRva { get; init; }
+    public uint RenderLine3dRva { get; init; }
+    public uint RenderGroundCircleRva { get; init; }
+    public uint RenderSphereRva { get; init; }
+    public uint RenderCylinderRva { get; init; }
+    public uint RenderGameRva { get; init; }
+    public uint SetGameRenderStateRva { get; init; }
+    public uint SetInterfaceRenderStateRva { get; init; }
+    public uint ScreenSingletonRva { get; init; }
+    public uint StateManagerRva { get; init; }
+    public uint CharRenderRva { get; init; }
 }
 
 public sealed record LoginNativeLayout(
@@ -367,7 +379,25 @@ public static class PlayerActionLayoutRecoverer
             isMounting = RecoverItemMethod(pe, "IsRiding", singleton, evidence);
         var isAffect = RecoverItemMethod(pe, "IsAffect", singleton, evidence);
         var sendChat = RecoverLoginExport(pe, "SendChatPacket", evidence);
+        // grp/CScreen methods: thiscall on a global screen singleton (not player).
+        var setDiffuse = RecoverNamedNativePrefer(pe, "SetDiffuseColor", 0, evidence);
+        var renderLine = RecoverNamedNativePrefer(pe, "RenderLine", 0, evidence);
+        var renderLine3d = RecoverFollowingRenderLine3d(pe, renderLine.native);
+        var renderGroundCircle = RecoverItemMethod(pe, "RenderGroundCircle", 0, evidence);
+        var setGameRs = RecoverNamedNativePrefer(pe, "SetGameRenderState", 0, evidence);
+        var setUiRs = RecoverNamedNativePrefer(pe, "SetInterfaceRenderState", 0, evidence);
+        var renderGame = RecoverItemMethod(pe, "RenderGame", 0, evidence);
+        var renderCylinder = 0u;
+        var renderSphere = 0u;
+        var charRender = RecoverCharManagerRender(pe);
+        var screenSingleton = renderLine.singleton != 0 ? renderLine.singleton
+            : setGameRs.singleton != 0 ? setGameRs.singleton
+            : setDiffuse.singleton;
+        var stateManager = RecoverStateManager(pe,
+            renderLine3d != 0 ? renderLine3d : (charRender != 0 ? charRender : renderCylinder));
+        var renderGameFn = renderGame.native != 0 ? renderGame.native : renderGame.wrapper;
         evidence.Add($"skills getIndex=0x{getSkillIndex.native:X} getLevel=0x{getSkillLevel.native:X} click=0x{clickSkill.native:X} cool=0x{getSkillCool.native:X} isCool=0x{isSkillCool.native:X} isActive=0x{isSkillActive.native:X} sendUse=0x{sendUseSkill.native:X} skillMgr=0x{getSkillName.singleton:X} getData=0x{getSkillName.native:X} standing=0x{standingFn:X} toggle=0x{toggleFn:X} mount=0x{isMounting.native:X} isAffect=0x{isAffect.native:X} chat=0x{sendChat.native:X}.");
+        evidence.Add($"farm circle setDiffuse=0x{setDiffuse.native:X} renderLine=0x{renderLine.native:X} renderLine3d=0x{renderLine3d:X} groundCircle=0x{renderGroundCircle.wrapper:X} sphere=0x{renderSphere:X} cylinder=0x{renderCylinder:X} renderGame=0x{renderGameFn:X} charRender=0x{charRender:X} stateMgr=0x{stateManager:X} gameRs=0x{setGameRs.native:X} uiRs=0x{setUiRs.native:X} screen=0x{screenSingleton:X}.");
 
         return new PlayerActionLayout(pe.ImageBase, singleton, setTargetRva, getTarget.native, attackKeyRva, combo.native, pickClose.native, targetDisp, virt.thisAdj != 0 ? virt.thisAdj : attackVirt.thisAdj, setTargetSlot, prologue, hud.points, hud.name != 0 ? hud.name : 0x14, hud.xor, evidence)
         {
@@ -427,7 +457,19 @@ public static class PlayerActionLayoutRecoverer
             IsAttackSkillRva = attackSkillFn,
             IsMountingHorseRva = isMounting.native,
             IsAffectRva = isAffect.native,
-            SendChatPacketRva = sendChat.native
+            SendChatPacketRva = sendChat.native,
+            SetDiffuseColorRva = setDiffuse.native,
+            RenderLineRva = renderLine.native,
+            RenderLine3dRva = renderLine3d,
+            RenderGroundCircleRva = renderGroundCircle.wrapper,
+            RenderSphereRva = renderSphere,
+            RenderCylinderRva = renderCylinder,
+            RenderGameRva = renderGameFn,
+            SetGameRenderStateRva = setGameRs.native,
+            SetInterfaceRenderStateRva = setUiRs.native,
+            ScreenSingletonRva = screenSingleton,
+            StateManagerRva = stateManager,
+            CharRenderRva = charRender
         };
     }
 
@@ -2878,6 +2920,110 @@ public static class PlayerActionLayoutRecoverer
                 ? $"Python method '{name}' string exists but no METH_VARARGS table entry was accepted."
                 : $"'{name}' string missing.");
         return fallback;
+    }
+
+    // grp.RenderLine is 2d (5 floats, ret 0x14). RenderLine3d is the next 6-float thiscall (ret 0x18).
+    private static uint RecoverFollowingRenderLine3d(ActionPe pe, uint renderLine2dRva)
+    {
+        if (renderLine2dRva == 0)
+            return 0;
+        var start = pe.VaToFile(pe.ImageBase + renderLine2dRva);
+        if (start < 0)
+            return 0;
+        var hi = start + 0x800;
+        for (var off = start + 8; off + 8 < pe.Length && off < hi; off++)
+        {
+            var prev = pe.Byte(off - 1);
+            if (prev is not (0xCC or 0xC3 or 0x90) &&
+                !(prev == 0x00 && off >= 2 && pe.Byte(off - 2) == 0xC2))
+                continue;
+            if (pe.Byte(off) != 0x53 || pe.Byte(off + 1) != 0x8B || pe.Byte(off + 2) != 0xDC)
+                continue;
+            var mask = 0;
+            ushort? ret = null;
+            for (var j = 8; j < 0x220 && off + j + 2 < pe.Length; j++)
+            {
+                if (pe.Byte(off + j) == 0xF3 && pe.Byte(off + j + 1) == 0x0F &&
+                    pe.Byte(off + j + 2) == 0x10 && (pe.Byte(off + j + 3) & 0xC7) == 0x43)
+                {
+                    var disp = pe.Byte(off + j + 4);
+                    if (disp is 0x08 or 0x0C or 0x10 or 0x14 or 0x18 or 0x1C)
+                        mask |= 1 << ((disp - 8) / 4);
+                }
+                if (pe.Byte(off + j) == 0xC2 && pe.Byte(off + j + 2) == 0x00)
+                {
+                    var imm = (ushort)(pe.Byte(off + j + 1) | (pe.Byte(off + j + 2) << 8));
+                    if (imm <= 0x20)
+                    {
+                        ret = imm;
+                        break;
+                    }
+                }
+                if (pe.Byte(off + j) == 0xC3 && j > 24)
+                    break;
+            }
+            if (ret == 0x18 && mask == 0x3F)
+                return pe.FileToVa(off) - pe.ImageBase;
+        }
+        return 0;
+    }
+
+    // CPythonCharacterManager::Render: push esi; push edi; mov edi,ecx; call ...; mov edx,[edi+0x5C]
+    private static uint RecoverCharManagerRender(ActionPe pe)
+    {
+        for (var i = 0; i + 18 < pe.Length; i++)
+        {
+            if (pe.Byte(i) != 0x56 || pe.Byte(i + 1) != 0x57 || pe.Byte(i + 2) != 0x8B ||
+                pe.Byte(i + 3) != 0xF9 || pe.Byte(i + 4) != 0xE8)
+                continue;
+            if (pe.Byte(i + 9) != 0x8B || pe.Byte(i + 10) != 0x57 || pe.Byte(i + 11) != 0x5C)
+                continue;
+            if (pe.Byte(i + 12) != 0x83 || pe.Byte(i + 13) != 0xEC || pe.Byte(i + 14) != 0x08)
+                continue;
+            if (pe.Byte(i + 15) != 0x8B || pe.Byte(i + 16) != 0x47 || pe.Byte(i + 17) != 0x58)
+                continue;
+            var rva = pe.FileToVa(i) - pe.ImageBase;
+            if (pe.IsRva(rva))
+                return rva;
+        }
+        return 0;
+    }
+
+    private static uint RecoverStateManager(ActionPe pe, uint fnRva)
+    {
+        if (fnRva == 0)
+            return 0;
+        var off = pe.VaToFile(pe.ImageBase + fnRva);
+        if (off < 0)
+            return 0;
+        for (var i = 0; i < 0xA0 && off + i + 6 < pe.Length; i++)
+        {
+            var b = pe.Byte(off + i);
+            uint va = 0;
+            var skip = 0;
+            if (b == 0xA1)
+            {
+                va = pe.ReadU32(off + i + 1);
+                skip = 5;
+            }
+            else if (b == 0x8B && pe.Byte(off + i + 1) is 0x0D or 0x15 or 0x35 or 0x3D)
+            {
+                va = pe.ReadU32(off + i + 2);
+                skip = 6;
+            }
+            else
+                continue;
+            if (va <= pe.ImageBase)
+                continue;
+            if (b == 0xA1 && off + i + 6 < pe.Length &&
+                pe.Byte(off + i + 5) == 0x33 && pe.Byte(off + i + 6) == 0xC5)
+                continue;
+            var rva = va - pe.ImageBase;
+            if (pe.IsRva(rva) && rva > 0x100000)
+                return rva;
+            i += skip - 1;
+        }
+        return 0;
     }
 
     private static uint NameFromAbstractVtable(ActionPe pe, uint getPointVa, uint getStatusVa, List<string> evidence)

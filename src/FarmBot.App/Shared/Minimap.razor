@@ -44,6 +44,10 @@
             <span>Zoom <b>@Shell.Config.MapZoom.ToString("0")</b></span>
             <input type="range" min="20" max="100" step="1" value="@Shell.Config.MapZoom.ToString(CultureInfo.InvariantCulture)" @oninput="OnZoom" />
         </label>
+        <label class="draw-farm-circle" title="Show the farm radius on the ground in-game; locks to start position when you hit Start">
+            <input type="checkbox" checked="@Shell.DrawFarmCircle" @onchange="() => Shell.ToggleDrawFarmCircle()" />
+            Draw farm circle
+        </label>
     </div>
 </div>
 

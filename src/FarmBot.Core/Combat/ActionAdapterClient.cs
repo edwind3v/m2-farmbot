@@ -500,6 +500,22 @@ public sealed class AdapterActionSink : INativeActionSink, IDisposable
         }, updateStatus: false).Ok;
     }
 
+    public bool TrySetFarmCircle(bool enabled, bool locked, float radius, float centerX, float centerY)
+    {
+        Ensure();
+        if (!_client.Connected)
+            return false;
+        return _client.Submit(new ActionRequest
+        {
+            Type = ActionProtocol.SetFarmCircle,
+            Force = enabled,
+            Avoid = locked,
+            Slot = (int)Math.Clamp(radius, 0, 50_000),
+            X = centerX,
+            Y = centerY
+        }, updateStatus: false).Ok;
+    }
+
     public bool TryDumpCaptchaBackgrounds()
     {
         Ensure();

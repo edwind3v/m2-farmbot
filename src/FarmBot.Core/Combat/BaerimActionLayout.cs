@@ -22,7 +22,7 @@ public sealed record BaerimNativeLayout(
 public static class BaerimActionLayoutRecoverer
 {
     /// <summary>Bump when cached cfg keys/semantics change (shared with ActionModuleHost).</summary>
-    public const int LayoutCacheVersion = 5;
+    public const int LayoutCacheVersion = 11;
 
     public static string LayoutCachePath(string exePath)
     {
@@ -289,6 +289,11 @@ public static class BaerimActionLayoutRecoverer
             evidence.Add("Baerim GetCloseItem discarded (aliased GetPixelPosition).");
         }
 
+        // SetDiffuseColor recovered as a Python helper; SetGameRenderState is a 1-float
+        // thiscall that rets 4. Calling either from the render hook stack-smashes the client.
+        if (player.SetDiffuseColorRva != 0 || player.SetGameRenderStateRva != 0)
+            evidence.Add("Baerim farm circle discarded setDiffuse/setGameRs (wrong arity); color is screen+8.");
+
         player = player with
         {
             IsSkillCoolTimeRva = coolRva,
@@ -297,7 +302,10 @@ public static class BaerimActionLayoutRecoverer
             IsMountingHorseRva = mountRva,
             GetAffectRva = getAffect,
             GetValueRva = getValue,
-            GetCloseItemRva = getClose
+            GetCloseItemRva = getClose,
+            SetDiffuseColorRva = 0,
+            SetGameRenderStateRva = 0,
+            SetInterfaceRenderStateRva = 0
         };
 
         var pack = RecoverPack(pe, evidence);

@@ -46,6 +46,9 @@ public interface INativeActionSink
     /// <param name="wantMounted">false = dismount, true = remount.</param>
     bool TryToggleMount(bool wantMounted = false) => false;
 
+    /// <summary>Show/hide the in-game farm radius ground circle.</summary>
+    bool TrySetFarmCircle(bool enabled, bool locked, float radius, float centerX, float centerY) => false;
+
     bool TryReadEntities(out IReadOnlyList<EntityState> entities)
     {
         entities = Array.Empty<EntityState>();

@@ -77,6 +77,8 @@ public sealed class BotConfig
     public bool HuntStones { get; set; } = true;
     public float MaxFarmDistance { get; set; } = 8000;
     public float MapZoom { get; set; } = 100;
+    /// <summary>Draw the farm radius as a ground circle in the game client.</summary>
+    public bool DrawFarmCircle { get; set; }
     public List<uint> IncludeVnums { get; set; } = new();
     public List<uint> ExcludeVnums { get; set; } = new();
     public List<string> NameBlacklist { get; set; } = new();

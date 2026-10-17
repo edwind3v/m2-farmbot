@@ -294,6 +294,22 @@
     gap: 6px;
 }
 
+.draw-farm-circle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    user-select: none;
+}
+
+.draw-farm-circle input {
+    accent-color: var(--accent, #c4783a);
+}
+
 .slider {
     display: grid;
     gap: 6px;
