@@ -37,13 +37,15 @@ public static class BaerimActionLayoutRecoverer
     /// Instant load of the cfg written at inject time. Never parses the PE — that takes ~30s
     /// on baerim.exe and must not run on the bot tick thread.
     /// </summary>
-    public static bool TryLoadCachedLayouts(string exePath, out ReleaseLayout entity, out PlayerActionLayout player)
+    public static bool TryLoadCachedLayouts(string exePath, out ReleaseLayout entity, out PlayerActionLayout player) =>
+        TryLoadCachedLayoutsFromFile(exePath, LayoutCachePath(exePath), out entity, out player);
+
+    public static bool TryLoadCachedLayoutsFromFile(string exePath, string cachePath, out ReleaseLayout entity, out PlayerActionLayout player)
     {
         entity = FallbackEntityLayout(exePath);
         player = FallbackPlayerLayout();
         try
         {
-            var cachePath = LayoutCachePath(exePath);
             if (!File.Exists(cachePath) || new FileInfo(cachePath).Length < 64)
                 return false;
             var map = ParseCfgHex(File.ReadAllText(cachePath));
@@ -89,6 +91,12 @@ public static class BaerimActionLayoutRecoverer
             ["getStatusSlot"] = 0x10,
             ["thisAdj"] = 4
         });
+
+    public static ReleaseLayout EntityLayoutFromCfg(string path, IReadOnlyDictionary<string, uint> map) =>
+        EntityFromCfg(path, map);
+
+    public static PlayerActionLayout PlayerLayoutFromCfg(IReadOnlyDictionary<string, uint> map) =>
+        PlayerFromCfg(map);
 
     private static ReleaseLayout EntityFromCfg(string path, IReadOnlyDictionary<string, uint> map) =>
         new(

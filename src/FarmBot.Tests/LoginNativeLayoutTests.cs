@@ -363,6 +363,28 @@ public class SlotStoreTests
     }
 
     [Fact]
+    public void SanitizeDefaultsArthionPathAndReplacesLeakedBaerimPath()
+    {
+        var empty = new LauncherState { Profile = nameof(ClientProfile.Arthion) };
+        SlotStore.Sanitize(empty);
+        Assert.Equal(ClientProfile.Arthion, empty.SelectedProfile);
+        Assert.Equal(SlotStore.DefaultArthionPath, empty.ClientPath);
+        Assert.Equal(SlotStore.DefaultArthionPath, empty.Arthion.ClientPath);
+        Assert.Equal(SlotStore.DefaultBaerimPath, empty.Baerim.ClientPath);
+
+        var leaked = new LauncherState
+        {
+            Profile = nameof(ClientProfile.Arthion),
+            ClientPath = SlotStore.DefaultBaerimPath,
+            Arthion = { ClientPath = SlotStore.DefaultBaerimPath }
+        };
+        SlotStore.Sanitize(leaked);
+        Assert.Equal(SlotStore.DefaultArthionPath, leaked.ClientPath);
+        Assert.Equal(SlotStore.DefaultArthionPath, leaked.Arthion.ClientPath);
+        Assert.Equal(SlotStore.DefaultBaerimPath, leaked.Baerim.ClientPath);
+    }
+
+    [Fact]
     public void SanitizeKeepsEmptyBaerimSelectionAndDoesNotTouchArthionSlots()
     {
         var state = new LauncherState

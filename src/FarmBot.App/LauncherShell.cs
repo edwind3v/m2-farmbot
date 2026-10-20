@@ -29,6 +29,7 @@ public sealed class LauncherShell : IDisposable
         _baseDirectory = AppContext.BaseDirectory;
         _slotsPath = SlotStore.DefaultPath(_baseDirectory);
         _state = SlotStore.LoadOrCreate(_slotsPath);
+        SlotStore.Save(_slotsPath, _state);
         _log = new FileBotLog(Path.Combine(_baseDirectory, "logs"));
     }
 
@@ -162,6 +163,7 @@ public sealed class LauncherShell : IDisposable
         if (string.Equals(_state.Profile, name, StringComparison.Ordinal))
             return;
         _state.Profile = name;
+        SlotStore.EnsureProfileClientPaths(_state);
         SlotStore.MirrorActive(_state);
         if (Editor != null && !_state.Slots.Contains(Editor))
         {

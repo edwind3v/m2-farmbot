@@ -1,4 +1,7 @@
+using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
+using FarmBot.Core.Entities;
 
 namespace FarmBot.Core.Combat;
 
@@ -165,6 +168,54 @@ public sealed record MiniMapLayout(
 
 public static class PlayerActionLayoutRecoverer
 {
+    /// <summary>Bump when cached cfg keys/semantics change (shared with ActionModuleHost).</summary>
+    public const int LayoutCacheVersion = 2;
+
+    public static string LayoutCachePath(string exePath)
+    {
+        var info = new FileInfo(exePath);
+        var key = info.FullName + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture) +
+                  "|arthion|v" + LayoutCacheVersion;
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..16];
+        return Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_arthion_" + hash + ".cfg");
+    }
+
+    public static bool TryLoadCachedLayouts(string exePath, out ReleaseLayout entity, out PlayerActionLayout player) =>
+        BaerimActionLayoutRecoverer.TryLoadCachedLayoutsFromFile(exePath, LayoutCachePath(exePath), out entity, out player);
+
+    public static ReleaseLayout FallbackEntityLayout(string path) =>
+        BaerimActionLayoutRecoverer.EntityLayoutFromCfg(path, new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["charMgr"] = 0x3955768,
+            ["mainPtr"] = 0xC,
+            ["graphic"] = 0x298,
+            ["pixelX"] = 0x4E8,
+            ["pixelY"] = 0x4EC,
+            ["pixelZ"] = 0x4F0,
+            ["actorType"] = 0x494,
+            ["race"] = 0x21C,
+            ["vnum"] = 0x220,
+            ["instName"] = 0xA4,
+            ["selfVid"] = 0x218,
+            ["negateY"] = 1,
+            ["mapDisp"] = 0x20,
+            ["nodeParent"] = 4,
+            ["nodeRight"] = 8,
+            ["nodeIsNil"] = 0xD,
+            ["nodeKey"] = 0x10,
+            ["nodeValue"] = 0x14
+        });
+
+    public static PlayerActionLayout FallbackPlayerLayout() =>
+        BaerimActionLayoutRecoverer.PlayerLayoutFromCfg(new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["player"] = 0x3955858,
+            ["playerName"] = 0x14,
+            ["thisAdj"] = 4,
+            ["getStatus"] = 0x386780,
+            ["getMain"] = 0x3870B0
+        });
+
     public static PlayerActionLayout Recover(string path)
     {
         var pe = ActionPe.Load(path);

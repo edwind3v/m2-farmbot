@@ -968,7 +968,7 @@ public sealed class BotRuntime : IDisposable
                 }
             };
         }
-        if (config.ClientProfile != ClientProfile.Baerim)
+        if (config.ClientProfile is not (ClientProfile.Baerim or ClientProfile.Arthion))
             return snapshot;
         // Poll immediately while empty; soft-throttle only once we have a list.
         var entityGap = _lastNativeActors.Count > 0 ? 200 : 0;

@@ -214,6 +214,9 @@ public static class SlotStore
         _ => nameof(ClientProfile.Arthion)
     };
 
+    public const string DefaultArthionPath = @"E:\Arthion\game\Arthion.exe";
+    public const string DefaultBaerimPath = @"E:\Baerim\client\baerim.exe";
+
     public static bool IsArthionPath(string? path) =>
         !string.IsNullOrWhiteSpace(path) &&
         Path.GetFileName(path).Contains("Arthion", StringComparison.OrdinalIgnoreCase);
@@ -244,18 +247,39 @@ public static class SlotStore
             else if (state.Normal.Slots.Count > 0)
                 state.Profile = nameof(ClientProfile.Normal);
         }
-        if (string.IsNullOrWhiteSpace(state.Normal.ClientPath))
-            state.Normal.ClientPath = BotConfig.CreateDefault().ClientPath;
         if (string.IsNullOrWhiteSpace(state.Arthion.ClientPath) && IsArthionPath(state.ClientPath))
             state.Arthion.ClientPath = state.ClientPath;
         if (string.IsNullOrWhiteSpace(state.Baerim.ClientPath) && IsBaerimPath(state.ClientPath))
             state.Baerim.ClientPath = state.ClientPath;
-        if (string.IsNullOrWhiteSpace(state.Baerim.ClientPath))
-            state.Baerim.ClientPath = @"E:\Baerim\client\baerim.exe";
+        EnsureProfileClientPaths(state);
         MirrorActive(state);
         foreach (var slot in state.AllSlots)
             SanitizeSlot(slot);
     }
+
+    public static void EnsureProfileClientPaths(LauncherState state)
+    {
+        state.Normal ??= new ProfileLaunchState();
+        state.Arthion ??= new ProfileLaunchState();
+        state.Baerim ??= new ProfileLaunchState();
+        state.Normal.ClientPath ??= "";
+        state.Arthion.ClientPath ??= "";
+        state.Baerim.ClientPath ??= "";
+
+        if (string.IsNullOrWhiteSpace(state.Normal.ClientPath) ||
+            IsArthionPath(state.Normal.ClientPath) ||
+            IsBaerimPath(state.Normal.ClientPath))
+            state.Normal.ClientPath = BotConfig.CreateDefault().ClientPath;
+
+        if (NeedsArthionDefault(state.Arthion.ClientPath))
+            state.Arthion.ClientPath = DefaultArthionPath;
+
+        if (string.IsNullOrWhiteSpace(state.Baerim.ClientPath) || IsArthionPath(state.Baerim.ClientPath))
+            state.Baerim.ClientPath = DefaultBaerimPath;
+    }
+
+    private static bool NeedsArthionDefault(string? path) =>
+        string.IsNullOrWhiteSpace(path) || IsBaerimPath(path);
 
     private static void MigrateLegacySlots(LauncherState state)
     {

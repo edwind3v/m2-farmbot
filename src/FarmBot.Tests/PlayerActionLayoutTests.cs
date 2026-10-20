@@ -202,6 +202,19 @@ public class PlayerActionLayoutTests
     }
 
     [Fact]
+    public void ArthionFallbackLayoutCanEnumerateWithoutPeScan()
+    {
+        var entity = PlayerActionLayoutRecoverer.FallbackEntityLayout(@"E:\Arthion\game\Arthion.exe");
+        var player = PlayerActionLayoutRecoverer.FallbackPlayerLayout();
+        Assert.True(entity.CanEnumerate);
+        Assert.Equal(0x3955768u, entity.SingletonRva);
+        Assert.Equal(0x20u, entity.MapDisplacement);
+        Assert.Equal(0x298u, entity.GraphicDisplacement);
+        Assert.True(player.PlayerSingletonRva > 0x1000);
+        Assert.Equal(0x3955858u, player.PlayerSingletonRva);
+    }
+
+    [Fact]
     public void RecoversArthionPlayerWhenPresent()
     {
         const string arthion = @"E:\Arthion\game\Arthion.exe";

@@ -178,11 +178,12 @@ public sealed class ActionModuleHost
             return "";
         try
         {
-            var login = PlayerActionLayoutRecoverer.RecoverLogin(exePath);
-            var player = PlayerActionLayoutRecoverer.Recover(exePath);
-            var entity = ClientReleaseLayout.Recover(exePath);
-            var text = new StringBuilder(login.ToNativeConfig());
-            text.Append("profile=arthion\n");
+            var cachePath = PlayerActionLayoutRecoverer.LayoutCachePath(exePath);
+            if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 64 &&
+                ArthionLayoutCacheHasCriticalKeys(cachePath))
+                return cachePath;
+            WriteArthionFallbackLayout(cachePath);
+            return cachePath;
             var playerRva = player.PlayerSingletonRva;
             AppendHex(text, "player", playerRva);
             AppendHex(text, "playerName", player.PlayerNameDisplacement);
@@ -227,7 +228,9 @@ public sealed class ActionModuleHost
             AppendHex(text, "isToggle", player.IsToggleSkillRva);
             AppendHex(text, "isNeedTarget", player.IsNeedTargetRva);
             AppendHex(text, "isAttackSkill", player.IsAttackSkillRva);
-            AppendHex(text, "isMounting", player.IsMountingHorseRva);
+            if (player.IsMountingHorseRva is not (>= 0x410000 and < 0x430000) and
+                not (>= 0x600000 and < 0x630000))
+                AppendHex(text, "isMounting", player.IsMountingHorseRva);
             AppendHex(text, "isAffect", player.IsAffectRva);
             AppendHex(text, "sendChat", player.SendChatPacketRva);
             AppendHex(text, "setDiffuse", player.SetDiffuseColorRva);
@@ -265,6 +268,14 @@ public sealed class ActionModuleHost
             AppendHex(text, "graphic", entity.GraphicDisplacement);
             AppendHex(text, "pixelX", entity.PixelXDisplacement);
             AppendHex(text, "pixelY", entity.PixelYDisplacement);
+            AppendHex(text, "pixelZ", entity.PixelZDisplacement);
+            AppendHex(text, "actorType", entity.ActorTypeDisplacement);
+            AppendHex(text, "race", entity.RaceDisplacement);
+            AppendHex(text, "vnum", entity.VirtualNumberDisplacement);
+            AppendHex(text, "instName", entity.InstanceNameDisplacement);
+            AppendHex(text, "selfVid", entity.SelfVidDisplacement);
+            if (entity.NegatePixelY)
+                text.Append("negateY=1\n");
             AppendHex(text, "mapDisp", entity.MapDisplacement);
             AppendHex(text, "mapHead", entity.MapHeadDisplacement);
             AppendHex(text, "nodeLeft", entity.NodeLeft);
@@ -273,9 +284,12 @@ public sealed class ActionModuleHost
             AppendHex(text, "nodeIsNil", entity.NodeIsNil);
             AppendHex(text, "nodeKey", entity.NodeKey);
             AppendHex(text, "nodeValue", entity.NodeValue);
-            var path = Path.Combine(Path.GetTempPath(), "FarmBotAction_layout_" + Guid.NewGuid().ToString("N") + ".cfg");
-            File.WriteAllText(path, text.ToString());
-            return path;
+            var payload = text.ToString();
+            var tmp = cachePath + ".tmp";
+            File.WriteAllText(tmp, payload);
+            File.Copy(tmp, cachePath, overwrite: true);
+            try { File.Delete(tmp); } catch { /* ignore */ }
+            return cachePath;
         }
         catch
         {
@@ -421,6 +435,30 @@ public sealed class ActionModuleHost
         catch
         {
             return "";
+        }
+    }
+
+    private static bool ArthionLayoutCacheHasCriticalKeys(string cachePath)
+    {
+        try
+        {
+            var text = File.ReadAllText(cachePath);
+            return HasHexKey(text, "player") &&
+                   HasHexKey(text, "charMgr") &&
+                   HasHexKey(text, "setLogin") &&
+                   HasHexKey(text, "account") &&
+                   HasHexKey(text, "connect") &&
+                   HasHexKey(text, "graphic") &&
+                   HasHexKey(text, "mapDisp") &&
+                   HasHexKey(text, "race") &&
+                   HasHexKey(text, "vnum") &&
+                   HasHexKey(text, "actorType") &&
+                   HasHexKey(text, "pixelZ") &&
+                   (HasHexKey(text, "pressActor") || HasHexKey(text, "newAttack") || HasHexKey(text, "setTarget"));
+        }
+        catch
+        {
+            return false;
         }
     }
 

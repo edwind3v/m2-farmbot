@@ -54,11 +54,14 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
     private float _facingDeg;
     private bool _hasLastPos;
     private int _baerimRecoverStarted;
+    private int _arthionRecoverStarted;
+    private readonly ClientProfile _profile;
 
-    public LiveGameStateProvider(IBotLog? log = null, int targetPid = 0)
+    public LiveGameStateProvider(IBotLog? log = null, int targetPid = 0, ClientProfile profile = ClientProfile.Normal)
     {
         _log = log;
         _targetPid = targetPid;
+        _profile = profile;
     }
 
     public string Name => "Live client";
@@ -271,6 +274,29 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
             return _layout.CanEnumerate || _playerLayout is { PlayerSingletonRva: > 0x1000 };
         }
 
+        if (_profile == ClientProfile.Arthion || SlotStore.IsArthionPath(path))
+        {
+            if (PlayerActionLayoutRecoverer.TryLoadCachedLayouts(path, out var cachedArthionEntity, out var cachedArthionPlayer))
+            {
+                _layout = cachedArthionEntity;
+                _playerLayout = cachedArthionPlayer;
+                _layoutPath = path;
+                status =
+                    $"layout cache from {path} singletonRva=0x{_layout.SingletonRva:X} map=+0x{_layout.MapDisplacement:X}";
+                Log(status);
+                return true;
+            }
+
+            _layout = PlayerActionLayoutRecoverer.FallbackEntityLayout(path);
+            _playerLayout = PlayerActionLayoutRecoverer.FallbackPlayerLayout();
+            _layoutPath = path;
+            status =
+                $"arthion layout fallback (PE deferred) singletonRva=0x{_layout.SingletonRva:X} map=+0x{_layout.MapDisplacement:X}";
+            Log(status);
+            BeginDeferredArthionRecover(path);
+            return _layout.CanEnumerate || _playerLayout is { PlayerSingletonRva: > 0x1000 };
+        }
+
         _layout = ClientReleaseLayout.Recover(path);
         _playerLayout = PlayerActionLayoutRecoverer.Recover(path);
         _layoutPath = path;
@@ -291,6 +317,36 @@ public sealed class LiveGameStateProvider : IGameStateProvider, IGameStateSource
         }
 
         return false;
+    }
+
+    private void BeginDeferredArthionRecover(string path)
+    {
+        if (Interlocked.CompareExchange(ref _arthionRecoverStarted, 1, 0) != 0)
+            return;
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                var entity = ClientReleaseLayout.Recover(path);
+                var player = PlayerActionLayoutRecoverer.Recover(path);
+                lock (_gate)
+                {
+                    if (!string.Equals(_layoutPath, path, StringComparison.OrdinalIgnoreCase))
+                        return;
+                    if (entity.CanEnumerate)
+                        _layout = entity;
+                    if (player.PlayerSingletonRva > 0x1000)
+                        _playerLayout = player;
+                }
+
+                Log(
+                    $"layout recovered (background) from {path} singletonRva=0x{entity.SingletonRva:X} map=+0x{entity.MapDisplacement:X}");
+            }
+            catch (Exception ex)
+            {
+                _log?.Warn("arthion background layout recover failed: " + ex.Message);
+            }
+        });
     }
 
     private void BeginDeferredBaerimRecover(string path)

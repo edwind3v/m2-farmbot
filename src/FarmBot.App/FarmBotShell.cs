@@ -784,7 +784,7 @@ public sealed class FarmBotShell : IDisposable
             return;
         }
 
-        var live = new LiveGameStateProvider(_log, BoundClientPid);
+        var live = new LiveGameStateProvider(_log, BoundClientPid, _config.ClientProfile);
         _provider = live;
         _actionHost ??= new ActionModuleHost { Profile = _config.ClientProfile };
         _actionSink ??= new AdapterActionSink(_actionHost.PipeName, _actionHost.Token);

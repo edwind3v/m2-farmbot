@@ -412,6 +412,16 @@ static int g_arthion;
 static int g_baerim;
 static DWORD g_baerimWorldAtMs;
 static int NativeFarm() { return g_arthion || g_baerim; }
+static int LooksPythonHelperRva(unsigned rva)
+{
+    if (!rva)
+        return 1;
+    if (rva >= 0x410000 && rva < 0x430000)
+        return 1;
+    if (rva >= 0x600000 && rva < 0x630000)
+        return 1;
+    return 0;
+}
 static unsigned g_atlasSeq;
 static volatile long g_atlasCrash;
 static volatile long g_farmCircleOn;
@@ -728,6 +738,8 @@ static int CallGetStatus(void* player, int type)
 
 static void* CallGetMainActor();
 static int CallIsMounted();
+static void* MainInstance();
+static int ActorTypeOf(void* inst);
 
 static int ReadInstanceRace(void* inst)
 {
@@ -756,8 +768,17 @@ static void RefreshHud(void* player)
     g_hudMp = CallGetStatus(player, kPointSp);
     g_hudMaxMp = CallGetStatus(player, kPointMaxSp);
     g_hudOk = g_hudLevel >= 1 && g_hudLevel <= 250 && g_hudMaxHp > 0 && g_hudHp >= 0 && g_hudHp <= g_hudMaxHp;
-    g_hudRace = ReadInstanceRace(CallGetMainActor());
-    g_mounted = CallIsMounted();
+    if (g_arthion)
+    {
+        void* main = MainInstance();
+        g_hudRace = ReadInstanceRace(main);
+        g_mounted = ActorTypeOf(main) == 8 ? 1 : 0;
+    }
+    else
+    {
+        g_hudRace = ReadInstanceRace(CallGetMainActor());
+        g_mounted = CallIsMounted();
+    }
 }
 
 static bool CallSetTarget(void* player, unsigned vid, int force)
@@ -6387,7 +6408,7 @@ static void MapsRefreshCurrent()
     char name[96];
     name[0] = 0;
     MapsScanBackground(name, 96);
-    if (!name[0])
+    if (!name[0] && g_baerim)
     {
         SafePyRunAfterPeek(
             "try:\n"
@@ -8043,6 +8064,8 @@ static void ScanPots()
     g_potsJson = "[]";
     if (g_baerim)
         return;
+    if (g_arthion && LooksPythonHelperRva(kGetItemIndexRva))
+        return;
     HMODULE py = PythonDll();
     const int nativeInv = kGetItemIndexRva ? 1 : 0;
     NativeLog("pots scan begin py=%p nativeIndex=0x%X nativeCount=0x%X itemMgr=0x%X",
@@ -8722,6 +8745,9 @@ static int CallIsMounted()
 {
     // Baerim: player.IsMountingHorse → GetMainActor → *(BYTE*)(main+0x30).
     // Recovered "native" 0x41D7E0 is a Python helper and must not be thiscall'd.
+    // Arthion recover lands IsMountingHorse on 0x618870 (also a Python helper).
+    if (g_arthion)
+        return ActorTypeOf(CallGetMainActor()) == 8 ? 1 : 0;
     if (g_baerim)
     {
         void* main = CallGetMainActor();
@@ -8738,7 +8764,7 @@ static int CallIsMounted()
         return 0;
     }
     void* player = Player();
-    if (player && kIsMountingRva && g_base && (kIsMountingRva < 0x410000 || kIsMountingRva > 0x420000))
+    if (player && kIsMountingRva && g_base && !LooksPythonHelperRva(kIsMountingRva))
     {
         FnIsMounting fn = (FnIsMounting)(g_base + kIsMountingRva);
         if (!IsBadCodePtr((FARPROC)fn))
@@ -12764,6 +12790,22 @@ static void LoadConfig()
             kLoginPasswordDisp = ParseHex(line + 9);
     }
     fclose(f);
+    if (g_arthion)
+    {
+        kBgSingletonRva = 0;
+        if (LooksPythonHelperRva(kIsMountingRva))
+            kIsMountingRva = 0;
+        if (LooksPythonHelperRva(kGetItemIndexRva))
+            kGetItemIndexRva = 0;
+        if (LooksPythonHelperRva(kGetItemCountRva))
+            kGetItemCountRva = 0;
+        if (LooksPythonHelperRva(kGetItemNameRva))
+            kGetItemNameRva = 0;
+        if (LooksPythonHelperRva(kGetAffectRva))
+            kGetAffectRva = 0;
+        if (LooksPythonHelperRva(kGetValueRva))
+            kGetValueRva = 0;
+    }
     if (g_baerim && !kGetNameSlot)
         kGetNameSlot = 0x14;
     if (g_baerim && !kSelfVidDisp)
